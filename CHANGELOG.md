@@ -3,24 +3,24 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project intends to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-once a first version is tagged. Until 1.0, minor versions may contain breaking
-changes.
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Until 1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
-### Added
+Nothing yet.
 
-- MIT license and portability improvements.
-- Public-release preparation: English README, CONTRIBUTING, SECURITY,
-  this changelog, a GitHub Actions CI workflow (`make ci` + adapter tests),
-  issue/PR templates and a release-notes draft.
+## [0.1.0] - 2026-10-08
 
-## [0.1.0] - TBD
-
-Proposed first version. It is not tagged yet.
+First public release.
 
 ### Added
+
+#### Project
+
+- MIT license, English README, CONTRIBUTING, SECURITY, this changelog, a GitHub
+  Actions CI workflow (`make ci` + adapter tests), issue and PR templates, and
+  release notes.
 
 #### Journal and event model
 

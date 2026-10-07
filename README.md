@@ -31,9 +31,9 @@ and governance layer for that loop:
 ## Status
 
 **Alpha.** Rhizome is run by a single operator on a local machine. HTTP and
-intent APIs change without notice, there are no releases or tags yet, and
-nothing here is tuned or hardened for multi-user production use. A proposed
-first version is described in [docs/release/0.1.0.md](docs/release/0.1.0.md).
+intent APIs change without notice, and nothing here is tuned or hardened for
+multi-user production use. The first release, 0.1.0, is described in
+[docs/release/0.1.0.md](docs/release/0.1.0.md).
 
 ## 30-second start
 

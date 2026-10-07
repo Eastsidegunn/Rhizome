@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Rhizome is pre-1.0 and has no releases yet. Only the latest `main` branch gets
-security fixes.
+Rhizome is pre-1.0. Only the latest `main` branch gets security fixes; released
+versions such as 0.1.0 are not patched separately.
 
 | Version | Supported |
 |---|---|
