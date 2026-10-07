@@ -7,13 +7,15 @@
  * Empty fields are omitted; a node with nothing to say has no detail (404) —
  * an empty 200 is never produced (contract invariant: "none → 404").
  *
- * Bodies are always `text`: a gate's markdown body is a plain field of the
+ * Bodies are always `text`: a gate's body is a plain field of the
  * snapshot, not a content-addressed blob, and the contract's `artifact` body
- * is an ArtifactRef (id + digest + bytes behind /artifact). Rendering the
- * markdown is the cockpit viewers' job. Deliverable artifacts already live in
- * the projection (RHZ-057), so deliverables carry no detail here (no duplicate).
+ * is an ArtifactRef (id + digest + bytes behind /artifact). Recognised gate
+ * sections are stripped to plain text; legacy unstructured bodies remain
+ * byte-identical. Deliverable artifacts already live in the projection
+ * (RHZ-057), so deliverables carry no detail here (no duplicate).
  */
 import type { DetailItem, NodeDetail } from '@gunnflow/contract';
+import { parseGateBodySections } from './gateBody.js';
 import { WORKSPACE_NODE_ID } from './nodes.js';
 
 /** The slice of Rhizome's /v1/workspace body (workspace/http.go DTOs) the detail reads. */
@@ -83,9 +85,17 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
   const gate = body.gates?.find((g) => g.id === nodeId);
   if (gate) {
     const decided = DECIDED_GATE_STATES.has(gate.state ?? '');
+    const parsedBody = typeof gate.body === 'string' ? parseGateBodySections(gate.body) : undefined;
+    const structuredBody = parsedBody && parsedBody.sections.length > 0;
+    const hasStructuredRecommendation = parsedBody?.sections.some(({ label }) => label === '권고') ?? false;
     return [
-      ...text('request', gate.body),
-      ...text('recommendation', gate.recommendation),
+      ...(structuredBody
+        ? [
+            ...parsedBody.sections.map(({ label, text: sectionText }) => ({ label, text: truncateDetailText(sectionText) })),
+            ...text('request', parsedBody.rest),
+          ]
+        : text('request', gate.body)),
+      ...(hasStructuredRecommendation ? [] : text('recommendation', gate.recommendation)),
       ...(decided ? text('decision', gate.decisionReason) : []),
       ...text('decidedBy', gate.decidedBy),
       ...text('digest', gate.requestDigest),
@@ -137,6 +147,10 @@ export const NOTE_LIMIT = 10;
 export const NOTE_TEXT_MAX = 2000;
 export const NOTE_TRUNCATED_SUFFIX = '…(전문 /v1/context)';
 
+/** Apply the adapter's established long-detail cut and full-text marker. */
+const truncateDetailText = (value: string): string =>
+  value.length > NOTE_TEXT_MAX ? value.slice(0, NOTE_TEXT_MAX) + NOTE_TRUNCATED_SUFFIX : value;
+
 /** Upper bound on one /v1/context read; a hung Rhizome must not hang the detail. Tests may lower it. */
 export const noteFetchTimeout = { ms: 2000 };
 
@@ -175,7 +189,7 @@ export function noteItems(notes: readonly unknown[], limit: number = NOTE_LIMIT)
     .slice(0, limit)
     .map((n) => ({
       label: n.tags && n.tags.length > 0 ? `note:${n.kind} [${n.tags.join(',')}]` : `note:${n.kind}`,
-      text: n.content.length > NOTE_TEXT_MAX ? n.content.slice(0, NOTE_TEXT_MAX) + NOTE_TRUNCATED_SUFFIX : n.content,
+      text: truncateDetailText(n.content),
     }));
 }
 

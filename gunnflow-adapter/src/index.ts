@@ -8,6 +8,7 @@ export { adaptEnvelope, adaptWithReport, contractRefusal, nodesOf } from './upst
 export type { RhizomeIntegrationReport } from './nodes.js';
 export { SseDecoder } from './upstream.js';
 export { detailOf, detailItems } from './details.js';
+export { GATE_BODY_LABELS, parseGateBodySections, stripMarkdown } from './gateBody.js';
 export { executionForWire, executionTaskProblem, projectExecution } from './execution.js';
 export type { RhizomeExecBody, RhizomeExecEvent, RhizomeExecSession } from './execution.js';
 

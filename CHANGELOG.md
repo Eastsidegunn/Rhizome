@@ -10,6 +10,9 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- Gunnflow gate details expose seven canonical Markdown body sections as
+  conclusion-first plain-text items while retaining unstructured prose as the
+  request and suppressing a duplicate recommendation (FR-RHZ-128).
 - Configurable data location: `-data-dir`, then `RHIZOME_DATA_DIR`, then the
   OS per-user data folder. Without `-journal`, the journal and blob store live
   there (FR-RHZ-125).
