@@ -67,14 +67,28 @@ func graphCmd(args []string, out, errOut io.Writer) int {
 	f := flag.NewFlagSet("graph", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	jp := f.String("journal", "", "")
+	dataDir := f.String("data-dir", "", "")
 	repo := f.String("repo", "", "")
 	outDir := f.String("out", "", "")
 	if f.Parse(args) != nil {
 		return 2
 	}
-	if *jp == "" || *repo == "" || *outDir == "" {
+	journalSet := false
+	f.Visit(func(v *flag.Flag) { journalSet = journalSet || v.Name == "journal" })
+	if *repo == "" || *outDir == "" || (journalSet && *jp == "") {
 		fmt.Fprintln(errOut, "journal, repo and out are required")
 		return 2
+	}
+	// A journal omitted from the command line is the one graph-specific
+	// default: resolve it from the selected data directory. The output cache
+	// remains explicit so graph never silently creates <data>/index.
+	var err error
+	if !journalSet {
+		*jp, _, _, err = resolveJournal(*dataDir, *jp, false)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+			return 2
+		}
 	}
 	unlock, err := acquireJournalLock(*jp, errOut)
 	if err != nil {

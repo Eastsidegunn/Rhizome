@@ -8,7 +8,13 @@ Until 1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Configurable data location: `-data-dir`, then `RHIZOME_DATA_DIR`, then the
+  OS per-user data folder. Without `-journal`, the journal and blob store live
+  there (FR-RHZ-125).
+- `make ci` runs a repository hygiene check that blocks committed runtime data,
+  key and token patterns, home-directory paths and CGNAT addresses.
 
 ## [0.1.0] - 2026-10-08
 

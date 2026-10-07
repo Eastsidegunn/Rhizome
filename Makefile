@@ -1,4 +1,4 @@
-.PHONY: ci fmt-check test test-race vet
+.PHONY: ci fmt-check test test-race vet hygiene
 
 fmt-check:
 	@test -z "$$(gofmt -l . | grep '\.go$$')" || { echo 'gofmt required:'; gofmt -l .; exit 1; }
@@ -12,4 +12,8 @@ test-race:
 vet:
 	go vet ./...
 
-ci: fmt-check test test-race vet
+hygiene:
+	sh tools/hygiene.sh
+	sh tools/hygiene_test.sh
+
+ci: fmt-check test test-race vet hygiene

@@ -225,6 +225,8 @@ func TestIndexGraphUsageFRRHZ088(t *testing.T) {
 		{"index"},
 		{"index", "-repo", "r"},
 		{"index", "-journal", "j", "-repo", "r", "-out", "o"},
+		{"index", "-data-dir", "d"},
+		{"index", "-repo", "r", "-unknown", "x"},
 		{"graph"},
 		{"graph", "-out", "o"},
 	} {

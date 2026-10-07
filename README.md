@@ -38,8 +38,8 @@ multi-user production use. The first release, 0.1.0, is described in
 ## 30-second start
 
 You need macOS or Linux and Go 1.23 or newer, and nothing else: the Go module
-has no third-party dependencies, and the board needs no other repository, service or environment
-variable. (Node.js 22+ is only needed for the optional
+has no third-party dependencies, and the board needs no other repository or
+service. (Node.js 22+ is only needed for the optional
 [Gunnflow adapter](#gunnflow-adapter-optional).) Windows is not supported yet:
 the journal's single-writer lock uses `flock(2)`.
 
@@ -48,9 +48,14 @@ git clone https://github.com/Eastsidegunn/Rhizome.git
 cd Rhizome
 go build -o rhizome ./cmd/rhizome
 
-# Start the board. -journal is required (the file is created if missing);
-# -addr defaults to 127.0.0.1:8080. Port 8790 is used here because it is the
-# adapter's default upstream; any free port works.
+# Start the board with the per-user data directory (journal and blobs are
+# created there); -addr defaults to 127.0.0.1:8080. Port 8790 is used here
+# because it is the adapter's default upstream; any free port works.
+./rhizome serve -addr 127.0.0.1:8790
+
+# Or keep data in an explicitly chosen location:
+./rhizome serve -data-dir ./rhizome-data -addr 127.0.0.1:8790
+# Existing scripts may continue to name the journal explicitly:
 ./rhizome serve -journal ./dev.ndjson -addr 127.0.0.1:8790
 ```
 
@@ -72,8 +77,9 @@ curl -s -X POST http://127.0.0.1:8790/v1/intent \
 curl -s http://127.0.0.1:8790/v1/workspace
 ```
 
-Each accepted intent appends events to `dev.ndjson`. Stop the server and start
-it again: the same state comes back from replay. The `/v1/workspace` projection
+Each accepted intent appends events to `journal.ndjson` (or to the explicitly
+named journal). Stop the server and start it again: the same state comes back
+from replay. The `/v1/workspace` projection
 uses the vocabulary of the cockpit UI it serves, so a Rhizome goal appears under
 `missions` and a Rhizome mission appears under `tasks`.
 
@@ -90,18 +96,50 @@ Main HTTP routes: `GET /v1/workspace` (+ `/v1/workspace/stream` SSE),
 `deliverable.register` and `task.instruct`. They are implemented in
 [internal/workspace/workspace.go](internal/workspace/workspace.go).
 
+## Data location
+
+The data directory is selected in this order: `-data-dir`, then
+`RHIZOME_DATA_DIR`, then the operating-system default. Relative flag and
+environment paths are made absolute from the current working directory. The
+defaults are macOS `$HOME/Library/Application Support/rhizome` and Linux/Unix
+`$XDG_DATA_HOME/rhizome` when `XDG_DATA_HOME` is absolute, otherwise
+`$HOME/.local/share/rhizome`. (The resolver also knows the Windows location,
+`%LocalAppData%\rhizome`, for when Windows is supported.)
+
+The directory contains `journal.ndjson`, its adjacent `journal.ndjson.lock`
+while a writer is running, `blobs/` when the default blob store is enabled, and
+the optional derived code index under `index/`. Derived files can be rebuilt
+from the journal. The standalone `index` and `graph` commands require an
+explicit `-out`; `graph` uses the data directory only to default its journal
+when `-journal` is omitted.
+
+To migrate an existing in-repository data folder:
+
+1. Stop `rhizome serve` with `SIGTERM` and wait until the process is gone. Never
+   delete the `.lock` file by hand.
+2. Rename the existing journal file to `journal.ndjson` and the blob directory
+   to `blobs/`, then move them (and any derived `index/` or notes) into the
+   selected data directory. Alternatively, keep passing `-journal <file>` and
+   `-blobs <dir>` explicitly.
+3. If serving the code index, pass both `-index-repo <repo>` and
+   `-index-out <data>/index` explicitly; the code index is not inferred from
+   the data directory.
+4. Restart with `-data-dir <dir>` or the default location.
+5. Verify that `GET /v1/workspace` reports the same `revision` as before.
+
 ## Configuration
 
-Rhizome reads no environment variables and no config file. Everything is a
-command-line flag.
+Rhizome reads the data-directory environment variable described above and no
+config file. Everything else is a command-line flag.
 
 ### `rhizome serve` flags
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-journal <file>` | *(required)* | NDJSON event journal. Created if missing, locked while `serve` runs. |
+| `-data-dir <dir>` | OS/user default | Data directory used when `-journal` is omitted. |
+| `-journal <file>` | `<data-dir>/journal.ndjson` | NDJSON event journal. Created if missing, locked while `serve` runs. |
 | `-addr <host:port>` | `127.0.0.1:8080` | Listen address. There is no authentication, so keep it on loopback. |
-| `-blobs <dir>` | *(off)* | Content-addressed blob store. Enables `POST /v1/blob` and `GET /v1/blob/{id}`. |
+| `-blobs <dir>` | `<data-dir>/blobs` when `-journal` is omitted; otherwise *(off)* | Content-addressed blob store. Enables `POST /v1/blob` and `GET /v1/blob/{id}`. |
 | `-index-repo <dir>` and `-index-out <dir>` | *(off)* | Code index of a git checkout, served at `GET /v1/codeindex`. Give both or neither. |
 | `-janus-*` | *(off)* | Optional JANUS execution wiring, see below. |
 

@@ -87,6 +87,7 @@ func ingest(args []string, out, errOut io.Writer) int {
 	f.SetOutput(errOut)
 	jpath := f.String("journal", "", "")
 	bpath := f.String("blobs", "", "")
+	dataDir := f.String("data-dir", "", "")
 	file := f.String("file", "", "")
 	kind := f.String("kind", string(memory.Reference), "")
 	override := f.String("content", "", "")
@@ -96,13 +97,36 @@ func ingest(args []string, out, errOut io.Writer) int {
 	if f.Parse(args) != nil {
 		return 2
 	}
+	journalSet, blobsSet := false, false
+	f.Visit(func(v *flag.Flag) {
+		switch v.Name {
+		case "journal":
+			journalSet = true
+		case "blobs":
+			blobsSet = true
+		}
+	})
 	if !validKind(memory.Kind(*kind)) {
 		fmt.Fprintln(errOut, "invalid memory kind")
 		return 2
 	}
-	if *jpath == "" || *bpath == "" || *file == "" {
+	if *file == "" || (journalSet && *jpath == "") || (journalSet && !blobsSet) || (journalSet && *bpath == "") {
 		fmt.Fprintln(errOut, "journal, blobs and file are required")
 		return 2
+	}
+	var err error
+	*jpath, _, _, err = resolveJournal(*dataDir, *jpath, journalSet)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 2
+	}
+	if !journalSet && !blobsSet {
+		dir, e := commandDataDir(*dataDir)
+		if e != nil {
+			fmt.Fprintln(errOut, e)
+			return 2
+		}
+		*bpath = filepath.Join(dir, "blobs")
 	}
 	b, e := os.ReadFile(*file)
 	if e != nil {
@@ -178,14 +202,19 @@ func memories(args []string, out, errOut io.Writer) int {
 	f := flag.NewFlagSet("memories", flag.ContinueOnError)
 	f.SetOutput(errOut)
 	jpath := f.String("journal", "", "")
+	dataDir := f.String("data-dir", "", "")
 	kind := f.String("kind", "", "")
 	tag := f.String("tag", "", "")
 	src := f.String("source", "", "")
 	if f.Parse(args) != nil {
 		return 2
 	}
-	if *jpath == "" {
-		fmt.Fprintln(errOut, "journal is required")
+	journalSet := false
+	f.Visit(func(v *flag.Flag) { journalSet = journalSet || v.Name == "journal" })
+	var err error
+	*jpath, _, _, err = resolveJournal(*dataDir, *jpath, journalSet)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
 		return 2
 	}
 	if *kind != "" && !validKind(memory.Kind(*kind)) {
@@ -407,6 +436,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	f.SetOutput(errOut)
 	jp := f.String("journal", "", "")
 	bp := f.String("blobs", "", "")
+	dataDir := f.String("data-dir", "", "")
 	idxRepo := f.String("index-repo", "", "")
 	idxOut := f.String("index-out", "", "")
 	addr := f.String("addr", "127.0.0.1:8080", "")
@@ -419,8 +449,39 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jInterval := f.Duration("janus-observe-interval", 5*time.Second, "")
 	jIdle := f.Duration("janus-idle-timeout", defaultJanusIdleTimeout, "")
 	jExec := f.String("janus-exec-config", "", "")
-	if f.Parse(args) != nil || *jp == "" {
+	if f.Parse(args) != nil {
 		return 2
+	}
+	journalSet, blobsSet := false, false
+	f.Visit(func(v *flag.Flag) {
+		switch v.Name {
+		case "journal":
+			journalSet = true
+		case "blobs":
+			blobsSet = true
+		}
+	})
+	// Preserve the original silent usage failure for an explicitly empty
+	// journal flag. In particular, do not resolve the default data directory.
+	if journalSet && *jp == "" {
+		return 2
+	}
+	var dataPath string
+	var err error
+	*jp, dataPath, _, err = resolveJournal(*dataDir, *jp, journalSet)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 2
+	}
+	if !journalSet {
+		fmt.Fprintf(errOut, "rhizome: data dir %s\n", dataPath)
+		if !blobsSet {
+			*bp = filepath.Join(dataPath, "blobs")
+			if err := os.MkdirAll(*bp, 0700); err != nil {
+				fmt.Fprintln(errOut, err)
+				return 1
+			}
+		}
 	}
 	jc, e := janusServeFromFlags(*jHX, *jEndpoint, *jProfile, *jAcceptRoot, *jWorld, *jSession, *jInterval)
 	if e != nil {
