@@ -5,7 +5,7 @@ wire contract. It provides the direct-wire server in `src/serveDirect.ts`.
 
 ## Requirements and install
 
-Node.js 22 or newer is required. The Gunnflow contract packages are installed
+Node.js 22.12 or newer is required. The Gunnflow contract packages are installed
 from vendored tarballs in `vendor/`; they come from the Gunnflow project
 under MIT (license notice: `vendor/LICENSE-gunnflow`).
 

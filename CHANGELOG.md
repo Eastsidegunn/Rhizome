@@ -16,6 +16,12 @@ Until 1.0, minor versions may contain breaking changes.
 - `make ci` runs a repository hygiene check that blocks committed runtime data,
   key and token patterns, home-directory paths and CGNAT addresses.
 
+### Changed
+
+- Adapter test toolchain upgraded from Vitest 3 to Vitest 5, which clears the
+  known `npm audit` advisories (Vitest, Tinypool, source-map-js). The adapter
+  now needs Node.js 22.12 or newer.
+
 ## [0.1.0] - 2026-10-08
 
 First public release.
