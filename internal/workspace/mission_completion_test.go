@@ -6,7 +6,7 @@ package workspace
 // (제한): running·waiting_for_result에서만 직접 전이, 그 외 비-terminal은
 // "task.resume 먼저" 안내 거부(저널 쓰기 0), terminal은 ErrInvalidState.
 // RHZ-079 (FR-RHZ-110)가 allow-list를 waiting_for_human·blocked로 확장
-// (도메인 전이표 확장만) — 그 두 상태의 단언은 rhz079_test.go C1/C2/C5로 이전.
+// (도메인 전이표 확장만) — 그 두 상태의 단언은 mission_terminal_exception_states_test.go C1/C2/C5로 이전.
 
 import (
 	"encoding/json"
@@ -198,7 +198,7 @@ func TestMissionCompleteQueuedRejectedFRRHZ098(t *testing.T) {
 
 // C3 (B-form): paused → 안내 거부, 저널 불변; task.resume(→running) 후
 // complete 성공. waiting_for_human·blocked 항목은 RHZ-079 (FR-RHZ-110)에서
-// 운영자 종결 경로가 열려 rhz079_test.go C1/C2/C5로 이전됐다(해당 단언 —
+// 운영자 종결 경로가 열려 mission_terminal_exception_states_test.go C1/C2/C5로 이전됐다(해당 단언 —
 // 거부문·resume ErrInvalidState·저널 불변 — 은 그쪽에서 계속 핀).
 func TestMissionCompleteFromPausedHumanBlockedRejectedFRRHZ098(t *testing.T) {
 	cases := map[string]struct {
@@ -236,7 +236,7 @@ func TestMissionCompleteFromPausedHumanBlockedRejectedFRRHZ098(t *testing.T) {
 			}
 			continue
 		}
-		t.Fatalf("%s: unexpected state in C3 fixture (waiting_for_human·blocked moved to rhz079_test.go)", id)
+		t.Fatalf("%s: unexpected state in C3 fixture (waiting_for_human·blocked moved to mission_terminal_exception_states_test.go)", id)
 	}
 }
 

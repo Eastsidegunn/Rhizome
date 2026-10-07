@@ -1,7 +1,7 @@
 package main
 
 // RHZ-059 FR-RHZ-089: CLI index 읽기전용·검증 모드, serve -index-repo/-index-out
-// 배선. 테스트 계획 C1~C3 (serve 쪽 S1~S8은 internal/workspace/rhz059_test.go).
+// 배선. 테스트 계획 C1~C3 (serve 쪽 S1~S8은 internal/workspace/codeindex_query_test.go).
 
 import (
 	"bytes"
