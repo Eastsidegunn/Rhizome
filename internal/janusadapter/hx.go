@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -131,21 +132,51 @@ func RealRunner(hxPath, requestDir string) Runner {
 		}
 		requestPath := f.Name()
 		cmd := hxCommand(hxPath, cfg, RunArgv(cfg, requestPath)...)
-		stdout, err := cmd.StdoutPipe()
+		// An explicit os.Pipe, not cmd.StdoutPipe: Wait closes a StdoutPipe
+		// as soon as the child exits, which races with a reader that is
+		// still draining it ("read |0: file already closed"). The parent
+		// owns the read end here, so Wait never touches it; the reader
+		// sees EOF when the child exits and closes the end itself.
+		pr, pw, err := os.Pipe()
 		if err != nil {
 			_ = os.Remove(requestPath)
 			return nil, fmt.Errorf("hx run stdout: %w", err)
 		}
+		cmd.Stdout = pw
 		cmd.Stdin = os.Stdin
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
+			_ = pw.Close()
+			_ = pr.Close()
 			_ = os.Remove(requestPath)
 			return nil, fmt.Errorf("hx run: %w", err)
 		}
+		_ = pw.Close() // the child holds its own copy of the write end
 		go func() {
 			_ = cmd.Wait()
+			// The production consumer reads only the first control line, so
+			// nothing else references pr while hx runs. Pin it until the child
+			// has exited: otherwise the finalizer could close the read end
+			// early and a later write by hx would hit EPIPE.
+			runtime.KeepAlive(pr)
 			_ = os.Remove(requestPath)
 		}()
-		return stdout, nil
+		return &eofCloser{File: pr}, nil
 	}
+}
+
+// eofCloser closes the parent's read end of the hx stdout pipe once the
+// stream is exhausted, so a fully drained run leaks no descriptor.
+type eofCloser struct {
+	*os.File
+	closed bool
+}
+
+func (c *eofCloser) Read(p []byte) (int, error) {
+	n, err := c.File.Read(p)
+	if err != nil && !c.closed {
+		c.closed = true
+		_ = c.File.Close()
+	}
+	return n, err
 }
