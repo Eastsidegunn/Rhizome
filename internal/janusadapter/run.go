@@ -17,6 +17,8 @@ import (
 // from contract inputs, and never serialized into request.json.
 type RunConfig struct {
 	ProfilePath, AcceptRoot, WorldConfigPath, SessionDB, ApprovalEndpoint string
+	EnvMode                                                               string
+	Passthrough                                                           []string
 }
 
 // Runner stands in for the hx run process: it receives the operator config and

@@ -284,6 +284,10 @@ func (x execStarter) Start(r workspace.ExecStartRequest) (string, string, error)
 // defaultJanusIdleTimeout is the -janus-idle-timeout default.
 const defaultJanusIdleTimeout = 10 * time.Minute
 
+// defaultJanusEnvMode preserves the pre-FR-RHZ-126 process environment until
+// the allowlist has been verified on the production rootless-Podman runtime.
+const defaultJanusEnvMode = janusadapter.EnvModeInherit
+
 // janusIdleTimeout validates -janus-idle-timeout: 0 disables, negative is a
 // configuration error. It only takes effect with the JANUS flag set (nil
 // config = no loop = nothing to judge).
@@ -294,20 +298,51 @@ func janusIdleTimeout(d time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
+// janusEnvPassthrough parses the optional comma-separated list of environment
+// variable names. Values are never accepted on this surface.
+func janusEnvPassthrough(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	names := strings.Split(raw, ",")
+	for i, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.ContainsAny(name, "=\x00") {
+			return nil, fmt.Errorf("janus-env-passthrough must be a comma-separated list of variable names")
+		}
+		names[i] = name
+	}
+	return names, nil
+}
+
 // janusServeFromFlags assembles the adapter config. All JANUS flags absent =
 // adapter disabled (nil, nil); a partial set is a configuration error, never
-// a silent disable (RHZ-046 D4). The interval floor is 1s (D9).
-func janusServeFromFlags(hx, endpoint, profile, acceptRoot, world, session string, interval time.Duration) (*janusServeConfig, error) {
-	if hx == "" && endpoint == "" && profile == "" && acceptRoot == "" && world == "" && session == "" {
+// a silent disable (RHZ-046 D4). envModeSet distinguishes an explicit inherit
+// from the default. The interval floor is 1s (D9).
+func janusServeFromFlags(hx, endpoint, profile, acceptRoot, world, session, envMode string, envModeSet bool, envPassthrough string, interval time.Duration) (*janusServeConfig, error) {
+	if hx == "" && endpoint == "" && profile == "" && acceptRoot == "" && world == "" && (envModeSet || envPassthrough != "") {
+		return nil, fmt.Errorf("janus-env-mode/janus-env-passthrough requires the janus flag set (janus-hx, janus-approval-endpoint, janus-profile, janus-accept-root, janus-world-config)")
+	}
+	if envMode != janusadapter.EnvModeInherit && envMode != janusadapter.EnvModeAllowlist {
+		return nil, fmt.Errorf("janus-env-mode must be %q or %q", janusadapter.EnvModeInherit, janusadapter.EnvModeAllowlist)
+	}
+	if envPassthrough != "" && envMode != janusadapter.EnvModeAllowlist {
+		return nil, fmt.Errorf("janus-env-passthrough requires janus-env-mode=allowlist")
+	}
+	if hx == "" && endpoint == "" && profile == "" && acceptRoot == "" && world == "" && session == "" && envMode == defaultJanusEnvMode && envPassthrough == "" {
 		return nil, nil
 	}
 	if hx == "" || endpoint == "" || profile == "" || acceptRoot == "" || world == "" {
-		return nil, fmt.Errorf("incomplete janus configuration: janus-hx, janus-approval-endpoint, janus-profile, janus-accept-root and janus-world-config are all required (janus-session-db is optional)")
+		return nil, fmt.Errorf("incomplete janus configuration: janus-hx, janus-approval-endpoint, janus-profile, janus-accept-root and janus-world-config are all required (janus-session-db, janus-env-mode and janus-env-passthrough are optional)")
 	}
 	if interval < janusadapter.MinObserveInterval {
 		return nil, fmt.Errorf("janus-observe-interval below %s", janusadapter.MinObserveInterval)
 	}
-	return &janusServeConfig{HX: hx, Cfg: janusadapter.RunConfig{ProfilePath: profile, AcceptRoot: acceptRoot, WorldConfigPath: world, SessionDB: session, ApprovalEndpoint: endpoint}, Interval: interval}, nil
+	passthrough, err := janusEnvPassthrough(envPassthrough)
+	if err != nil {
+		return nil, err
+	}
+	return &janusServeConfig{HX: hx, Cfg: janusadapter.RunConfig{ProfilePath: profile, AcceptRoot: acceptRoot, WorldConfigPath: world, SessionDB: session, ApprovalEndpoint: endpoint, EnvMode: envMode, Passthrough: passthrough}, Interval: interval}, nil
 }
 
 // janusExecConfig loads -janus-exec-config (FR-RHZ-123). It is only legal
@@ -342,6 +377,9 @@ func blobStoreFromFlag(dir string) workspace.BlobGetter {
 // assembleServe builds the HTTP handler and, when configured, the JANUS loop.
 // The HTTP surface is identical with or without the adapter: /v1/execution/*
 // stays 501 in RHZ-046 part 1 (no new contract surface here).
+// assembleServeInspect exposes the assembled workspace wiring to package tests.
+var assembleServeInspect func(*workspace.HTTPServer)
+
 func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, errOut io.Writer) (http.Handler, *janusadapter.Loop) {
 	h := workspace.NewHTTP(store)
 	h.Blobs = blobs
@@ -349,6 +387,9 @@ func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, ind
 	// config is rejected in serve() before assembly (D4 관례).
 	h.IndexRepo, h.IndexOut = indexRepo, indexOut
 	if jc == nil {
+		if assembleServeInspect != nil {
+			assembleServeInspect(h)
+		}
 		return h.Handler(), nil
 	}
 	replay := janusadapter.RealReplay(jc.HX)
@@ -414,6 +455,9 @@ func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, ind
 			}
 		},
 	}
+	if assembleServeInspect != nil {
+		assembleServeInspect(h)
+	}
 	return h.Handler(), loop
 }
 
@@ -446,19 +490,23 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jAcceptRoot := f.String("janus-accept-root", "", "")
 	jWorld := f.String("janus-world-config", "", "")
 	jSession := f.String("janus-session-db", "", "")
+	jEnvMode := f.String("janus-env-mode", defaultJanusEnvMode, "")
+	jEnvPassthrough := f.String("janus-env-passthrough", "", "")
 	jInterval := f.Duration("janus-observe-interval", 5*time.Second, "")
 	jIdle := f.Duration("janus-idle-timeout", defaultJanusIdleTimeout, "")
 	jExec := f.String("janus-exec-config", "", "")
 	if f.Parse(args) != nil {
 		return 2
 	}
-	journalSet, blobsSet := false, false
+	journalSet, blobsSet, janusEnvModeSet := false, false, false
 	f.Visit(func(v *flag.Flag) {
 		switch v.Name {
 		case "journal":
 			journalSet = true
 		case "blobs":
 			blobsSet = true
+		case "janus-env-mode":
+			janusEnvModeSet = true
 		}
 	})
 	// Preserve the original silent usage failure for an explicitly empty
@@ -483,7 +531,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			}
 		}
 	}
-	jc, e := janusServeFromFlags(*jHX, *jEndpoint, *jProfile, *jAcceptRoot, *jWorld, *jSession, *jInterval)
+	jc, e := janusServeFromFlags(*jHX, *jEndpoint, *jProfile, *jAcceptRoot, *jWorld, *jSession, *jEnvMode, janusEnvModeSet, *jEnvPassthrough, *jInterval)
 	if e != nil {
 		fmt.Fprintln(errOut, e)
 		return 2

@@ -15,6 +15,12 @@ Until 1.0, minor versions may contain breaking changes.
   there (FR-RHZ-125).
 - `make ci` runs a repository hygiene check that blocks committed runtime data,
   key and token patterns, home-directory paths and CGNAT addresses.
+- JANUS `hx run` and `hx replay` have a new opt-in
+  `-janus-env-mode=allowlist` (default unchanged: `inherit`); the default will
+  flip after deployment verification. The allowlist is `PATH`, `HOME`,
+  `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `XDG_RUNTIME_DIR`,
+  `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `HX_RUNTIME_DIR`; operators can add
+  exact, case-sensitive names with `-janus-env-passthrough` (FR-RHZ-126).
 
 ## [0.1.0] - 2026-10-08
 

@@ -11,7 +11,64 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"sort"
+	"strings"
 )
+
+const (
+	EnvModeInherit   = "inherit"
+	EnvModeAllowlist = "allowlist"
+)
+
+func defaultHxEnvironment(name string) bool {
+	switch name {
+	case "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+		"XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "HX_RUNTIME_DIR":
+		return true
+	}
+	return false
+}
+
+// hxEnv returns the subset of parent explicitly allowed for hx. Passthrough
+// entries are operator-supplied variable names, matched exactly and
+// case-sensitively. Missing variables are never invented.
+func hxEnv(parent []string, passthrough []string) []string {
+	allowed := make(map[string]struct{}, len(passthrough))
+	for _, name := range passthrough {
+		allowed[name] = struct{}{}
+	}
+
+	values := make(map[string]string, len(allowed))
+	for _, entry := range parent {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, ok := allowed[name]; defaultHxEnvironment(name) || ok {
+			values[name] = entry
+		}
+	}
+
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	env := make([]string, 0, len(names))
+	for _, name := range names {
+		env = append(env, values[name])
+	}
+	return env
+}
+
+// hxCommand is the single process-construction path for hx run and replay.
+func hxCommand(hxPath string, cfg RunConfig, args ...string) *exec.Cmd {
+	cmd := exec.Command(hxPath, args...)
+	if cfg.EnvMode == EnvModeAllowlist {
+		cmd.Env = hxEnv(os.Environ(), cfg.Passthrough)
+	}
+	return cmd
+}
 
 // RunArgv assembles the hx run argv from the operator config (contract v1.1
 // confirmed surface). The request travels as a file path; --session is
@@ -46,7 +103,7 @@ func RealDialer(path string) Dialer {
 // ParseReplay. The trace identity is verified by the parser, not trusted here.
 func RealReplay(hxPath string) ReplaySource {
 	return func(cfg RunConfig, sessionDB, traceID string) (io.Reader, error) {
-		out, err := exec.Command(hxPath, ReplayArgv(sessionDB)...).Output()
+		out, err := hxCommand(hxPath, cfg, ReplayArgv(sessionDB)...).Output()
 		if err != nil {
 			return nil, fmt.Errorf("hx replay: %w", err)
 		}
@@ -73,7 +130,7 @@ func RealRunner(hxPath, requestDir string) Runner {
 			return nil, err
 		}
 		requestPath := f.Name()
-		cmd := exec.Command(hxPath, RunArgv(cfg, requestPath)...)
+		cmd := hxCommand(hxPath, cfg, RunArgv(cfg, requestPath)...)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			_ = os.Remove(requestPath)

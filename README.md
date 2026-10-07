@@ -173,6 +173,8 @@ EXEC_CONFIG=/path/to/exec-config.json       # optional: enables mission.start
 | `-janus-approval-endpoint` | — | Absolute path of the JANUS approval endpoint. |
 | `-janus-profile`, `-janus-accept-root`, `-janus-world-config` | — | Passed to `hx run` as `--profile`, `--accept-root`, `--world-config`. |
 | `-janus-session-db` | *(empty)* | Optional JANUS session database to observe. |
+| `-janus-env-mode` | `inherit` | `inherit` gives `hx` the full `rhizome serve` environment; `allowlist` supplies only the variables listed below. |
+| `-janus-env-passthrough` | *(empty)* | In `allowlist` mode, adds named, already-present variables (exact, case-sensitive names; comma-separated). |
 | `-janus-observe-interval` | `5s` | Observation poll interval. |
 | `-janus-idle-timeout` | `10m` | Stop a session after this long without activity. |
 | `-janus-exec-config` | *(off)* | Operator-owned JSON ledger (adapter, profile id/hash, workspace, scope, session mode, ceiling) that enables `mission.start`. Requires the five flags above. |
@@ -181,6 +183,17 @@ EXEC_CONFIG=/path/to/exec-config.json       # optional: enables mission.start
 and `-janus-world-config` go together: giving only some of them is an error, so
 nothing is silently disabled. The execution adapter speaks JANUS's CLI and
 NDJSON protocol.
+
+`inherit` is the current environment-mode default and preserves the behavior
+of earlier releases. After the allowlist is verified on the real Linux
+rootless-Podman deployment, a later release will make `allowlist` the default.
+Opt in with `-janus-env-mode=allowlist` once you have verified your runtime
+(`hx` and its agent backends) still works; backends that authenticate via
+environment variables need those names in `-janus-env-passthrough` or a
+file-based credential. Allowlist mode passes only `PATH`, `HOME`, `TMPDIR`,
+`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, and `HX_RUNTIME_DIR`, plus any existing passthrough variables.
+Passthrough is rejected unless allowlist mode is selected.
 
 The execution adapter IDs currently accepted are `claudecode` and `codex`.
 Adding another ID requires a code change in `validAdapter` in

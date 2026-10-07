@@ -21,7 +21,7 @@ import (
 
 func TestServeMissionStartProvenanceFRRHZ124(t *testing.T) {
 	s := rhz092Store(t)
-	jc, err := janusServeFromFlags(fakeHX(t), filepath.Join(t.TempDir(), "absent.sock"), "/p.yaml", "/ar", "/w.json", "", 5*time.Second)
+	jc, err := janusServeFromFlags(fakeHX(t), filepath.Join(t.TempDir(), "absent.sock"), "/p.yaml", "/ar", "/w.json", "", defaultJanusEnvMode, false, "", 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

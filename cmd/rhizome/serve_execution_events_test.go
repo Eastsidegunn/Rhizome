@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func boundMissionExec(t *testing.T, s *events.Store) execution.Ref {
 func TestServeExecEventsProjectsReplayFixtureFRRHZ118(t *testing.T) {
 	s := &events.Store{}
 	r := boundMissionExec(t, s)
-	jc, err := janusServeFromFlags(fakeHX(t), filepath.Join(t.TempDir(), "absent.sock"), "/p.yaml", "/ar", "/w.json", "", 5*time.Second)
+	jc, err := janusServeFromFlags(fakeHX(t), filepath.Join(t.TempDir(), "absent.sock"), "/p.yaml", "/ar", "/w.json", "", defaultJanusEnvMode, false, "", 5*time.Second)
 	if err != nil || jc == nil {
 		t.Fatal(jc, err)
 	}
@@ -131,7 +132,7 @@ func TestServeExecEventsProjectsReplayFixtureFRRHZ118(t *testing.T) {
 // socket reports nothing — the adapter idles without JANUS present.
 func TestServeJanusLoopIdlesWithoutExecutionsFRRHZ118(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "absent.sock")
-	jc, err := janusServeFromFlags(fakeHX(t), sock, "/p.yaml", "/ar", "/w.json", "", time.Second)
+	jc, err := janusServeFromFlags(fakeHX(t), sock, "/p.yaml", "/ar", "/w.json", "", defaultJanusEnvMode, false, "", time.Second)
 	if err != nil || jc == nil {
 		t.Fatal(jc, err)
 	}
@@ -141,7 +142,7 @@ func TestServeJanusLoopIdlesWithoutExecutionsFRRHZ118(t *testing.T) {
 	if loop == nil || loop.Replay == nil || loop.Client.Dial == nil || loop.ES.Store == nil || loop.AS.Store == nil {
 		t.Fatalf("loop seams not wired: %+v", loop)
 	}
-	if loop.Cfg != jc.Cfg || loop.Cfg.ApprovalEndpoint != sock {
+	if !reflect.DeepEqual(loop.Cfg, jc.Cfg) || loop.Cfg.ApprovalEndpoint != sock {
 		t.Fatalf("config not carried into loop: %+v", loop.Cfg)
 	}
 	if _, err = loop.Client.Dial(); err == nil {
