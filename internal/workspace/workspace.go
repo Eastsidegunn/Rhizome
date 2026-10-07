@@ -342,7 +342,7 @@ func questionState(q question.Ref) string {
 // →running is domain-valid but the relay guard rejects it, so it is disabled
 // here too). Terminal states hide pause/resume/instruct; everything else is
 // disabled rather than hidden. A capability must never claim more than the
-// relay will accept; rhz070_test T1 pins that equality.
+// relay will accept; capability_projection_test T1 pins that equality.
 func taskCapabilities(st domain.MissionState) TaskCapabilities {
 	switch st {
 	case domain.MissionSucceeded, domain.MissionFailed, domain.MissionCancelled:
@@ -366,8 +366,8 @@ func taskCapabilities(st domain.MissionState) TaskCapabilities {
 // no worker to send the changes to — so it stays hidden there).
 // changes_requested: approve/reject enabled, requestChanges hidden (a second
 // request is rejected by the kernel). Decided (approved/rejected): all hidden.
-// A capability must never claim more than the relay accepts; rhz070_test T1
-// and rhz078_test R5 pin that equality.
+// A capability must never claim more than the relay accepts; capability_projection_test T1
+// and gate_changes_requested_test R5 pin that equality.
 func gateCapabilities(state string, bound bool) GateCapabilities {
 	switch state {
 	case "pending":
@@ -1511,7 +1511,7 @@ func deliverableRegisterID(from edge.Endpoint, kind, summary, sourceRef string) 
 // relayCorrelation derives the correlation an operator decision event carries
 // when the intent brought none: "relay:<actor>", with the unverified-local-
 // operator prefix applied to an unverified actor (RHZ-061 rule, pinned by
-// rhz061_test). Shared by goal.resolve/fail and mission.complete/fail
+// goal_lifecycle_test). Shared by goal.resolve/fail and mission.complete/fail
 // (RHZ-069, FR-RHZ-098) so the two surfaces cannot drift.
 func relayCorrelation(given, actor string, verified bool) string {
 	if given != "" {

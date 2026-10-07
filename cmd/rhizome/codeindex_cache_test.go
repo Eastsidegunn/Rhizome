@@ -2,7 +2,7 @@ package main
 
 // RHZ-058 FR-RHZ-088 — RHZ-059(FR-RHZ-089)에서 개정: CLI index는 읽기 전용이
 // 되어 journal 단언이 반전됐다(쓰기 존재→부재, 약화 아님). CLI의 journal emit
-// 커버리지("전진→1건"·"같은 sha→0")는 serve 쪽 rhz059 테스트(S2~S6)로 완전
+// 커버리지("전진→1건"·"같은 sha→0")는 serve 쪽 internal/workspace/codeindex_query_test.go(S2~S6)로 완전
 // 이전. 유지: 캐시 바이트 결정론·브랜치 미색인·fail-stop·usage·graph 조회.
 
 import (

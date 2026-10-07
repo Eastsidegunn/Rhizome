@@ -255,7 +255,7 @@ func TestMissionCompleteQueuedPausedStillRejectedFRRHZ110(t *testing.T) {
 }
 
 // C5: waiting_for_human·blocked에서 task.resume은 여전히 ErrInvalidState·저널
-// 불변(rhz044 가드 불변) — 두 상태를 닫는 길은 complete/fail뿐이다.
+// 불변(relay_resume_test 가드 불변) — 두 상태를 닫는 길은 complete/fail뿐이다.
 func TestResumeFromWaitingHumanBlockedStillRejectedFRRHZ110(t *testing.T) {
 	s := &events.Store{}
 	missionIn062(t, s, "mission-h", domain.MissionReady, domain.MissionRunning, domain.MissionWaitingHuman)

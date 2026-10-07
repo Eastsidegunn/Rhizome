@@ -16,7 +16,7 @@ import (
 )
 
 // handlePrefixLen is the number of sha256 hex chars a handle starts with.
-// It is a var (not a const) solely so rhz073_test can lower it to force a
+// It is a var (not a const) solely so node_handles_test can lower it to force a
 // prefix collision; production never writes it.
 var handlePrefixLen = 8
 
