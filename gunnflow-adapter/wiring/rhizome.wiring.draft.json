@@ -1,0 +1,198 @@
+{
+  "version": "0.1.0",
+  "render": {
+    "queued": {
+      "glyph": "ring",
+      "tone": "#5b6672"
+    },
+    "running": {
+      "glyph": "play",
+      "tone": "#4da3ff"
+    },
+    "waiting": {
+      "glyph": "clock",
+      "tone": "#ffb02e"
+    },
+    "paused": {
+      "glyph": "pause",
+      "tone": "#e8a33d"
+    },
+    "blocked": {
+      "glyph": "alert",
+      "tone": "#ff5d5d"
+    },
+    "completed": {
+      "glyph": "check",
+      "tone": "#6ee7a8"
+    },
+    "failed": {
+      "glyph": "cross",
+      "tone": "#ff5d5d"
+    },
+    "approved": {
+      "glyph": "check",
+      "tone": "#6ee7a8"
+    },
+    "rejected": {
+      "glyph": "cross",
+      "tone": "#5b6672"
+    },
+    "superseded": {
+      "glyph": "neutral",
+      "tone": "#5b6672"
+    },
+    "unstated": {
+      "glyph": "dot",
+      "tone": "#dde3ea"
+    },
+    "active": {
+      "glyph": "play",
+      "tone": "#4da3ff"
+    },
+    "achieved": {
+      "glyph": "check",
+      "tone": "#6ee7a8"
+    },
+    "cancelled": {
+      "glyph": "pause",
+      "tone": "#e8a33d"
+    }
+  },
+  "relations": {
+    "dependency": {
+      "style": "solid"
+    },
+    "spawn": {
+      "style": "muted"
+    },
+    "produces": {
+      "style": "bold"
+    },
+    "gate": {
+      "style": "double"
+    },
+    "member-of": {
+      "style": "muted"
+    }
+  },
+  "attention": [
+    {
+      "match": {
+        "cause": "needs_human"
+      },
+      "mechanism": "interrupt"
+    },
+    {
+      "match": {
+        "cause": "waiting_for_human"
+      },
+      "mechanism": "interrupt"
+    },
+    {
+      "match": {
+        "cause": "flagged"
+      },
+      "mechanism": "ambient"
+    }
+  ],
+  "viewers": {
+    "text/plain": "text",
+    "text/markdown": "markdown-source"
+  },
+  "kinds": {
+    "workspace": {
+      "parts": [
+        {
+          "id": "mission-name",
+          "part": "text",
+          "action": "mission.create"
+        },
+        {
+          "id": "create-mission",
+          "part": "send",
+          "action": "mission.create",
+          "requires": [
+            "mission-name"
+          ]
+        }
+      ]
+    },
+    "mission": {
+      "parts": [
+        {
+          "id": "status",
+          "part": "glyph"
+        },
+        {
+          "id": "kind",
+          "part": "label",
+          "source": "kind"
+        }
+      ]
+    },
+    "task": {
+      "parts": [
+        {
+          "id": "status",
+          "part": "glyph"
+        },
+        {
+          "id": "state",
+          "part": "label",
+          "source": "state"
+        },
+        {
+          "id": "instruction",
+          "part": "text",
+          "action": "task.instruct"
+        },
+        {
+          "id": "send-instruction",
+          "part": "send",
+          "action": "task.instruct",
+          "requires": [
+            "instruction"
+          ]
+        },
+        {
+          "id": "pause",
+          "part": "send",
+          "action": "task.pause",
+          "requires": []
+        },
+        {
+          "id": "resume",
+          "part": "send",
+          "action": "task.resume",
+          "requires": []
+        }
+      ]
+    },
+    "gate": {
+      "parts": [
+        {
+          "id": "status",
+          "part": "glyph"
+        },
+        {
+          "id": "state",
+          "part": "label",
+          "source": "state"
+        }
+      ]
+    },
+    "deliverable": {
+      "parts": [
+        {
+          "id": "status",
+          "part": "glyph"
+        },
+        {
+          "id": "kind",
+          "part": "label",
+          "source": "kind"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,318 @@
+/**
+ * Rhizome v1 workspace DTOs → the cockpit's projection shape
+ * (workspace/http.go DTOs). Pure
+ * shape/vocabulary adaptation — no new facts: omitted upstream values stay
+ * omitted, never inferred. Items already in the cockpit's shape pass through.
+ */
+import type { CapabilityLevel } from '@gunnflow/contract';
+
+/*
+ * The cockpit's current projection shape, as far as this adapter produces it.
+ * Declared here so the adapter depends on nothing but the contract and the port.
+ */
+type NodeState = 'queued' | 'running' | 'waiting' | 'paused' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+interface MissionProjection {
+  kind: 'mission';
+  id: string;
+  name: string;
+  attention: boolean;
+  /** Goal lifecycle state (RHZ-061). Terminal goals are dropped upstream (조종석=진행 중); non-terminal goals stay even without a live task (RHZ-074/FR-RHZ-102). */
+  state?: string;
+}
+interface TaskProjection {
+  kind: 'task';
+  id: string;
+  missionId: string;
+  name: string;
+  state: NodeState;
+  currentAction?: string;
+  progress?: number;
+  blockedReason?: string;
+  attention: boolean;
+}
+interface GateProjection {
+  kind: 'gate';
+  id: string;
+  missionId: string;
+  /** RHZ-075 (FR-RHZ-108): binding goal when the gate is goal-bound (xor with missionId upstream); '' when absent. */
+  goalId: string;
+  name: string;
+  gateType: string;
+  requestedAction: string;
+  /** 'changes_requested' (RHZ-078, FR-RHZ-109): the human sent the request back; the gate still awaits approve/reject. */
+  state: 'waiting' | 'changes_requested' | 'approved' | 'rejected' | 'expired' | 'superseded' | 'canceled';
+  /** Cockpit fields v1 never carries; left absent, never invented. */
+  request?: unknown;
+  riskTier?: 'logged' | 'privileged';
+}
+interface DeliverableProjection {
+  kind: 'deliverable';
+  id: string;
+  missionId: string;
+  /** RHZ-081 (FR-RHZ-112): a deliverable is bound to exactly one of missionId / goalId; present only when goal-bound. */
+  goalId?: string;
+  title: string;
+  deliverableType: string;
+  /** v1 has no lifecycle state; left absent, never invented. */
+  state?: 'draft' | 'completed';
+  /**
+   * Rhizome's source reference, carried through so nodes.ts can derive an
+   * artifact (id+digest) when it is a content-addressed blob (`sha256:<hex>`).
+   * `exec-` refs and others carry no blob bytes and are left as-is. (RHZ-057
+   * stage 2 — first-class edges are a separate axis.)
+   */
+  sourceRef?: string;
+  /**
+   * RHZ-085 (FR-RHZ-115): set only when the owning task (missionId) is hidden
+   * as terminal while its parent goal is still live. The deliverable then
+   * survives under the goal and nodes.ts hangs its member-of on this goal so the
+   * relation never names a hidden node. missionId stays as Rhizome stated it.
+   */
+  promotedGoalId?: string;
+}
+interface EdgeProjection {
+  id: string;
+  from: string;
+  to: string;
+  edgeKind: 'dependency' | 'spawn' | 'produces' | 'gate' | 'contains';
+  /** Id of the edge this one replaces (edge.rewire, RHZ-066); the replaced edge is not a live relationship. */
+  supersedes?: string;
+}
+type TaskCapabilities = Partial<Record<'pause' | 'resume' | 'instruct' | 'cancel' | 'forceReplan', CapabilityLevel>>;
+export interface WorkspaceProjection {
+  revision: number;
+  missions: MissionProjection[];
+  tasks: TaskProjection[];
+  gates: GateProjection[];
+  deliverables: DeliverableProjection[];
+  edges: EdgeProjection[];
+  /**
+   * RHZ-076 (FR-RHZ-104): ids that are the target of a `contains` edge anywhere
+   * in the raw snapshot, whether or not both ends survive the cockpit's live
+   * filter, EXCLUDING edges that a later edge supersedes (edge.rewire,
+   * RHZ-066: a superseded contains edge is no relationship at all). nodes.ts
+   * reads it to tell a top-level goal (cockpit kind "goal") from a contained
+   * one ("mission"). Hidden ends are kept on purpose: a goal whose parent is
+   * terminal still has a parent in Rhizome's truth and must not jump to the
+   * top level. Required: it is the only source of the kind decision.
+   */
+  containedIds: string[];
+  counts: { running: number; needsYou: number; blocked: number };
+  activities: unknown[];
+  sessions: unknown[];
+  capabilities: Record<string, TaskCapabilities>;
+  gateCapabilities: Record<string, unknown>;
+  effects: unknown[];
+}
+
+interface WireTask {
+  id: string;
+  missionId: string;
+  name: string;
+  state: TaskProjection['state'];
+  currentAction?: string;
+  progress?: number;
+  hasProgress: boolean;
+  blockedReason?: string;
+  attention: boolean;
+}
+interface WireGate {
+  id: string;
+  // 'changes_requested' (RHZ-078, FR-RHZ-109) is non-terminal: approve/reject may still follow.
+  state: 'pending' | 'changes_requested' | 'approved' | 'rejected';
+  // Rhizome now carries the gate's own name (RHZ-047/050); v1 did not, so it stays optional.
+  name?: string;
+  // Rhizome now carries the gate's binding mission (RHZ-074/FR-RHZ-102); old journal entries may omit it.
+  missionId?: string;
+  // RHZ-075 (FR-RHZ-108): a gate is bound to exactly one of missionId / goalId; both stay optional on the wire.
+  goalId?: string;
+  humanDecision?: string;
+  janusDecision?: string;
+  superseded: boolean;
+}
+interface WireDeliverable {
+  id: string;
+  kind: string;
+  missionId: string;
+  // RHZ-081 (FR-RHZ-112): goal-bound deliverables carry goalId (omitempty on the wire) and an empty missionId.
+  goalId?: string;
+  sourceRef: string;
+  summary: string;
+}
+interface WireEdge {
+  id: string;
+  from: { type: string; id: string };
+  to: { type: string; id: string };
+  edgeKind: string;
+  supersedes?: string;
+  actor?: string;
+  correlation?: string;
+}
+
+/**
+ * Terminal task states. The cockpit is awareness of work in progress, not an
+ * archive of finished work; terminal items stay in Rhizome's truth but are not
+ * forwarded upstream. Terminal-ness is Rhizome's own emitted state, so this
+ * scopes the cockpit over a backend fact — it invents nothing.
+ */
+const TERMINAL_TASK_STATES = new Set<NodeState>(['completed', 'failed', 'cancelled']);
+/** Gate states that keep a gate on the cockpit: a decision is still open (RHZ-078, FR-RHZ-109). */
+const LIVE_GATE_STATES = new Set<GateProjection['state']>(['waiting', 'changes_requested']);
+/** Terminal goal states (RHZ-061): a closed/cancelled goal leaves the cockpit. */
+const TERMINAL_GOAL_STATES = new Set<string>(['achieved', 'failed', 'cancelled']);
+
+/** Items that already carry the cockpit's discriminator pass through untouched. */
+const isAdapted = (x: unknown, kind: string) =>
+  (x as { kind?: string }).kind === kind && (kind !== 'deliverable' || 'title' in (x as object));
+
+export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
+  const body = (raw ?? {}) as Record<string, unknown>;
+  const list = (k: string) => (body[k] as unknown[] | undefined) ?? [];
+
+  const tasks: TaskProjection[] = list('tasks').map((t) => {
+    if (isAdapted(t, 'task')) return t as TaskProjection;
+    const w = t as WireTask;
+    return {
+      kind: 'task',
+      id: w.id,
+      missionId: w.missionId,
+      name: w.name,
+      state: w.state,
+      currentAction: w.currentAction,
+      // Progress exists only when upstream says so (hasProgress) — B3.
+      progress: w.hasProgress ? (w.progress ?? 0) : undefined,
+      blockedReason: w.blockedReason,
+      attention: w.attention ?? false,
+    };
+  });
+
+  /**
+   * v1 ships no capability projection; the server itself accepts
+   * pause/resume/instruct from the (unverified) operator. Mirroring that
+   * acceptance surface is not a widening — privileged actions stay hidden.
+   */
+  const capabilities =
+    (body.capabilities as Record<string, TaskCapabilities> | undefined) ??
+    Object.fromEntries(
+      tasks.map((t) => [t.id, { pause: 'enabled', resume: 'enabled', instruct: 'enabled' } as TaskCapabilities]),
+    );
+
+  const allMissions: MissionProjection[] = list('missions').map((m) =>
+    isAdapted(m, 'mission')
+      ? (m as MissionProjection)
+      : ({
+          kind: 'mission',
+          id: (m as { id: string }).id,
+          name: (m as { name: string }).name,
+          attention: (m as { attention?: boolean }).attention ?? false,
+          state: (m as { state?: string }).state,
+        } satisfies MissionProjection),
+  );
+  const allGates: GateProjection[] = list('gates').map((g) => {
+    if (isAdapted(g, 'gate')) return g as GateProjection;
+    const w = g as WireGate;
+    return {
+      kind: 'gate',
+      id: w.id,
+      // Name/missionId are carried when Rhizome states them (RHZ-074/FR-RHZ-102: a bound gate
+      // joins its mission instead of floating); type/request stay absent (v1).
+      missionId: w.missionId ?? '',
+      goalId: w.goalId ?? '',
+      name: w.name || w.id,
+      gateType: '',
+      requestedAction: '',
+      state: w.superseded ? 'superseded' : w.state === 'pending' ? 'waiting' : w.state,
+    } satisfies GateProjection;
+  });
+  const allDeliverables: DeliverableProjection[] = list('deliverables').map((d) => {
+    if (isAdapted(d, 'deliverable')) return d as DeliverableProjection;
+    const w = d as WireDeliverable;
+    return {
+      kind: 'deliverable',
+      id: w.id,
+      missionId: w.missionId,
+      ...(w.goalId ? { goalId: w.goalId } : {}),
+      title: w.summary || w.sourceRef || w.id,
+      deliverableType: w.kind,
+      sourceRef: w.sourceRef,
+      // No lifecycle state in v1 → omitted, never invented.
+    } satisfies DeliverableProjection;
+  });
+  const allEdges: EdgeProjection[] = list('edges').map((e) => {
+    const any = e as WireEdge | EdgeProjection;
+    if (typeof (any as EdgeProjection).from === 'string') return any as EdgeProjection;
+    const w = any as WireEdge;
+    return {
+      id: w.id,
+      from: w.from.id,
+      to: w.to.id,
+      edgeKind: w.edgeKind as EdgeProjection['edgeKind'],
+      ...(w.supersedes ? { supersedes: w.supersedes } : {}),
+    };
+  });
+
+  // Cockpit scope = work in progress. Drop terminal goals, terminal tasks (and
+  // the tasks of terminal goals), decided gates, and the deliverables whose
+  // owning goal is terminal (RHZ-085). (A deliverable's missionId carries the
+  // task id it was produced under.)
+  // 조종석 = 진행 중. 종료된 goal(achieved/failed/cancelled)은 상류로 안 올린다 — RHZ-061
+  // 운영자 생명주기 intent로 닫힌 이슈·쓸어낸 잔재가 조종석에서 사라지게(어댑터 숨김).
+  // RHZ-074 (FR-RHZ-102): goal=결과이므로 live task가 없어도 non-terminal goal은 남긴다(contains
+  // 계층의 뿌리가 쌍 mission 정리로 사라지지 않게). 반대로 부모 goal이 terminal인
+  // task는 함께 숨긴다 — goal.resolve 뒤 queued 짝 mission이 고아로 뜨지 않게.
+  const terminalGoalIds = new Set(
+    allMissions.filter((m) => TERMINAL_GOAL_STATES.has(m.state ?? '')).map((m) => m.id),
+  );
+  const liveMissions = allMissions.filter((m) => !terminalGoalIds.has(m.id));
+  const liveTasks = tasks.filter((t) => !TERMINAL_TASK_STATES.has(t.state) && !terminalGoalIds.has(t.missionId));
+  // A gate is live while it awaits a human decision: waiting, or changes_requested (RHZ-078,
+  // FR-RHZ-109 — the request went back for revision but approve/reject are still open on it).
+  const liveGates = allGates.filter((g) => LIVE_GATE_STATES.has(g.state));
+  const liveMissionIds = new Set([...liveMissions.map((m) => m.id), ...liveTasks.map((t) => t.missionId)]);
+  const liveTaskIds = new Set(liveTasks.map((t) => t.id));
+  // RHZ-081 (FR-RHZ-112): a goal-bound deliverable (missionId "") stays while its goal is live.
+  // RHZ-085 (FR-RHZ-115): a deliverable is live iff its owning GOAL is live (goal = result,
+  // RHZ-074). A mission-bound deliverable whose task is terminal (hidden) resolves the task's
+  // parent goal; while that goal is live the deliverable stays and is promoted (member-of →
+  // goal) so its membership never dangles on the hidden task. The goal must be known live
+  // here (listed non-terminal, or the parent of a live task) — nothing is inferred otherwise.
+  // 완료된 mission의 산출물이 조종석에서 사라지지 않게: goal이 non-terminal이면 goal 아래로 승격 노출.
+  const goalOfTask = new Map(tasks.map((t) => [t.id, t.missionId]));
+  const liveDeliverables = allDeliverables.flatMap((d): DeliverableProjection[] => {
+    if (liveTaskIds.has(d.missionId)) return [d];
+    if (d.goalId) return liveMissionIds.has(d.goalId) ? [d] : [];
+    const goalId = goalOfTask.get(d.missionId);
+    return goalId && liveMissionIds.has(goalId) ? [{ ...d, promotedGoalId: goalId }] : [];
+  });
+  const liveIds = new Set<string>([
+    ...liveMissionIds,
+    ...liveTaskIds,
+    ...liveGates.map((g) => g.id),
+    ...liveDeliverables.map((d) => d.id),
+  ]);
+  // RHZ-066 edge.rewire: an edge another edge supersedes is no live relationship.
+  const supersededEdgeIds = new Set(allEdges.flatMap((e) => (e.supersedes ? [e.supersedes] : [])));
+  // FR-RHZ-106: superseded edges leave the wire too, so a parent's relations stop naming the old target.
+  const liveEdges = allEdges.filter((e) => liveIds.has(e.from) && liveIds.has(e.to) && !supersededEdgeIds.has(e.id));
+  // RHZ-076 (FR-RHZ-104): containment is read from every non-superseded edge, not only live
+  // ones (see the field's doc).
+  const containedIds = [
+    ...new Set(allEdges.filter((e) => e.edgeKind === 'contains' && !supersededEdgeIds.has(e.id)).map((e) => e.to)),
+  ];
+
+  return {
+    revision: (body.revision as number | undefined) ?? 0,
+    missions: liveMissions,
+    tasks: liveTasks,
+    gates: liveGates,
+    deliverables: liveDeliverables,
+    edges: liveEdges,
+    containedIds,
+    counts: (body.counts as WorkspaceProjection['counts'] | undefined) ?? { running: 0, needsYou: 0, blocked: 0 },
+    activities: (body.activities as WorkspaceProjection['activities'] | undefined) ?? [],
+    sessions: (body.sessions as WorkspaceProjection['sessions'] | undefined) ?? [],
+    capabilities,
+    gateCapabilities: (body.gateCapabilities as WorkspaceProjection['gateCapabilities'] | undefined) ?? {},
+    effects: (body.effects as WorkspaceProjection['effects'] | undefined) ?? [],
+  };
+}

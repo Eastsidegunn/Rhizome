@@ -1,0 +1,17 @@
+.DS_Store
+*.ndjson
+/blobs/
+# local runtime data
+/.rhizome*/
+/rhizome
+
+# local diagram scratch
+/*.mmd
+/*.svg
+/*.diff.json
+/*.state.json
+/*.log
+
+# local agent working rules (not published)
+/AGENTS.md
+/CLAUDE.md

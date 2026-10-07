@@ -1,0 +1,111 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project intends to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+once a first version is tagged. Until 1.0, minor versions may contain breaking
+changes.
+
+## [Unreleased]
+
+### Added
+
+- MIT license and portability improvements.
+- Public-release preparation: English README, CONTRIBUTING, SECURITY,
+  this changelog, a GitHub Actions CI workflow (`make ci` + adapter tests),
+  issue/PR templates and a release-notes draft.
+
+## [0.1.0] - TBD
+
+Proposed first version. It is not tagged yet.
+
+### Added
+
+#### Journal and event model
+
+- Event-sourced core: a single-process, append-only NDJSON journal with a global
+  event sequence, a store port, and services that only append through it.
+- Replay of every aggregate from the journal. Append is O(1) and replay O(n),
+  via a journal index.
+- A kernel advisory lock (`flock`) on the journal enforces a single writer.
+  Stale locks clear themselves, and the writer drains before exit on a signal.
+- Policy ceilings with narrowing-only merge (intersection of allows, minimum of
+  budgets), with the effective policy pinned onto execution intents.
+- Architecture test `internal/archtest` that pins the layer boundary
+  `substrate <- {execution kernel || knowledge kernel} <- bridge <- assembly <-
+  surface`, with an exact-match exception list.
+
+#### Goals, missions, gates and questions
+
+- Goals and missions with decisions, evidence and terminal transitions, plus a
+  planner port, wake events with trigger dedupe, and a coordinator tick.
+- Operator lifecycle intents: `goal.create`, `goal.update`, `goal.resolve`,
+  `goal.fail`, `goal.cancel`, `mission.create` (optionally under an existing
+  goal), `mission.cancel`, `mission.complete`, `mission.fail`,
+  `mission.assign`, `mission.progress`, `task.pause` / `task.resume`.
+- Approval relay events and gate projection. Gate decisions require echoing the
+  request digest, so the decider signs what they saw.
+- Internal decision gates via `question.ask`, bound to exactly one mission or
+  goal, answered with `gate.approve`, `gate.reject` or `gate.requestChanges`.
+- Procedure steps marked as needing a gate open a question automatically.
+
+#### Knowledge plane, notes, edges and code index
+
+- Structured memories with evidence references, knowledge items, relations,
+  procedures, knowledge-use traces, deterministic retrieval and an initial
+  knowledge evaluation.
+- Note ingest from files into a content-addressed blob store (`rhizome ingest`,
+  `rhizome memories`).
+- Knowledge surface: `GET /v1/knowledge` and the `note.create` intent.
+  Authoring intents: `knowledge.create`, `knowledge.promote`,
+  `procedure.define`.
+- First-class edges (`contains`, `about`, `produces`, ...) with reverse lookup,
+  plus the `edge.declare` and `edge.rewire` intents.
+- Codebase indexer: a derived cache anchored to `main`, generated when `serve`
+  is queried (`rhizome index`, `rhizome graph`, `GET /v1/codeindex`).
+
+#### Procedures and assembly
+
+- An assembly runner that turns procedure templates into instances
+  (`procedure.run`), with step instances projected into `GET /v1/context`.
+
+#### Deliverables and blobs
+
+- Deliverable aggregate. Completion deliverables are derived deterministically.
+- `POST /v1/blob` (content-addressed upload), `GET /v1/blob/{id}`, and the
+  `deliverable.register` intent with `produces` edges.
+- Filtering, sorting and truncation of deliverables in `/v1/workspace`.
+
+#### HTTP surface (`/v1/*`)
+
+- `rhizome serve`: `GET /v1/workspace` with SSE stream, `POST /v1/intent`
+  (the single writer path while serving), and `GET /v1/context` (handoff read
+  path, `?task=`, `?goal=`, `?mission=`).
+- Workspace projection with capabilities and gate capabilities, short node
+  handles (`g-…`, `m-…`) accepted anywhere an ID is, goal success criteria, and
+  pending-gate counts.
+
+#### JANUS execution integration
+
+- Execution intents and `ExecutionRef` with dispatch claim, binding, unknown
+  recovery and cursor normalisation.
+- JANUS adapter: approval relay client, `hx replay` NDJSON observation,
+  `hx run` / stop client, streaming runner, and a serve-side loop that wires
+  observation, approval and stop together.
+- `GET /v1/execution/{missionId}` with SSE, projecting sessions, incremental
+  `events_tail` observation, session state and usage, and an idle timeout that
+  triggers stop.
+- `task.instruct` injects a message into a running multi-turn session.
+- `mission.start` starts a JANUS execution from a board mission. It is gated
+  by an operator-owned exec config, and the execution intent records the
+  ceiling, profile and effective limits.
+
+#### Gunnflow adapter (`gunnflow-adapter/`)
+
+- TypeScript adapter that serves the Gunnflow direct wire (`/nodes`, `/stream`,
+  `/intent`, `/detail`, `/artifact`, `/execution/:taskId`) in front of
+  Rhizome, against the vendored Gunnflow contract.
+
+[Unreleased]: https://github.com/Eastsidegunn/Rhizome/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Eastsidegunn/Rhizome/releases/tag/v0.1.0
