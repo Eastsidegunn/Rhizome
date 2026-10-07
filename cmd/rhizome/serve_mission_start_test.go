@@ -49,7 +49,7 @@ func TestServeExecConfigFlagFRRHZ123(t *testing.T) {
 		t.Fatalf("%+v %v", c, err)
 	}
 	bad := filepath.Join(t.TempDir(), "bad.json")
-	_ = os.WriteFile(bad, []byte(`{"adapterId":"claudecode","apiKey":"sk-secret"}`), 0o600)
+	_ = os.WriteFile(bad, []byte(`{"adapterId":"claudecode","apiKey":"TEST-NON-CREDENTIAL"}`), 0o600)
 	if _, err := janusExecConfig(true, bad); err == nil {
 		t.Fatal("invalid ledger accepted")
 	}

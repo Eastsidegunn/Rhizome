@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-066 FR-RHZ-095: edge.declare — contains(goal→goal) 선언 경로. 테스트
-// 계획 RHZ-066 test plan D1~D8 (① 전이
+// 계획 RHZ-066 D1~D8 (① 전이
 // 사이클 포함+D5 과차단 방지, ②a superseded는 사이클 검사 제외, ②b 멱등은
 // live-기준 — superseded ID 재선언은 명시 거부).
 

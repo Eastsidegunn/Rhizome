@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-062 FR-RHZ-091: mission.cancel — 운영자 미션 terminal(RHZ-061 짝,
-// 완전 sweep). 테스트 계획 RHZ-062 test plan M1~M7, 지정 ①
+// 완전 sweep). 테스트 계획 RHZ-062 M1~M7, 지정 ①
 // (상태기계 무변경 — running·waitingresult는 거부가 정답).
 
 import (

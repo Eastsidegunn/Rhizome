@@ -129,10 +129,10 @@ func clonedStore(t *testing.T, log []events.Event) *events.Store {
 	return s
 }
 
-// Plan 1: full summary, durable response coordinates, no raw or args retained.
+// Case 1: full summary, durable response coordinates, no raw or args retained.
 func TestParseReplaySummaryFRRHZ076(t *testing.T) {
-	first := mutateLine(t, replayLine(1, "session/start", "{}"), func(m map[string]any) { m["raw"] = "RAW_SECRET" })
-	s := first + replayLine(2, "subagent/approval_request", `{"args":{"token":"ARGS_SECRET"},"call_id":"call","name":"tool","reason":"why","request_id":"r1"}`) + policyLine(3) + replayLine(4, "subagent/done", `{"status":"ok","result":"r"}`) + replayLine(5, "session/end", "{}")
+	first := mutateLine(t, replayLine(1, "session/start", "{}"), func(m map[string]any) { m["raw"] = "TEST-RAW-REDACTION-SENTINEL" })
+	s := first + replayLine(2, "subagent/approval_request", `{"args":{"token":"TEST-ARGS-REDACTION-SENTINEL"},"call_id":"call","name":"tool","reason":"why","request_id":"r1"}`) + policyLine(3) + replayLine(4, "subagent/done", `{"status":"ok","result":"r"}`) + replayLine(5, "session/end", "{}")
 	b := parsed(t, s, 0)
 	if b.FromSeq != 0 || b.ThroughSeq != 5 || !b.SessionEnded || b.TraceID != replayTrace || b.SessionRef != "" || !reflect.DeepEqual(b.Done, []SubagentDone{{Result: "r", Status: "ok"}}) {
 		t.Fatalf("%+v", b)
@@ -145,12 +145,12 @@ func TestParseReplaySummaryFRRHZ076(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(raw, []byte("RAW_SECRET")) || bytes.Contains(raw, []byte("ARGS_SECRET")) {
+	if bytes.Contains(raw, []byte("TEST-RAW-REDACTION-SENTINEL")) || bytes.Contains(raw, []byte("TEST-ARGS-REDACTION-SENTINEL")) {
 		t.Fatal("raw content retained")
 	}
 }
 
-// Plan 2, stage A carry-over: genuinely broken JSON after a valid prefix.
+// 2, stage A carry-over: genuinely broken JSON after a valid prefix.
 func TestParseReplayMalformedJSONFRRHZ076(t *testing.T) {
 	corruptParse(t, policyLine(1)+"{invalid\n"+replayLine(3, "session/end", "{}"), 0, ErrObservationCorrupt)
 	for _, bad := range []string{"null\n", "\n", "[]\n"} {
@@ -158,7 +158,7 @@ func TestParseReplayMalformedJSONFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 3: also check trace identity in the cursor prefix.
+// Case 3: also check trace identity in the cursor prefix.
 func TestParseReplayTraceReplacementFRRHZ076(t *testing.T) {
 	other := strings.Repeat("a", 32)
 	wrong := strings.ReplaceAll(replayLine(1, "session/start", "{}"), replayTrace, other)
@@ -166,7 +166,7 @@ func TestParseReplayTraceReplacementFRRHZ076(t *testing.T) {
 	corruptParse(t, replayLine(1, "session/start", "{}")+strings.ReplaceAll(replayLine(2, "session/end", "{}"), replayTrace, other), 2, ErrSessionReplaced)
 }
 
-// Plan 4: zero, negative, duplicate, reversal, gaps (including first seq).
+// Case 4: zero, negative, duplicate, reversal, gaps (including first seq).
 func TestParseReplaySequenceIntegrityFRRHZ076(t *testing.T) {
 	for _, seqs := range [][]int{{0}, {-1}, {2}, {1, 1}, {1, 2, 1}, {1, 3}} {
 		t.Run(fmt.Sprint(seqs), func(t *testing.T) {
@@ -179,7 +179,7 @@ func TestParseReplaySequenceIntegrityFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 5, revised: prefix responses/done are collected; store dedupes writes.
+// 5, revised: prefix responses/done are collected; store dedupes writes.
 func TestParseReplayPrefixValidationFRRHZ076(t *testing.T) {
 	s, r, a := observationStore(t)
 	prefix := policyLine(1) + replayLine(2, "subagent/done", `{"status":"ok"}`)
@@ -206,7 +206,7 @@ func TestParseReplayPrefixValidationFRRHZ076(t *testing.T) {
 	corruptParse(t, replayLine(1, "other", "{}")+replayLine(3, "other", "{}"), 3, ErrObservationCorrupt)
 }
 
-// Plan 6: empty is also shorter than a positive cursor; equal length is valid.
+// Case 6: empty is also shorter than a positive cursor; equal length is valid.
 func TestParseReplayTruncatedHistoryFRRHZ076(t *testing.T) {
 	corruptParse(t, "", 5, ErrObservationCorrupt)
 	var s string
@@ -220,7 +220,7 @@ func TestParseReplayTruncatedHistoryFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 7: empty input is valid only at zero; caller trace must be valid hex.
+// Case 7: empty input is valid only at zero; caller trace must be valid hex.
 func TestParseReplayEmptyAndInvalidArgumentsFRRHZ076(t *testing.T) {
 	b := parsed(t, "", 0)
 	if b.ThroughSeq != 0 || b.SessionEnded || len(b.Done) != 0 {
@@ -244,7 +244,7 @@ type fakeErrorReader struct{ err error }
 
 func (f fakeErrorReader) Read([]byte) (int, error) { return 0, f.err }
 
-// Plan 8: discard completed prefix on a subsequent I/O error.
+// Case 8: discard completed prefix on a subsequent I/O error.
 func TestParseReplayReaderFailureFRRHZ076(t *testing.T) {
 	injected := errors.New("injected read failure")
 	b, err := ParseReplay(io.MultiReader(strings.NewReader(policyLine(1)), fakeErrorReader{injected}), replayTrace, 0)
@@ -253,7 +253,7 @@ func TestParseReplayReaderFailureFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 9: additions to kind/payload vocabulary are intentionally accepted.
+// Case 9: additions to kind/payload vocabulary are intentionally accepted.
 func TestParseReplayForwardCompatibilityFRRHZ076(t *testing.T) {
 	b := parsed(t, replayLine(1, "future/kind", `{"decision":9,"anything":[1,2]}`)+replayLine(2, "subagent/done", `{"status":"ok","future":{"x":1}}`), 0)
 	if b.ThroughSeq != 2 || len(b.Done) != 1 || b.SessionEnded || len(b.ApprovalResponses) != 0 {
@@ -261,7 +261,7 @@ func TestParseReplayForwardCompatibilityFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 10: all known fields are checked, including optional fields and null.
+// Case 10: all known fields are checked, including optional fields and null.
 func TestParseReplayKnownFieldTypesFRRHZ076(t *testing.T) {
 	for _, k := range []string{"actor", "kind", "parent_span_id", "raw", "span_id", "trace_id", "seq", "ts", "usage_in", "usage_out", "payload"} {
 		for _, bad := range []any{nil, []any{1}} {
@@ -294,7 +294,7 @@ func TestParseReplayKnownFieldTypesFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 11: request_id is optional; reason for deny is never synthesized.
+// Case 11: request_id is optional; reason for deny is never synthesized.
 func TestParseReplayPolicyDecisionValidationFRRHZ076(t *testing.T) {
 	for _, p := range []string{`{"decision":"allow","profile_id":"p"}`, `{"decision":"deny","profile_id":"p","reason":"policy"}`, `{"decision":"allow","profile_id":"p","request_id":"r1"}`} {
 		parsed(t, replayLine(1, "policy/decision", p), 0)
@@ -304,7 +304,7 @@ func TestParseReplayPolicyDecisionValidationFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 12: a subagent finishing never implies session completion by itself.
+// Case 12: a subagent finishing never implies session completion by itself.
 func TestExecutionRemainsObservingWithoutSessionEndFRRHZ076(t *testing.T) {
 	for _, status := range []string{"ok", "stopped", "error"} {
 		t.Run(status, func(t *testing.T) {
@@ -317,7 +317,7 @@ func TestExecutionRemainsObservingWithoutSessionEndFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 13: the five approved rows; error takes precedence over stopped.
+// Case 13: the five approved rows; error takes precedence over stopped.
 func TestSessionEndClassificationFRRHZ076(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -365,7 +365,7 @@ func TestSessionEndClassificationFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 14: durable coordinates and human/JANUS facts; unmatched keys pass intentionally.
+// Case 14: durable coordinates and human/JANUS facts; unmatched keys pass intentionally.
 func TestApprovalObservationTupleMatchFRRHZ076(t *testing.T) {
 	s, r, a := observationStore(t)
 	observe(t, s, r.ID, parsed(t, policyLine(1), 0))
@@ -405,7 +405,7 @@ func TestApprovalObservationTupleMatchFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 15: deadline deny can be observed without inventing a dispatch attempt.
+// Case 15: deadline deny can be observed without inventing a dispatch attempt.
 func TestApprovalObservationBeforeDispatchFRRHZ076(t *testing.T) {
 	s, r, a := observationStore(t)
 	if a.State != approval.InputRecorded {
@@ -418,7 +418,7 @@ func TestApprovalObservationBeforeDispatchFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 16: exact 19-digit range and direct 9 -> 10 numerical advancement.
+// Case 16: exact 19-digit range and direct 9 -> 10 numerical advancement.
 func TestCursorNumericSerializationFRRHZ076(t *testing.T) {
 	for _, tc := range []struct {
 		n    int64
@@ -498,7 +498,7 @@ func (f *fakeFailPort) Append(rev uint64, ev events.Event) error {
 	return f.Port.Append(rev, ev)
 }
 
-// Plan 17: failed approval append leaves the execution cursor untouched.
+// Case 17: failed approval append leaves the execution cursor untouched.
 func TestApprovalFailurePreservesExecutionCursorFRRHZ076(t *testing.T) {
 	s, r, _ := observationStore(t)
 	f := &fakeFailPort{Port: s, failType: "approval.response_observed", nth: 1}
@@ -514,7 +514,7 @@ func TestApprovalFailurePreservesExecutionCursorFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 18: committed approvals survive a later failure; retry cannot duplicate them.
+// Case 18: committed approvals survive a later failure; retry cannot duplicate them.
 func TestExecutionAppendFailureAndRetryFRRHZ076(t *testing.T) {
 	s, r, a := observationStore(t)
 	f := &fakeFailPort{Port: s, failType: "execution.observed", nth: 1}
@@ -562,7 +562,7 @@ func TestExecutionAppendFailureAndRetryFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 19: all three durable coordinates must match for an idempotent skip.
+// Case 19: all three durable coordinates must match for an idempotent skip.
 func TestObservedApprovalConflictFRRHZ076(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -585,7 +585,7 @@ func TestObservedApprovalConflictFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan 20: no cursor growth means no duplicate execution event.
+// Case 20: no cursor growth means no duplicate execution event.
 func TestNoNewEventsNoWritesFRRHZ076(t *testing.T) {
 	s, r, _ := observationStore(t)
 	input := policyLine(1)
@@ -599,7 +599,7 @@ func TestNoNewEventsNoWritesFRRHZ076(t *testing.T) {
 	unchanged(t, before, s)
 }
 
-// Plan 21: parsing and observation never manufacture requests or dispatches.
+// Case 21: parsing and observation never manufacture requests or dispatches.
 func TestObservationHasNoDispatchSideEffectsFRRHZ076(t *testing.T) {
 	s, r, _ := observationStore(t)
 	before := s.All()
@@ -615,7 +615,7 @@ func TestObservationHasNoDispatchSideEffectsFRRHZ076(t *testing.T) {
 	unchanged(t, after, s)
 }
 
-// Plan 22: nil, absent/corrupt references, state guards and binding identity.
+// Case 22: nil, absent/corrupt references, state guards and binding identity.
 func TestObservationValidationAndStoreErrorsFRRHZ076(t *testing.T) {
 	b := parsed(t, policyLine(1), 0)
 	for _, which := range []string{"both", "execution", "approval"} {
@@ -718,7 +718,7 @@ func TestObservationValidationAndStoreErrorsFRRHZ076(t *testing.T) {
 	unchanged(t, before, s)
 }
 
-// Plan 23: repeat parsing and equivalent stores produce identical observations.
+// Case 23: repeat parsing and equivalent stores produce identical observations.
 func TestObservationDeterminismFRRHZ076(t *testing.T) {
 	input := policyLine(1) + replayLine(2, "subagent/done", `{"status":"ok"}`) + replayLine(3, "session/end", "{}")
 	b1, b2 := parsed(t, input, 0), parsed(t, input, 0)

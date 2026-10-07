@@ -2,7 +2,7 @@ package workspace
 
 // RHZ-061 FR-RHZ-090: goal state emit + 운영자 생명주기 intent(goal.resolve/
 // fail/cancel — append-only terminal, 하드 삭제 아님). 테스트 계획
-// RHZ-061 test plan W1~W10.
+// RHZ-061 W1~W10.
 
 import (
 	"encoding/json"

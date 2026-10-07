@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-059 FR-RHZ-089: GET /v1/codeindex — 조회 시점 생성, serve writer 경계
-// emit. 테스트 계획 RHZ-059 test plan S1~S8.
+// emit. 테스트 계획 RHZ-059 S1~S8.
 
 import (
 	"bytes"

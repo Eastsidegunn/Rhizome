@@ -1,7 +1,7 @@
 package assembly
 
 // RHZ-063 FR-RHZ-092: Procedure 인스턴스화 runner. 테스트 계획
-// RHZ-063 test plan A1·A2·A4·A5·A6·A7.
+// RHZ-063 A1·A2·A4·A5·A6·A7.
 
 import (
 	"encoding/json"

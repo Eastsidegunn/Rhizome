@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-057 FR-RHZ-087 1단계: note.create dual-write(FK+about 엣지)·역방향 질의.
-// 테스트 계획 RHZ-057 test plan T5~T12 (T13은 T5·T7의 저널
+// 테스트 계획 RHZ-057 T5~T12 (T13은 T5·T7의 저널
 // 증분 단언으로 충족 — 설계 원칙 항목).
 
 import (

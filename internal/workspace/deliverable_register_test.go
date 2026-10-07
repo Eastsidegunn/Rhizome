@@ -6,7 +6,7 @@ package workspace
 // summary registered as the source, rejections with a byte-unchanged
 // journal, idempotent re-register (zero writes) with edge repair, legacy
 // payload (no GoalID) round trip over a real NDJSON journal, and the
-// single-writer pin on the relay file. Plan D1/D1'/D1''/D2/D3/D4/R1/W1.
+// single-writer pin on the relay file. D1/D1'/D1''/D2/D3/D4/R1/W1.
 
 import (
 	"bytes"

@@ -70,7 +70,7 @@ func gateByID(t *testing.T, s events.Port, id string) (Gate, int) {
 	return found, count
 }
 
-// Plan Q1: a surfaced request appears as a pending gate under the identity
+// Q1: a surfaced request appears as a pending gate under the identity
 // the eventual human input will use, carrying the display material.
 func TestSnapshotPendingGateFromRequestFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
@@ -83,7 +83,7 @@ func TestSnapshotPendingGateFromRequestFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan Q2: after the human input lands, exactly one gate remains under the
+// Q2: after the human input lands, exactly one gate remains under the
 // same ID — the pending entry merges into the approval-based gate, keeping
 // digest and display material.
 func TestSnapshotGateIdentityContinuityFRRHZ078(t *testing.T) {
@@ -101,7 +101,7 @@ func TestSnapshotGateIdentityContinuityFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan Q3: camelCase golden for the additive gate fields — present only where
+// Q3: camelCase golden for the additive gate fields — present only where
 // values exist, existing keys unchanged.
 func TestSnapshotGateDTOSchemaFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
@@ -151,7 +151,7 @@ func TestSnapshotGateDTOSchemaFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R1: gate.approve records the human input against the observed request
+// R1: gate.approve records the human input against the observed request
 // — key, digest, decision link and gate fields all from the pending record,
 // response_id deterministic, actor marked unverified.
 func TestGateApproveRecordsInputFRRHZ078(t *testing.T) {
@@ -178,7 +178,7 @@ func TestGateApproveRecordsInputFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R2: reject requires a reason and preserves it verbatim.
+// R2: reject requires a reason and preserves it verbatim.
 func TestGateRejectRequiresReasonVerbatimFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
 	before := len(s.All())
@@ -196,7 +196,7 @@ func TestGateRejectRequiresReasonVerbatimFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R3: no observed request, no human decision (FR-RHZ-078) — and no
+// R3: no observed request, no human decision (FR-RHZ-078) — and no
 // journal write.
 func TestGateApproveWithoutRequestRejectedFRRHZ078(t *testing.T) {
 	s := &events.Store{}
@@ -207,7 +207,7 @@ func TestGateApproveWithoutRequestRejectedFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R4: the digest the human saw is checked with VerifyDigest semantics —
+// R4: the digest the human saw is checked with VerifyDigest semantics —
 // a mismatch, a missing digest, and the mutation-detecting case (equal
 // strings without the contract prefix, which literal comparison would pass)
 // are all refused without writes.
@@ -231,7 +231,7 @@ func TestGateApproveDigestMismatchRejectedFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R5: a gate that already has durable input refuses further input with
+// R5: a gate that already has durable input refuses further input with
 // the established wording.
 func TestGateApproveAlreadyInputRejectedFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
@@ -245,7 +245,7 @@ func TestGateApproveAlreadyInputRejectedFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R7: requestChanges works from a pending gate through its decision
+// R7: requestChanges works from a pending gate through its decision
 // link, and keeps working after the input lands (approval branch).
 func TestGateRequestChangesPendingFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
@@ -271,7 +271,7 @@ func TestGateRequestChangesPendingFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R8: the derived response_id is deterministic per gate (idempotent
+// R8: the derived response_id is deterministic per gate (idempotent
 // resubmission, contract §4) and distinct across gates.
 func TestGateApproveResponseIDDeterministicFRRHZ078(t *testing.T) {
 	a, b := approval.ResponseIDFor("appr-x"), approval.ResponseIDFor("appr-x")

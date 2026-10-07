@@ -29,7 +29,7 @@ func allEvents(t *testing.T, s Service, id string) []events.Event {
 	return s.Store.List("execution", id)
 }
 
-// Plan A1: durable stop intent, no state transition, service/replay symmetry.
+// A1: durable stop intent, no state transition, service/replay symmetry.
 func TestRequestStopDurableFRRHZ076(t *testing.T) {
 	s, r := activeExecution(t, "stop-a1")
 	got, err := s.RequestStop(r.ID, "user", 0, "operator")
@@ -60,7 +60,7 @@ func TestRequestStopDurableFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan A2: only accepted/observing accept a stop request.
+// A2: only accepted/observing accept a stop request.
 func TestRequestStopActiveOnlyFRRHZ076(t *testing.T) {
 	cases := map[string]func(t *testing.T) (Service, Ref){
 		"intent": func(t *testing.T) (Service, Ref) {
@@ -118,7 +118,7 @@ func terminalFixture(st State) func(t *testing.T) (Service, Ref) {
 	}
 }
 
-// Plan A3: reason enum and actor identity are both validated.
+// A3: reason enum and actor identity are both validated.
 func TestRequestStopReasonAndActorFRRHZ076(t *testing.T) {
 	valid := []struct {
 		reason string
@@ -154,7 +154,7 @@ func TestRequestStopReasonAndActorFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan A4 (D5 confirmed): evidence_seq is required for policy, refused otherwise.
+// A4 (D5 confirmed): evidence_seq is required for policy, refused otherwise.
 func TestRequestStopPolicyEvidenceFRRHZ076(t *testing.T) {
 	s, r := activeExecution(t, "stop-a4")
 	before := allEvents(t, s, r.ID)
@@ -180,7 +180,7 @@ func TestRequestStopPolicyEvidenceFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan A5: replay rejects every tampered stream the service would refuse
+// A5: replay rejects every tampered stream the service would refuse
 // (the service and replay apply the same strict validation rules).
 func TestStopRequestedReplaySymmetryFRRHZ076(t *testing.T) {
 	s, r := activeExecution(t, "stop-a5")
@@ -237,7 +237,7 @@ func TestStopRequestedReplaySymmetryFRRHZ076(t *testing.T) {
 	})
 }
 
-// Plan A6 (D4 confirmed): same content is a no-event idempotent read,
+// A6 (D4 confirmed): same content is a no-event idempotent read,
 // different content is a conflict.
 func TestRequestStopIdempotenceFRRHZ076(t *testing.T) {
 	s, r := activeExecution(t, "stop-a6")
@@ -267,7 +267,7 @@ func TestRequestStopIdempotenceFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan A7: stop_id derivation is a pure function of the execution ID.
+// A7: stop_id derivation is a pure function of the execution ID.
 func TestStopIDDeterminismFRRHZ076(t *testing.T) {
 	s1, r1 := activeExecution(t, "stop-a7")
 	s2, r2 := activeExecution(t, "stop-a7")

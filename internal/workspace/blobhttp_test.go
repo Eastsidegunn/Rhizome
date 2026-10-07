@@ -245,7 +245,7 @@ func TestBlobServePathInjectionBlockedFRRHZ086I5(t *testing.T) {
 	// 센티널: blobs 디렉터리의 부모에 비밀 파일을 두고 탈출 시도 응답에 그
 	// 내용이 없음을 확인.
 	s2, fsStore, parent := blobFixture(t)
-	sentinel := []byte("SENTINEL-SECRET-CONTENT")
+	sentinel := []byte("TEST-UNREACHABLE-CONTENT")
 	if err := os.WriteFile(filepath.Join(parent, "secret"), sentinel, 0600); err != nil {
 		t.Fatal(err)
 	}

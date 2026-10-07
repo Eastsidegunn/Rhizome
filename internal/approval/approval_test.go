@@ -142,7 +142,7 @@ func TestTamperedDispatchReplayFRRHZ062(t *testing.T) {
 func TestGateFieldsFRRHZ066(t *testing.T) {
 	s := Service{Store: &events.Store{}}
 	k := RequestKey{"0123456789abcdef0123456789abcdef", "0123456789abcdef", "gate"}
-	g := GateFields{GateName: "deploy", GateType: "approval", RequestedAction: "run", RiskTier: "logged", ReasonRequired: true, Request: Request{Target: "prod", RequestedBy: "alice", RequestedAt: "2026-01-01T00:00:00Z"}}
+	g := GateFields{GateName: "deploy", GateType: "approval", RequestedAction: "run", RiskTier: "logged", ReasonRequired: true, Request: Request{Target: "prod", RequestedBy: "alice", RequestedAt: "2000-01-01T00:00:00Z"}}
 	if _, e := s.RecordInputWithGate(k, Allow, "", "r", "d", "alice", "", "", true, g); e == nil {
 		t.Fatal("reason required bypass")
 	}
@@ -169,7 +169,7 @@ func TestSupersedeLifecycleFRRHZ067(t *testing.T) {
 	}
 	before := s.Store.List("approval", old.ID)
 	nk := RequestKey{"11111111111111111111111111111111", "2222222222222222", "new"}
-	g := GateFields{GateName: "g", GateType: "t", RequestedAction: "a", RiskTier: "logged", Request: Request{Target: "x", RequestedBy: "a", RequestedAt: "2026-01-01T00:00:00Z"}}
+	g := GateFields{GateName: "g", GateType: "t", RequestedAction: "a", RiskTier: "logged", Request: Request{Target: "x", RequestedBy: "a", RequestedAt: "2000-01-01T00:00:00Z"}}
 	n, e := s.Supersede(old.ID, nk, Allow, "", "r2", "d2", "a", "", "", true, g)
 	if e != nil || n.Supersedes != old.ID {
 		t.Fatal(e)
@@ -206,7 +206,7 @@ func TestGateFieldRejectionMatrixFRRHZ066(t *testing.T) {
 	for i, f := range fields {
 		s := Service{Store: &events.Store{}}
 		k := RequestKey{"33333333333333333333333333333333", "4444444444444444", fmt.Sprint(i)}
-		g := GateFields{GateName: "g", GateType: "t", RequestedAction: "a", RiskTier: "logged", Request: Request{Target: "x", RequestedBy: "a", RequestedAt: "2026-01-01T00:00:00Z"}}
+		g := GateFields{GateName: "g", GateType: "t", RequestedAction: "a", RiskTier: "logged", Request: Request{Target: "x", RequestedBy: "a", RequestedAt: "2000-01-01T00:00:00Z"}}
 		f(&g)
 		if _, e := s.RecordInputWithGate(k, Allow, "", "r", "d", "a", "", "", true, g); e == nil || len(s.Store.All()) != 0 {
 			t.Fatalf("field %d", i)
@@ -216,7 +216,7 @@ func TestGateFieldRejectionMatrixFRRHZ066(t *testing.T) {
 func TestReasonRequiredTamperedReplayFRHZ066(t *testing.T) {
 	s := Service{Store: &events.Store{}}
 	k := RequestKey{"55555555555555555555555555555555", "6666666666666666", "rr"}
-	g := GateFields{GateName: "g", GateType: "t", RequestedAction: "a", RiskTier: "logged", ReasonRequired: true, Request: Request{Target: "x", RequestedBy: "a", RequestedAt: "2026-01-01T00:00:00Z"}}
+	g := GateFields{GateName: "g", GateType: "t", RequestedAction: "a", RiskTier: "logged", ReasonRequired: true, Request: Request{Target: "x", RequestedBy: "a", RequestedAt: "2000-01-01T00:00:00Z"}}
 	r, e := s.RecordInputWithGate(k, Allow, "ok", "r", "d", "a", "", "", true, g)
 	if e != nil {
 		t.Fatal(e)

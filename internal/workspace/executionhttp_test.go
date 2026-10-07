@@ -145,7 +145,7 @@ func (r *execSSEReader) next(t *testing.T, within time.Duration) (string, string
 	}
 }
 
-// Plan K1: an existing mission with no executions serializes literal empty
+// K1: an existing mission with no executions serializes literal empty
 // arrays — never null — inside the {revision, body} envelope.
 func TestExecutionSnapshotEmptyMissionLiteralArraysFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
@@ -162,7 +162,7 @@ func TestExecutionSnapshotEmptyMissionLiteralArraysFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan K2: the ratified state mapping, every case, sorted by session id.
+// K2: the ratified state mapping, every case, sorted by session id.
 func TestExecutionSnapshotStateMappingAllCasesFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
 	acceptedExec(t, s, "m", "a-acc")
@@ -194,7 +194,7 @@ func TestExecutionSnapshotStateMappingAllCasesFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan K3: intent, dispatch_claimed and unknown executions are absent — none
+// K3: intent, dispatch_claimed and unknown executions are absent — none
 // of running|killed|ended can be claimed honestly for them.
 func TestExecutionSnapshotExcludesUnderivableStatesFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
@@ -231,7 +231,7 @@ func TestExecutionSnapshotExcludesUnderivableStatesFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan K4: label carries the observation summary when present and the key is
+// K4: label carries the observation summary when present and the key is
 // omitted entirely when the summary is empty.
 func TestExecutionSnapshotLabelOmitFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
@@ -264,7 +264,7 @@ func TestExecutionSnapshotLabelOmitFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan K5: golden key sets at every level — camelCase, no inferred fields
+// K5: golden key sets at every level — camelCase, no inferred fields
 // from the wider Gunnflow session vocabulary, no state outside the mapping.
 func TestExecutionSnapshotSchemaGoldenFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
@@ -317,7 +317,7 @@ func TestExecutionSnapshotSchemaGoldenFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan K6: sessions are isolated per mission and echo their own taskId.
+// K6: sessions are isolated per mission and echo their own taskId.
 func TestExecutionSnapshotMissionIsolationFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
 	if _, e := (mission.Service{Store: s}).Create("m2", "g", "둘째", "done"); e != nil {
@@ -337,7 +337,7 @@ func TestExecutionSnapshotMissionIsolationFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan K7 (D10): an unknown taskId is 404 on both routes — distinct from an
+// K7 (D10): an unknown taskId is 404 on both routes — distinct from an
 // existing mission with no sessions (200 + []).
 func TestExecutionSnapshotUnknownTaskFRRHZ077(t *testing.T) {
 	_, _, srv := execHTTPFixture(t)
@@ -352,7 +352,7 @@ func TestExecutionSnapshotUnknownTaskFRRHZ077(t *testing.T) {
 	resp.Body.Close()
 }
 
-// Plan K8 (L-c): revision is the global journal sequence — an unrelated
+// K8 (L-c): revision is the global journal sequence — an unrelated
 // append raises it while sessions stay identical.
 func TestExecutionSnapshotRevisionIsGlobalSequenceFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
@@ -375,7 +375,7 @@ func TestExecutionSnapshotRevisionIsGlobalSequenceFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan L1: connect → immediate snapshot; a durable change followed by
+// L1: connect → immediate snapshot; a durable change followed by
 // Broadcast pushes the updated projection.
 func TestExecutionSSESnapshotThenPushFRRHZ077(t *testing.T) {
 	s, h, srv := execHTTPFixture(t)
@@ -398,7 +398,7 @@ func TestExecutionSSESnapshotThenPushFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan L2: a rejected intent pushes nothing to the execution stream.
+// L2: a rejected intent pushes nothing to the execution stream.
 func TestExecutionSSERejectedNoPushFRRHZ077(t *testing.T) {
 	_, _, srv := execHTTPFixture(t)
 	sse := openExecutionSSE(t, srv.URL, "m")
@@ -414,7 +414,7 @@ func TestExecutionSSERejectedNoPushFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan L3 (D12): every accepted change pushes to every subscriber — an
+// L3 (D12): every accepted change pushes to every subscriber — an
 // unrelated mission's change arrives with a higher revision and identical
 // sessions; de-duplication is the consumer's revision key job (§2).
 func TestExecutionSSEPushOnAnyAcceptedChangeFRRHZ077(t *testing.T) {
@@ -442,7 +442,7 @@ func TestExecutionSSEPushOnAnyAcceptedChangeFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan M1: the terminal surface keeps its 501 (contract unresolved) while
+// M1: the terminal surface keeps its 501 (contract unresolved) while
 // execution has been separated out of that gate.
 func TestTerminal501PreservedExecutionSeparatedFRRHZ077(t *testing.T) {
 	_, _, srv := execHTTPFixture(t)
@@ -462,7 +462,7 @@ func TestTerminal501PreservedExecutionSeparatedFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan M2: session.* intents stay rejected with the upstream reason verbatim
+// M2: session.* intents stay rejected with the upstream reason verbatim
 // and append nothing.
 func TestSessionIntentStillRejectedFRRHZ077(t *testing.T) {
 	s, _, srv := execHTTPFixture(t)
@@ -479,7 +479,7 @@ func TestSessionIntentStillRejectedFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan M4 (D14): only the two contract GET routes exist; every other shape
+// M4 (D14): only the two contract GET routes exist; every other shape
 // under /v1/execution/ falls through to 404.
 func TestExecutionRouteShapeFRRHZ077(t *testing.T) {
 	_, _, srv := execHTTPFixture(t)

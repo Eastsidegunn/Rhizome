@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-068 FR-RHZ-097: GET /v1/context steps[] — procedure.run 인스턴스 투영.
-// 테스트 계획 RHZ-068 test plan S1~S8.
+// 테스트 계획 RHZ-068 S1~S8.
 
 import (
 	"bytes"

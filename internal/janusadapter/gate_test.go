@@ -55,7 +55,7 @@ func surfaceRecords(s events.Port, id string) (wakes, decisions, requests int) {
 	return len(s.List("wake", "wake-"+id)), len(s.List("decision", "dec-"+id)), len(s.List("approvalrequest", id))
 }
 
-// Plan O1: observed requests are collected in order with key and display
+// O1: observed requests are collected in order with key and display
 // strings only.
 func TestParseReplayCollectsApprovalRequestsFRRHZ078(t *testing.T) {
 	stream := replayLine(1, "other", `{}`) + requestLine(2, "r1") + replayLine(3, "other", `{}`) + requestLine(4, "r2")
@@ -72,7 +72,7 @@ func TestParseReplayCollectsApprovalRequestsFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan O2: the raw args never cross into a Batch — machine-proven with a
+// O2: the raw args never cross into a Batch — machine-proven with a
 // sentinel over the full serialization (비복제 헌장).
 func TestParseReplayApprovalRequestArgsNeverCopiedFRRHZ078(t *testing.T) {
 	b := parsed(t, requestLine(1, "r1"), 0)
@@ -88,7 +88,7 @@ func TestParseReplayApprovalRequestArgsNeverCopiedFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan O3: type corruption and a missing or empty request_id
+// O3: type corruption and a missing or empty request_id
 // are OBSERVATION_CORRUPT (JANUS schema: required, minLength 1); requests in
 // the cursor prefix are still collected (재표면화 멱등의 기반).
 func TestParseReplayApprovalRequestValidationAndPrefixFRRHZ078(t *testing.T) {
@@ -107,7 +107,7 @@ func TestParseReplayApprovalRequestValidationAndPrefixFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan P1: one tick surfaces a pending request as the durable chain
+// P1: one tick surfaces a pending request as the durable chain
 // Wake -> wait_human Decision -> approvalrequest, with digest and display
 // material verbatim from the socket pending query — and no args anywhere.
 func TestTickSurfacesPendingRequestFRRHZ078(t *testing.T) {
@@ -150,7 +150,7 @@ func TestTickSurfacesPendingRequestFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan P2: surfacing is idempotent — a second tick queries nothing and
+// P2: surfacing is idempotent — a second tick queries nothing and
 // writes nothing.
 func TestTickSurfaceIdempotentFRRHZ078(t *testing.T) {
 	s, _ := loopStore(t)
@@ -172,7 +172,7 @@ func TestTickSurfaceIdempotentFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan P3 (D22, re-based by RHZ-093 gate B′ / FR-RHZ-119): a failed pending
+// P3 (D22, re-based by RHZ-093 gate B′ / FR-RHZ-119): a failed pending
 // query surfaces nothing and HOLDS the observation cursor at the open request
 // (it never advances past an unsurfaced one); the next tick re-reads the same
 // range through replay, surfaces, and only then advances.
@@ -204,7 +204,7 @@ func TestTickSurfaceQueryFailureRetryFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan P4 (D23): requests with a recorded input are never queried; decided
+// P4 (D23): requests with a recorded input are never queried; decided
 // answers belong to replay observation and unknown retries silently.
 func TestTickSurfaceSkipsResolvedRequestsFRRHZ078(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -245,7 +245,7 @@ func TestTickSurfaceSkipsResolvedRequestsFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan P5: surfacing never fabricates a human decision (수동 고정).
+// P5: surfacing never fabricates a human decision (수동 고정).
 func TestTickSurfaceNoAutoDecisionFRRHZ078(t *testing.T) {
 	s, _ := loopStore(t)
 	dial := opDial(t, map[string]func(map[string]any) map[string]any{
@@ -266,7 +266,7 @@ func TestTickSurfaceNoAutoDecisionFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan P6 (D21): a partial crash leaving only the wake converges on the next
+// P6 (D21): a partial crash leaving only the wake converges on the next
 // tick — the remaining records are written and nothing dies on duplicates.
 func TestTickSurfacePartialCrashConvergesFRRHZ078(t *testing.T) {
 	s, r := loopStore(t)
@@ -289,7 +289,7 @@ func TestTickSurfacePartialCrashConvergesFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan R6 (D25): Rhizome never pre-judges expiry. A late
+// R6 (D25): Rhizome never pre-judges expiry. A late
 // approve is recorded and submitted; the expired{deny} finality arrives only
 // through durable replay observation.
 func TestGateApproveExpiredFinalityViaObservationFRRHZ078(t *testing.T) {
@@ -326,7 +326,7 @@ func TestGateApproveExpiredFinalityViaObservationFRRHZ078(t *testing.T) {
 	}
 }
 
-// Plan S1: request observed -> surfaced pending gate ->
+// S1: request observed -> surfaced pending gate ->
 // human approve over HTTP -> dispatch+submit -> durable observation ->
 // approved gate, with a projection push at every accepted stage. Fake JANUS
 // only.
@@ -425,7 +425,7 @@ func postIntentJSON(t *testing.T, url, body string) map[string]any {
 	return out
 }
 
-// Plan S2: the CLI (smoke) path and the UI path decide over the same
+// S2: the CLI (smoke) path and the UI path decide over the same
 // aggregate — whichever human input lands first is the only one, in both
 // orders.
 func TestSmokeCoexistenceFirstDurableWinsFRRHZ078(t *testing.T) {

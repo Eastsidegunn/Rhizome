@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-064 FR-RHZ-093: GET /v1/context — 결정론 컨텍스트 번들 + UseTrace.
-// 테스트 계획 RHZ-064 test plan C1~C7 (C8은 archtest P4가
+// 테스트 계획 RHZ-064 C1~C7 (C8은 archtest P4가
 // 자동 커버 — 별도 테스트 없음).
 
 import (

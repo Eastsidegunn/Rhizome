@@ -111,7 +111,7 @@ func TestExecConfigValidationFRRHZ123(t *testing.T) {
 		"zero tokens":          func(m map[string]any) { m["ceiling"].(map[string]any)["tokens"] = 0 },
 		"negative time":        func(m map[string]any) { m["ceiling"].(map[string]any)["timeMs"] = -1 },
 		"missing depth":        func(m map[string]any) { delete(m["ceiling"].(map[string]any), "maxDepth") },
-		"secret-looking key":   func(m map[string]any) { m["apiToken"] = "sk-xxx" },
+		"secret-looking key":   func(m map[string]any) { m["apiToken"] = "TEST-NON-CREDENTIAL" },
 		"unknown ceiling key":  func(m map[string]any) { m["ceiling"].(map[string]any)["secret"] = "x" },
 		"unmapped capability":  func(m map[string]any) { m["ceiling"].(map[string]any)["capabilities"] = []string{"root:all"} },
 		"egress without domai": func(m map[string]any) { m["ceiling"].(map[string]any)["capabilities"] = []string{"net:egress"} },

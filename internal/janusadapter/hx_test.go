@@ -16,7 +16,7 @@ import (
 
 func TestHxEnvAllowlistAndSortingFRRHZ126(t *testing.T) {
 	parent := []string{
-		"XDG_RUNTIME_DIR=/run/user/1000", "SECRET=drop-me", "PATH=/bin",
+		"XDG_RUNTIME_DIR=/run/user/1000", "UNLISTED_TEST_VAR=drop-me", "PATH=/bin",
 		"TZ=UTC", "HOME=/home/operator", "LC_CTYPE=en_US.UTF-8",
 		"TMPDIR=/tmp/custom", "XDG_DATA_HOME=/data", "LANG=C.UTF-8",
 		"HX_RUNTIME_DIR=/run/hx", "LC_ALL=C", "XDG_CONFIG_HOME=/config",
@@ -61,7 +61,7 @@ func TestRealHxRunAndReplayAllowlistEnvironmentFRRHZ126(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", "/bin:/usr/bin")
-	t.Setenv("RHZ_TEST_SECRET_SENTINEL", "must-not-reach-hx")
+	t.Setenv("RHZ_TEST_AMBIENT_SENTINEL", "must-not-reach-hx")
 	t.Setenv("RHZ_TEST_PASSTHROUGH", "operator-approved")
 	cfg := RunConfig{EnvMode: EnvModeAllowlist, Passthrough: []string{"RHZ_TEST_PASSTHROUGH"}}
 
@@ -87,7 +87,7 @@ func TestRealHxRunAndReplayInheritEnvironmentFRRHZ126(t *testing.T) {
 	if err := os.WriteFile(hx, []byte("#!/bin/sh\nenv\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("RHZ_TEST_SECRET_SENTINEL", "inherited-by-default")
+	t.Setenv("RHZ_TEST_AMBIENT_SENTINEL", "inherited-by-default")
 	cfg := RunConfig{EnvMode: EnvModeInherit}
 	if cmd := hxCommand(hx, cfg, "version"); cmd.Env != nil {
 		t.Fatalf("inherit mode assigned cmd.Env: %#v", cmd.Env)
@@ -118,7 +118,7 @@ func assertHxEnvironmentFRRHZ126(t *testing.T, r io.Reader) {
 			env[name] = value
 		}
 	}
-	if _, ok := env["RHZ_TEST_SECRET_SENTINEL"]; ok {
+	if _, ok := env["RHZ_TEST_AMBIENT_SENTINEL"]; ok {
 		t.Fatalf("ambient sentinel reached hx: %q", raw)
 	}
 	if got := env["PATH"]; got != "/bin:/usr/bin" {
@@ -135,7 +135,7 @@ func assertHxInheritedSentinelFRRHZ126(t *testing.T, r io.Reader) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "RHZ_TEST_SECRET_SENTINEL=inherited-by-default\n") {
+	if !strings.Contains(string(raw), "RHZ_TEST_AMBIENT_SENTINEL=inherited-by-default\n") {
 		t.Fatalf("ambient sentinel did not reach hx in inherit mode: %q", raw)
 	}
 }

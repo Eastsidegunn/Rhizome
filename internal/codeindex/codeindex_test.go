@@ -1,7 +1,7 @@
 package codeindex
 
 // RHZ-058 FR-RHZ-088: f(git@sha) 결정론 그래프. 테스트 계획
-// RHZ-058 test plan T1·T2(단위)·T7·T8② + vendor/testdata 핀.
+// RHZ-058 T1·T2(단위)·T7·T8② + vendor/testdata 핀.
 
 import (
 	"bytes"

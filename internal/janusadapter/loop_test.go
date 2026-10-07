@@ -233,7 +233,7 @@ func TestTickQuestionCoexistsWithJANUSApprovalFRRHZ081(t *testing.T) {
 	}
 }
 
-// Plan C1: a bound, active execution's replay stream is consumed once per
+// C1: a bound, active execution's replay stream is consumed once per
 // tick and lands as a durable observation with the 19-digit cursor.
 func TestTickObservesBoundExecutionFRRHZ077(t *testing.T) {
 	s, r := loopStore(t)
@@ -259,7 +259,7 @@ func TestTickObservesBoundExecutionFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan C2: only bound Accepted/Observing executions are observed — intent,
+// C2: only bound Accepted/Observing executions are observed — intent,
 // dispatch_claimed, unbound-accepted, terminal and unknown are all skipped
 // with no replay contact and no writes.
 func TestTickSkipsUnboundAndTerminalFRRHZ077(t *testing.T) {
@@ -307,7 +307,7 @@ func TestTickSkipsUnboundAndTerminalFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan C3: a failed tick leaves the cursor untouched and the next tick
+// C3: a failed tick leaves the cursor untouched and the next tick
 // retries from the same cursor (§5.2 same-cursor safe retry); errors surface
 // through the hook and never kill the loop.
 func TestTickSameCursorSafeRetryFRRHZ077(t *testing.T) {
@@ -340,7 +340,7 @@ func TestTickSameCursorSafeRetryFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan C4: the cursor advances only after durable observation, and a
+// C4: the cursor advances only after durable observation, and a
 // terminal execution makes further ticks no-ops without replay contact.
 func TestTickCursorAdvanceAfterDurableAndIdempotentFRRHZ077(t *testing.T) {
 	s, r := loopStore(t)
@@ -371,7 +371,7 @@ func TestTickCursorAdvanceAfterDurableAndIdempotentFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan C5: one corrupt stream is isolated — reported, no writes for that
+// C5: one corrupt stream is isolated — reported, no writes for that
 // execution — while the healthy execution is observed in the same tick.
 func TestTickCorruptReplayIsolatedFRRHZ077(t *testing.T) {
 	s, _ := loopStore(t)
@@ -403,7 +403,7 @@ func TestTickCorruptReplayIsolatedFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan C6: session/end without done goes unknown(needs_human), surfaces in
+// C6: session/end without done goes unknown(needs_human), surfaces in
 // the workspace attention list, and pushes the existing projection over SSE.
 func TestTickUnknownSurfacesAttentionFRRHZ077(t *testing.T) {
 	s, r := loopStore(t)
@@ -448,7 +448,7 @@ func TestTickUnknownSurfacesAttentionFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan D1: the durable dispatch record precedes socket contact, the submit
+// D1: the durable dispatch record precedes socket contact, the submit
 // wire is exact, and the socket's decided reply never becomes a durable
 // observation.
 func TestTickApprovalDispatchThenSubmitWireExactFRRHZ077(t *testing.T) {
@@ -481,7 +481,7 @@ func TestTickApprovalDispatchThenSubmitWireExactFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan D2: a failed submit keeps the approval dispatched, surfaces the error,
+// D2: a failed submit keeps the approval dispatched, surfaces the error,
 // and the next tick resubmits without a second dispatch record (D5 guard —
 // contract §4 resubmission is a lookup).
 func TestTickApprovalSubmitFailureRetryNoDuplicateDispatchFRRHZ077(t *testing.T) {
@@ -516,7 +516,7 @@ func TestTickApprovalSubmitFailureRetryNoDuplicateDispatchFRRHZ077(t *testing.T)
 	}
 }
 
-// Plan D3: durable approval observation comes only from replay — the
+// D3: durable approval observation comes only from replay — the
 // observed approval needs no further socket contact in the same tick.
 func TestTickApprovalObservedViaReplayOnlyFRRHZ077(t *testing.T) {
 	s, r, a := observationStore(t)
@@ -543,7 +543,7 @@ func TestTickApprovalObservedViaReplayOnlyFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan D4: the human deny travels verbatim; the loop fabricates no approval
+// D4: the human deny travels verbatim; the loop fabricates no approval
 // inputs and touches no socket when there is nothing to relay.
 func TestTickApprovalDenyVerbatimNoSynthesisFRRHZ077(t *testing.T) {
 	s := &events.Store{}
@@ -576,7 +576,7 @@ func TestTickApprovalDenyVerbatimNoSynthesisFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan E1: only the durable stop_requested intent is submitted, with the
+// E1: only the durable stop_requested intent is submitted, with the
 // exact minimal stop wire; executions without the intent get no contact.
 func TestTickStopSubmitsDurableOnlyWireExactFRRHZ077(t *testing.T) {
 	s, r := stopStore(t)
@@ -607,7 +607,7 @@ func TestTickStopSubmitsDurableOnlyWireExactFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan E2: neither stop receipt (stop_accepted, already_terminal) writes
+// E2: neither stop receipt (stop_accepted, already_terminal) writes
 // anything; cancelled is concluded only from replay observation.
 func TestTickStopReceiptNeverWritesFRRHZ077(t *testing.T) {
 	s, r := stopStore(t)
@@ -650,7 +650,7 @@ func TestTickStopReceiptNeverWritesFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan E3: an acknowledged receipt is remembered per process (no repeat
+// E3: an acknowledged receipt is remembered per process (no repeat
 // dial); a fresh loop instance — restart shape — resubmits the same durable
 // stop_id safely and still writes nothing.
 func TestTickStopDedupeAndRestartResubmitFRRHZ077(t *testing.T) {
@@ -680,7 +680,7 @@ func TestTickStopDedupeAndRestartResubmitFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan F1: the loop never starts executions. It has no Runner at all, so a
+// F1: the loop never starts executions. It has no Runner at all, so a
 // dispatch_claimed execution stays untouched across ticks — no acceptance,
 // no unknown, no socket or replay contact (D7).
 func TestLoopNeverInvokesRunnerFRRHZ077(t *testing.T) {
@@ -726,7 +726,7 @@ func (c *conflictOnce) Append(expected uint64, e events.Event) error {
 	return c.Port.Append(expected, e)
 }
 
-// Plan G1: a concurrent-write revision conflict surfaces through the hook,
+// G1: a concurrent-write revision conflict surfaces through the hook,
 // corrupts nothing, and the next tick converges.
 func TestTickRevisionConflictSurfacesAndConvergesFRRHZ077(t *testing.T) {
 	underlying, _, a := observationStore(t)
@@ -751,7 +751,7 @@ func TestTickRevisionConflictSurfacesAndConvergesFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan G2: loop ticks and HTTP intents append concurrently to one real
+// G2: loop ticks and HTTP intents append concurrently to one real
 // journal without corruption (-race is part of make ci).
 func TestConcurrentLoopAndIntentRaceFRRHZ077(t *testing.T) {
 	path := t.TempDir() + "/journal.log"
@@ -805,7 +805,7 @@ func TestConcurrentLoopAndIntentRaceFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan G3: ticks never overlap — the loop is a single logical writer even
+// G3: ticks never overlap — the loop is a single logical writer even
 // when Tick is invoked concurrently.
 func TestNoOverlappingTicksFRRHZ077(t *testing.T) {
 	s, _ := loopStore(t)
@@ -840,7 +840,7 @@ func TestNoOverlappingTicksFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan H1: every induced failure reaches the hook (nothing swallowed), the
+// H1: every induced failure reaches the hook (nothing swallowed), the
 // healthy item keeps being processed, and a nil hook does not panic.
 func TestLoopErrorHookNotFatalNotSilentFRRHZ077(t *testing.T) {
 	s, _ := loopStore(t) // exec A: /tmp/rhz-043-test-session.db (corrupt stream)
@@ -876,7 +876,7 @@ func TestLoopErrorHookNotFatalNotSilentFRRHZ077(t *testing.T) {
 	l2.Tick()
 }
 
-// Plan I1: a tick that made durable writes pushes the existing projection to
+// I1: a tick that made durable writes pushes the existing projection to
 // SSE subscribers; a failing tick pushes nothing.
 func TestTickBroadcastAfterDurableWriteFRRHZ077(t *testing.T) {
 	s, _, a := observationStore(t)
@@ -918,7 +918,7 @@ func TestTickBroadcastAfterDurableWriteFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan J1: hx run argv assembly is pure and exact; --session only when set.
+// J1: hx run argv assembly is pure and exact; --session only when set.
 func TestRunArgvAssemblyFRRHZ077(t *testing.T) {
 	cfg := runConfigFixture()
 	want := []string{"run", "--request", "/tmp/req.json", "--profile", cfg.ProfilePath, "--accept-root", cfg.AcceptRoot, "--world-config", cfg.WorldConfigPath, "--approval-endpoint", cfg.ApprovalEndpoint}
@@ -931,14 +931,14 @@ func TestRunArgvAssemblyFRRHZ077(t *testing.T) {
 	}
 }
 
-// Plan J2: hx replay argv assembly — full log, no --to bound in v1.
+// J2: hx replay argv assembly — full log, no --to bound in v1.
 func TestReplayArgvAssemblyFRRHZ077(t *testing.T) {
 	if got := ReplayArgv("/tmp/session.db"); !reflect.DeepEqual(got, []string{"replay", "--session", "/tmp/session.db"}) {
 		t.Fatalf("argv: %v", got)
 	}
 }
 
-// Plan J3: an absent unix socket surfaces as UNAVAILABLE through the client;
+// J3: an absent unix socket surfaces as UNAVAILABLE through the client;
 // no live JANUS is ever contacted by tests.
 func TestRealDialerAbsentSocketUnavailableFRRHZ077(t *testing.T) {
 	c := Client{Dial: RealDialer(t.TempDir() + "/absent.sock")}

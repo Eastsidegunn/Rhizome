@@ -48,7 +48,7 @@ func stopEcho(q map[string]any) map[string]any {
 	return map[string]any{"status": "stop_accepted", "stop_id": q["stop_id"], "reason": q["reason"]}
 }
 
-// Plan C1: exact stop wire — no extra fields, optional fields only when set.
+// C1: exact stop wire — no extra fields, optional fields only when set.
 func TestStopWireExactFRRHZ076(t *testing.T) {
 	cases := []struct {
 		name, span, reason string
@@ -85,7 +85,7 @@ func TestStopWireExactFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan C2: submission requires the durable stop_requested event first, and
+// C2: submission requires the durable stop_requested event first, and
 // the wire carries exactly the durable coordinates.
 func TestStopRequiresDurableStopRequestedFRRHZ076(t *testing.T) {
 	s, r := stopStore(t)
@@ -111,7 +111,7 @@ func TestStopRequiresDurableStopRequestedFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan C3: client-side validation refuses before any socket contact.
+// C3: client-side validation refuses before any socket contact.
 func TestStopClientInputValidationFRRHZ076(t *testing.T) {
 	called := false
 	c := Client{Dial: func() (net.Conn, error) { called = true; return nil, nil }}
@@ -145,7 +145,7 @@ func TestStopClientInputValidationFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan C4: retry keeps the same stop_id and identical bytes; a conflict is
+// C4: retry keeps the same stop_id and identical bytes; a conflict is
 // surfaced verbatim; no execution writes either way.
 func TestStopIdempotentAndConflictFRRHZ076(t *testing.T) {
 	s, r := stopStore(t)
@@ -181,7 +181,7 @@ func TestStopIdempotentAndConflictFRRHZ076(t *testing.T) {
 	unchanged(t, before, s)
 }
 
-// Plan C5: no stop response is ever a cancellation; a dial failure is not a
+// C5: no stop response is ever a cancellation; a dial failure is not a
 // terminal fact and retry keeps the durable stop_id.
 func TestStopResponseNeverCancelsFRRHZ076(t *testing.T) {
 	build := func(t *testing.T) (*events.Store, execution.Service, execution.Ref) {
@@ -240,7 +240,7 @@ func TestStopResponseNeverCancelsFRRHZ076(t *testing.T) {
 	})
 }
 
-// Plan C6 (+L1): strict stop response — pollution refused, the JANUS error
+// C6 (+L1): strict stop response — pollution refused, the JANUS error
 // vocabulary surfaced verbatim, unknown only valid for stop_query.
 func TestStopResponseStrictFRRHZ076(t *testing.T) {
 	stop := func(resp map[string]any) error {
@@ -290,7 +290,7 @@ func TestStopResponseStrictFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan C7: cancelled is concluded exclusively by the stage-B replay path
+// C7: cancelled is concluded exclusively by the stage-B replay path
 // after the stop receipt.
 func TestStoppedViaReplayOnlyFRRHZ076(t *testing.T) {
 	s, r := stopStore(t)

@@ -2,7 +2,7 @@ package workspace
 
 // RHZ-069 FR-RHZ-098: mission.complete / mission.fail — 운영자 미션 종결
 // intent(goal.resolve/fail 짝, 결정 이벤트 append-only). 테스트 계획
-// RHZ-069 test plan C1/C2/C3/F1/T1/T2/R1/W1, 지정 Variant B
+// RHZ-069 C1/C2/C3/F1/T1/T2/R1/W1, 지정 Variant B
 // (제한): running·waiting_for_result에서만 직접 전이, 그 외 비-terminal은
 // "task.resume 먼저" 안내 거부(저널 쓰기 0), terminal은 ErrInvalidState.
 // RHZ-079 (FR-RHZ-110)가 allow-list를 waiting_for_human·blocked로 확장

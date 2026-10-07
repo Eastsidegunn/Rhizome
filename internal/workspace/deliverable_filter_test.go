@@ -7,7 +7,7 @@ package workspace
 // (> 0, applied after ordering; 0/negative/non-number → 400). Only
 // deliverables[] changes; no parameter → byte-identical to the unfiltered
 // body; independent of ?assignee=; the SSE stream ignores the parameters;
-// GET never writes. Plan F1–F6/W1.
+// GET never writes. F1–F6/W1.
 
 import (
 	"bytes"

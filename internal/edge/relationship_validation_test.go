@@ -2,7 +2,7 @@ package edge
 
 // RHZ-057 FR-RHZ-087 1단계: contains(goal→goal)·about(memory→goal/mission)
 // 화이트리스트 — 발행·모양검사만, 비대칭/무순환/중복 거부 규칙 없음(2단계).
-// 테스트 계획 RHZ-057 test plan T1~T4.
+// 테스트 계획 RHZ-057 T1~T4.
 
 import (
 	"testing"

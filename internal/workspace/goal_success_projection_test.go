@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-067 FR-RHZ-096: /v1/workspace goal 투영에 success 추가(additive, 순수
-// 투영). 테스트 계획 RHZ-067 test plan G1~G4 (G5는 전체
+// 투영). 테스트 계획 RHZ-067 G1~G4 (G5는 전체
 // 스위트 green이 증거 — 별도 테스트 없음). 판정: description은 생략 —
 // domain.Goal에 Name 필드가 없고 투영 name==g.Description이라 모든 경로에서
 // 바이트 중복(G2 키 집합이 판정을 고정).

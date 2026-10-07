@@ -193,7 +193,10 @@ environment variables need those names in `-janus-env-passthrough` or a
 file-based credential. Allowlist mode passes only `PATH`, `HOME`, `TMPDIR`,
 `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME`, and `HX_RUNTIME_DIR`, plus any existing passthrough variables.
-Passthrough is rejected unless allowlist mode is selected.
+Passthrough is rejected unless allowlist mode is selected. In a first
+token-free check on a Linux rootless-Podman host, the default allowlist alone
+was enough for `podman info`, `podman run` and `hx --version`, also without
+`XDG_RUNTIME_DIR`; no passthrough variable was needed there.
 
 The execution adapter IDs currently accepted are `claudecode` and `codex`.
 Adding another ID requires a code change in `validAdapter` in

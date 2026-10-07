@@ -78,7 +78,7 @@ func reasonBlobID(reason string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// Plan T1: applying a Complete decision makes the completion record exist by
+// T1: applying a Complete decision makes the completion record exist by
 // itself — machine-derived ID, kind, summary and execution source.
 func TestCompleteDerivesDeliverableFRRHZ079(t *testing.T) {
 	s := deriveStore(t)
@@ -97,7 +97,7 @@ func TestCompleteDerivesDeliverableFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan T2 (D27): the first execution evidence in document order wins.
+// T2 (D27): the first execution evidence in document order wins.
 func TestDeriveSourceRefFirstExecutionEvidenceFRRHZ079(t *testing.T) {
 	s := deriveStore(t)
 	a := deriveExec(t, s, "m", "a")
@@ -116,7 +116,7 @@ func TestDeriveSourceRefFirstExecutionEvidenceFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan T3 (D28): with no execution evidence the Reason bytes become a
+// T3 (D28): with no execution evidence the Reason bytes become a
 // content-addressed source blob — fully deterministic, contract vocabulary
 // unchanged. This is exactly the legacy shape (mission+goal evidence).
 func TestDeriveWithoutExecutionEvidenceFRRHZ079(t *testing.T) {
@@ -137,7 +137,7 @@ func TestDeriveWithoutExecutionEvidenceFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan T4: the derivation is a pure function — identical inputs, identical
+// T4: the derivation is a pure function — identical inputs, identical
 // outputs, no clock or ordering influence.
 func TestDeriveDeterministicFRRHZ079(t *testing.T) {
 	d := decision.Decision{ID: "d", MissionID: "m", Kind: decision.Complete, Reason: "요지",
@@ -161,7 +161,7 @@ func TestDeriveDeterministicFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan T5 (L-k): the exec-/mission bond is enforced on write
+// T5 (L-k): the exec-/mission bond is enforced on write
 // (Create) and on read (Get) alike; the pure-format rules keep rejecting on
 // Replay. A tampered stream appended directly never reaches consumers.
 func TestDeliverableRuleSymmetryFRRHZ079(t *testing.T) {
@@ -192,7 +192,7 @@ func TestDeliverableRuleSymmetryFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan U1: re-applying the same decision derives nothing twice.
+// U1: re-applying the same decision derives nothing twice.
 func TestReapplyIdempotentNoDuplicateFRRHZ079(t *testing.T) {
 	s := deriveStore(t)
 	execID := deriveExec(t, s, "m", "k")
@@ -213,7 +213,7 @@ func TestReapplyIdempotentNoDuplicateFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan U2: a legacy hand-recorded deliverable in its real
+// U2: a legacy hand-recorded deliverable in its real
 // shape (own ID scheme, sha256: source) makes derivation skip — the mission
 // already has its record, byte-for-byte untouched.
 func TestLegacyHandRecordedSkipFRRHZ079(t *testing.T) {
@@ -260,7 +260,7 @@ func (f *failOnce) Append(expected uint64, e events.Event) error {
 	return f.Port.Append(expected, e)
 }
 
-// Plan U3 (D32): the record is durable before the transition, and a failure
+// U3 (D32): the record is durable before the transition, and a failure
 // on either side leaves no poisoned state — a retry converges completely.
 func TestDeliverableDurableBeforeTransitionFRRHZ079(t *testing.T) {
 	t.Run("transition_fails_after_record", func(t *testing.T) {
@@ -322,7 +322,7 @@ func workspaceMissionState(s events.Port) (string, error) {
 	return "", errors.New("mission missing")
 }
 
-// Plan U4 (D33): a mission made terminal in the pre-derivation era backfills
+// U4 (D33): a mission made terminal in the pre-derivation era backfills
 // its record on re-apply — self-healing through the idempotent path.
 func TestReapplyTerminalBackfillsFRRHZ079(t *testing.T) {
 	s := deriveStore(t)
@@ -353,7 +353,7 @@ func TestReapplyTerminalBackfillsFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan U5 (D34): the derived identity already taken by another mission's
+// U5 (D34): the derived identity already taken by another mission's
 // record surfaces as an error — no silent skip, no transition.
 func TestSkipConflictingIdentityFRRHZ079(t *testing.T) {
 	s := deriveStore(t)
@@ -374,7 +374,7 @@ func TestSkipConflictingIdentityFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan V1 (D35): Fail derives nothing — the failure is already durable as
+// V1 (D35): Fail derives nothing — the failure is already durable as
 // decision + mission.failed.
 func TestFailDecisionNoDeliverableFRRHZ079(t *testing.T) {
 	s := deriveStore(t)
@@ -391,7 +391,7 @@ func TestFailDecisionNoDeliverableFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan V2: the derived record reaches the workspace surface
+// V2: the derived record reaches the workspace surface
 // with no hand-recording anywhere in the path.
 func TestCompleteEndToEndSurfaceFRRHZ079(t *testing.T) {
 	s := deriveStore(t)
@@ -426,7 +426,7 @@ func TestCompleteEndToEndSurfaceFRRHZ079(t *testing.T) {
 	}
 }
 
-// Plan V3: the existing evidence validation is untouched, and a refused
+// V3: the existing evidence validation is untouched, and a refused
 // apply derives nothing (no partial writes).
 func TestEvidenceValidationUnchangedFRRHZ079(t *testing.T) {
 	t.Run("missing_evidence", func(t *testing.T) {

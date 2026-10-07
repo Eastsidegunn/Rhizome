@@ -74,7 +74,7 @@ func controlLine(t *testing.T, mut func(map[string]any)) string {
 	return string(b) + "\n"
 }
 
-// Plan B1: strict v1 request.json golden fixture, deterministic bytes,
+// B1: strict v1 request.json golden fixture, deterministic bytes,
 // all 16 fields always serialized (L3).
 func TestRunRequestGoldenFRRHZ076(t *testing.T) {
 	_, r := runStore(t)
@@ -103,7 +103,7 @@ func TestRunRequestGoldenFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan B2: absent approval endpoint refuses assembly with zero process contact.
+// B2: absent approval endpoint refuses assembly with zero process contact.
 func TestRunApprovalEndpointRequiredFRRHZ076(t *testing.T) {
 	s, r := runStore(t)
 	for _, endpoint := range []string{"", "   ", "relative/approval.sock"} {
@@ -121,7 +121,7 @@ func TestRunApprovalEndpointRequiredFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan B3: required fields, adapter allowlist, profile hash shape, and an
+// B3: required fields, adapter allowlist, profile hash shape, and an
 // unmappable policy each refuse assembly without producing bytes.
 func TestRunRequestFieldValidationFRRHZ076(t *testing.T) {
 	_, r := runStore(t)
@@ -170,7 +170,7 @@ func TestRunRequestFieldValidationFRRHZ076(t *testing.T) {
 	})
 }
 
-// Plan B4: no hx invocation without a durable dispatch claim.
+// B4: no hx invocation without a durable dispatch claim.
 func TestStartRequiresDispatchClaimFRRHZ076(t *testing.T) {
 	s := &events.Store{}
 	ms := mission.Service{Store: s}
@@ -203,7 +203,7 @@ func TestStartRequiresDispatchClaimFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan B5 (+L2): accepted maps to Accept(trace_id) only; binding is left to
+// B5 (+L2): accepted maps to Accept(trace_id) only; binding is left to
 // replay observation; every acceptance field is mandatory.
 func TestControlAcceptedMapsToAcceptFRRHZ076(t *testing.T) {
 	s, r := runStore(t)
@@ -253,7 +253,7 @@ func TestControlAcceptedMapsToAcceptFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan B6: duplicate=true is a lookup classification, never a repeated event.
+// B6: duplicate=true is a lookup classification, never a repeated event.
 func TestControlDuplicateIsLookupFRRHZ076(t *testing.T) {
 	s, r := runStore(t)
 	es := execution.Service{Store: s}
@@ -305,7 +305,7 @@ func TestControlDuplicateIsLookupFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan B7: every rejection code is preserved verbatim; retryable never
+// B7: every rejection code is preserved verbatim; retryable never
 // triggers an automatic re-run; unknown codes are refused.
 func TestControlRejectedPreservesReasonFRRHZ076(t *testing.T) {
 	codes := []string{"UNSUPPORTED_CONTRACT", "UNSUPPORTED_ADAPTER", "POLICY_CHANGED", "POLICY_DENIED", "BUDGET_INVALID", "KEY_CONFLICT", "SESSION_CORRUPT", "IO_ERROR", "LAUNCH_FAILED"}
@@ -358,7 +358,7 @@ func TestControlRejectedPreservesReasonFRRHZ076(t *testing.T) {
 	})
 }
 
-// Plan B8 (D6): from dispatch_claimed — where the submission outcome itself
+// B8 (D6): from dispatch_claimed — where the submission outcome itself
 // is uncertain — every acceptance-uncertain outcome marks the execution
 // unknown (external_effect_possible) and never re-runs. From accepted, the
 // same failures are transient lookup errors and never demote the execution.
@@ -444,7 +444,7 @@ func TestControlUnknownMapsToMarkUnknownFRRHZ076(t *testing.T) {
 	})
 }
 
-// Plan B9: unknown status, unknown fields, and type pollution are refused
+// B9: unknown status, unknown fields, and type pollution are refused
 // with zero service writes.
 func TestControlStrictParseFRRHZ076(t *testing.T) {
 	direct := map[string]string{
@@ -490,7 +490,7 @@ func TestControlStrictParseFRRHZ076(t *testing.T) {
 	}
 }
 
-// Plan B10 (+L5): session identity is validated before acceptance is recorded.
+// B10 (+L5): session identity is validated before acceptance is recorded.
 func TestControlSessionRefValidationFRRHZ076(t *testing.T) {
 	cases := map[string]func(map[string]any){
 		"trace_nonhex":    func(m map[string]any) { m["session_ref"].(map[string]any)["trace_id"] = "xyz" },
@@ -528,7 +528,7 @@ func TestControlSessionRefValidationFRRHZ076(t *testing.T) {
 	})
 }
 
-// Plan B11: crash-recovery resubmission reproduces identical request bytes and
+// B11: crash-recovery resubmission reproduces identical request bytes and
 // never mints a second dispatch claim.
 func TestStartResubmitByteIdenticalFRRHZ076(t *testing.T) {
 	s, _ := runStore(t)

@@ -27,7 +27,7 @@ import (
 	"rhizome/internal/workspace"
 )
 
-// Plan A1: with no JANUS flags the adapter is fully disabled — nil config,
+// A1: with no JANUS flags the adapter is fully disabled — nil config,
 // no loop, and the HTTP surface behaves exactly as before.
 func TestServeNoJanusFlagsUnchangedFRRHZ077(t *testing.T) {
 	jc, err := janusServeFromFlags("", "", "", "", "", "", defaultJanusEnvMode, false, "", 5*time.Second)
@@ -87,7 +87,7 @@ func TestExecutionRoutesIdenticalWithAdapterFRRHZ077(t *testing.T) {
 	resp.Body.Close()
 }
 
-// Plan J4: full flags map verbatim into the operator config; a partial set
+// J4: full flags map verbatim into the operator config; a partial set
 // or a sub-second interval is a configuration error (exit 2 through serve),
 // never a silent disable (D4, D9).
 func TestServeJanusFlagParseFRRHZ077(t *testing.T) {
@@ -257,7 +257,7 @@ func TestRunServeJanusEnvFlagsFRRHZ126(t *testing.T) {
 	waitLock(t, jp+".lock", false)
 }
 
-// Plan M3 (RHZ-046 part 2): the execution surface is a pure function of the
+// M3 (RHZ-046 part 2): the execution surface is a pure function of the
 // journal projection — it serves observed data even when the JANUS adapter
 // is fully disabled and no loop exists.
 func TestExecutionSurfaceWorksWithoutAdapterFRRHZ077(t *testing.T) {

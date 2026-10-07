@@ -1,7 +1,7 @@
 package workspace
 
 // RHZ-065 FR-RHZ-094: 저술 intent 3종(knowledge.create/promote,
-// procedure.define) + 종단 실증. 테스트 계획 RHZ-065 test plan.
+// procedure.define) + 종단 실증. 테스트 계획 RHZ-065.
 
 import (
 	"bytes"
