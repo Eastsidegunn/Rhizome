@@ -9,18 +9,19 @@ changes.
 
 ## [Unreleased]
 
-### Added
+Nothing yet.
 
-- MIT license and portability improvements.
-- Public-release preparation: English README, CONTRIBUTING, SECURITY,
-  this changelog, a GitHub Actions CI workflow (`make ci` + adapter tests),
-  issue/PR templates and a release-notes draft.
+## [0.1.0] - 2026-10-08
 
-## [0.1.0] - TBD
-
-Proposed first version. It is not tagged yet.
+First public release.
 
 ### Added
+
+#### Project
+
+- MIT license, English README, CONTRIBUTING, SECURITY, this changelog, a GitHub
+  Actions CI workflow (`make ci` + adapter tests), issue and PR templates, and
+  release notes.
 
 #### Journal and event model
 
