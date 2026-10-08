@@ -46,6 +46,7 @@ describe('FR-RHZ-128 structured gate body sections', () => {
       { label: '되돌림', text: 'Rollback within five minutes.' },
       { label: '판단 정보', text: '41/42 tests pass.' },
       { label: '연결', text: 'runbook (ops/deploy.md)' },
+      { label: '승인 상태', text: 'unverified' },
       { label: 'decision', text: 'approved by ops' },
       { label: 'decidedBy', text: 'operator' },
       { label: 'digest', text: 'sha256:abc' },
@@ -102,6 +103,7 @@ describe('FR-RHZ-128 structured gate body sections', () => {
       { label: '문제 상태', text: 'Deploy is waiting.' },
       { label: '선택지', text: 'Approve or reject.' },
       { label: 'request', text: 'Operator preface.\n\n## Follow-up\nNotify the release channel.' },
+      { label: '승인 상태', text: 'unverified' },
     ]);
   });
 
@@ -119,6 +121,7 @@ describe('FR-RHZ-128 structured gate body sections', () => {
     const legacyItems: DetailItem[] = [
       { label: 'request', text: gate.body },
       { label: 'recommendation', text: gate.recommendation },
+      { label: '승인 상태', text: 'unverified' },
       { label: 'decision', text: gate.decisionReason },
       { label: 'decidedBy', text: gate.decidedBy },
       { label: 'digest', text: gate.requestDigest },
@@ -224,6 +227,7 @@ describe('FR-RHZ-128 structured gate body sections', () => {
     expect(detailOf({ revision: 13, body: gateBody(body, { recommendation: 'keep me' }) }, 'gate-1')?.items).toEqual([
       { label: 'request', text: body },
       { label: 'recommendation', text: 'keep me' },
+      { label: '승인 상태', text: 'unverified' },
     ]);
   });
 
@@ -246,6 +250,7 @@ describe('FR-RHZ-128 structured gate body sections', () => {
     expect(detailOf({ revision: 14, body: gateBody(body, { recommendation: 'keep me' }) }, 'gate-1')?.items).toEqual([
       { label: 'request', text: body },
       { label: 'recommendation', text: 'keep me' },
+      { label: '승인 상태', text: 'unverified' },
     ]);
   });
 });

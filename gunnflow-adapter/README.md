@@ -10,6 +10,16 @@ conclusion-first order as plain-text detail items and keeps other prose in the
 `request` item. Inline code spans and fenced blocks are passed through
 unchanged. A structured `권고` replaces the legacy `recommendation` item.
 
+Gate decision provenance from `/v1/workspace` and its SSE stream is shown as
+`승인 상태` in approved/rejected gate detail. Unverified and `legacy-asserted`
+terminal decisions remain visible with `approval_unverified` attention. They
+are capped to the last N by emitted (gate-ID) order — NOT recency; a
+decision-time field will replace this. N defaults to 10 and is configurable
+with `RHIZOME_UNVERIFIED_DECIDED_MAX`; the root detail counts the full uncapped
+set. A `claimed` status with a missing or unknown claim kind displays as
+`claimed`. A future `verified` status displays as `verified`, followed by
+` (assurance)` when assurance is present.
+
 ## Requirements and install
 
 Node.js 22.12 or newer is required. The Gunnflow contract package

@@ -50,15 +50,21 @@ type gateDTO struct {
 	GoalID        string `json:"goalId,omitempty"` // RHZ-075 (FR-RHZ-108), additive.
 	Name          string `json:"name,omitempty"`
 	// RHZ-047 (D19, additive): omitted when absent per the projection 관례.
-	RequestDigest  string `json:"requestDigest,omitempty"`
-	DisplaySummary string `json:"displaySummary,omitempty"`
-	ExpiresAt      int64  `json:"expiresAt,omitempty"`
-	Source         string `json:"source,omitempty"`
-	Body           string `json:"body,omitempty"`
-	Recommendation string `json:"recommendation,omitempty"`
-	DecisionReason string `json:"decisionReason,omitempty"`
-	DecidedBy      string `json:"decidedBy,omitempty"`
-	Handle         string `json:"handle"` // RHZ-073 (FR-RHZ-103), additive.
+	RequestDigest  string           `json:"requestDigest,omitempty"`
+	DisplaySummary string           `json:"displaySummary,omitempty"`
+	ExpiresAt      int64            `json:"expiresAt,omitempty"`
+	Source         string           `json:"source,omitempty"`
+	Body           string           `json:"body,omitempty"`
+	Recommendation string           `json:"recommendation,omitempty"`
+	DecisionReason string           `json:"decisionReason,omitempty"`
+	DecidedBy      string           `json:"decidedBy,omitempty"`
+	Handle         string           `json:"handle"` // RHZ-073 (FR-RHZ-103), additive.
+	Verification   *verificationDTO `json:"verification,omitempty"`
+}
+type verificationDTO struct {
+	Status    string `json:"status"`
+	ClaimKind string `json:"claimKind,omitempty"`
+	Assurance string `json:"assurance,omitempty"`
 }
 type attentionDTO struct {
 	Kind        string `json:"kind"`
@@ -137,7 +143,11 @@ func toDTO(p Projection) dto {
 		d.Tasks = append(d.Tasks, taskDTO{t.ID, t.MissionID, t.Name, t.State, t.CurrentAction, t.Progress, t.HasProgress, t.BlockedReason, t.Attention, p.handles.of("m", t.ID), t.Assignee})
 	}
 	for _, g := range p.Gates {
-		d.Gates = append(d.Gates, gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, Handle: p.handles.of(gateHandleTag(g.Source), g.ID)})
+		var verification *verificationDTO
+		if g.Verification != nil {
+			verification = &verificationDTO{Status: g.Verification.Status, ClaimKind: g.Verification.ClaimKind}
+		}
+		d.Gates = append(d.Gates, gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, Handle: p.handles.of(gateHandleTag(g.Source), g.ID), Verification: verification})
 	}
 	for _, a := range p.Attention {
 		d.Attention = append(d.Attention, attentionDTO{a.Kind, a.RefID, a.Cause, a.SourceRef, a.IncidentRef})

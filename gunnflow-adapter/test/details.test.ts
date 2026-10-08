@@ -64,6 +64,7 @@ describe('D1 gate detail (FRRHZ101)', () => {
     expect(d.items).toEqual([
       { label: 'request', text: BODY },
       { label: 'recommendation', text: 'approve' },
+      { label: '승인 상태', text: 'unverified' },
       { label: 'decision', text: 'looks good' },
       { label: 'decidedBy', text: 'operator' },
       { label: 'digest', text: 'sha256:abc' },
@@ -81,20 +82,27 @@ describe('D1 gate detail (FRRHZ101)', () => {
 });
 
 describe('D2 workspace root detail (FRRHZ101)', () => {
-  it('counts become three text items, values as strings, fixed order', () => {
+  it('counts and the uncapped unverified-decision count become text items in fixed order', () => {
     const d = validated(WORKSPACE_NODE_ID);
     expect(d.items).toEqual([
       { label: 'running', text: '4' },
       { label: 'needsYou', text: '1' },
       { label: 'blocked', text: '2' },
+      { label: '승인 미확인 결정', text: '1' },
     ]);
     for (const i of d.items) expect(typeof i.text).toBe('string');
   });
 
-  it('honours the collision-shifted root id and has no detail without counts', () => {
-    expect(validated('~~workspace', '~~workspace').items).toHaveLength(3);
+  it('honours the collision-shifted root id and retains the provenance count without status counts', () => {
+    expect(validated('~~workspace', '~~workspace').items).toHaveLength(4);
     expect(detailOf(wire, WORKSPACE_NODE_ID, '~~workspace')).toBeUndefined();
-    expect(detailOf({ revision: 1, body: { ...wireBody, counts: undefined } }, WORKSPACE_NODE_ID)).toBeUndefined();
+    expect(detailOf({ revision: 1, body: { ...wireBody, counts: undefined } }, WORKSPACE_NODE_ID)?.items).toEqual([
+      { label: '승인 미확인 결정', text: '1' },
+    ]);
+  });
+
+  it('has no root detail when neither status counts nor unverified decisions exist', () => {
+    expect(detailOf({ revision: 1, body: { gates: [] } }, WORKSPACE_NODE_ID)).toBeUndefined();
   });
 });
 

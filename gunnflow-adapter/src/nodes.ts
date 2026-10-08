@@ -6,7 +6,7 @@
  * and named as such.
  */
 import { WORKSPACE_ROOT_KIND, type ArtifactRef, type Capability, type CapabilityLevel, type NodeProjection } from '@gunnflow/contract';
-import type { WorkspaceProjection } from './workspaceWire.js';
+import { isUnverifiedDecidedGate, type WorkspaceProjection } from './workspaceWire.js';
 
 /** State value for a node whose Rhizome shape carries no state (missions, deliverables, the root). */
 export const UNSTATED = 'unstated';
@@ -20,6 +20,8 @@ export const FLAGGED = 'flagged';
  * fact the gate's approve/reject capability reflects, not an inferred judgment.
  */
 export const NEEDS_HUMAN = 'needs_human';
+/** Attention cause for a retained terminal decision without verified provenance. */
+export const APPROVAL_UNVERIFIED = 'approval_unverified';
 /**
  * Id of the workspace root. Rhizome has no root object; the adapter
  * synthesizes one to carry workspace-level actions (mission creation). The
@@ -183,11 +185,18 @@ export function projectRhizomeNodes(
     // RHZ-075 (FR-RHZ-108): a gate is bound to exactly one of mission / goal (Rhizome enforces
     // the xor); membership follows missionId, else goalId — never both, so one member-of at most.
     relations: [...membership(g.missionId || g.goalId), ...edgesFrom(g.id)],
-    capabilities: levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'requestChanges'),
+    // Approved/rejected gates are retained only for provenance review and are no longer actionable.
+    capabilities: isUnverifiedDecidedGate(g)
+      ? []
+      : levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'requestChanges'),
     // A waiting gate pulls the human: it is a pending decision by definition. A
     // changes_requested gate (RHZ-078, FR-RHZ-109) passes through as its own state
     // value; the ball is with the worker, so no needs_human is added for it.
-    attention: [...attentionOf(g.id), ...(g.state === 'waiting' ? [{ cause: NEEDS_HUMAN }] : [])],
+    attention: [
+      ...attentionOf(g.id).filter((a) => a.cause !== APPROVAL_UNVERIFIED),
+      ...(g.state === 'waiting' ? [{ cause: NEEDS_HUMAN }] : []),
+      ...(isUnverifiedDecidedGate(g) ? [{ cause: APPROVAL_UNVERIFIED }] : []),
+    ],
     artifacts: [],
   }));
   const deliverables: NodeProjection[] = p.deliverables.map((d) => ({

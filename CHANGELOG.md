@@ -21,6 +21,9 @@ Until 1.0, minor versions may contain breaking changes.
 
 - Unix-socket peer credential verification and terminal I/O primitives, backed
   only by `golang.org/x/sys` and `golang.org/x/term` (FR-RHZ-130).
+- The Gunnflow adapter retains capped unverified gate decisions with
+  provenance detail, attention, and an uncapped workspace-root count
+  (FR-RHZ-133).
 - Gunnflow gate details expose seven canonical Markdown body sections as
   conclusion-first plain-text items while retaining unstructured prose as the
   request and suppressing a duplicate recommendation (FR-RHZ-128).

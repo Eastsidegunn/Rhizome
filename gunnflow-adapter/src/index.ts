@@ -2,8 +2,15 @@ import type { UpstreamFactory } from '@gunnflow/upstream-port';
 import { createRhizomeUpstream } from './upstream.js';
 
 export { createRhizomeUpstream } from './upstream.js';
-export { adaptWorkspaceBody } from './workspaceWire.js';
-export { projectRhizomeNodes, WORKSPACE_NODE_ID } from './nodes.js';
+export {
+  adaptWorkspaceBody,
+  DEFAULT_UNVERIFIED_DECIDED_MAX,
+  isGateVerification,
+  isUnverifiedDecidedGate,
+  unverifiedDecidedMax,
+} from './workspaceWire.js';
+export type { GateVerification } from './workspaceWire.js';
+export { APPROVAL_UNVERIFIED, projectRhizomeNodes, WORKSPACE_NODE_ID } from './nodes.js';
 export { adaptEnvelope, adaptWithReport, contractRefusal, nodesOf } from './upstream.js';
 export type { RhizomeIntegrationReport } from './nodes.js';
 export { SseDecoder } from './upstream.js';

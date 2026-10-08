@@ -59,7 +59,9 @@ type Gate struct {
 	RequestDigest, DisplaySummary                           string
 	ExpiresAt                                               int64
 	Source, Body, Recommendation, DecisionReason, DecidedBy string
+	Verification                                            *GateVerification
 }
+type GateVerification struct{ Status, ClaimKind string }
 type AttentionItem struct{ Kind, RefID, Cause, SourceRef, IncidentRef string }
 
 // Capability levels (RHZ-070, FR-RHZ-099) — the cockpit vocabulary the
@@ -199,7 +201,7 @@ func Snapshot(s events.Port) (Projection, error) {
 			}
 		}
 		sup, _ := (approval.Service{Store: s}).IsSuperseded(id)
-		g := Gate{ID: a.ID, Source: "janus", State: st, HumanDecision: string(a.HumanDecision), JanusDecision: string(a.JanusDecision), Superseded: sup, Name: a.GateName, RequestDigest: a.RequestDigest}
+		g := Gate{ID: a.ID, Source: "janus", State: st, HumanDecision: string(a.HumanDecision), JanusDecision: string(a.JanusDecision), Superseded: sup, Name: a.GateName, RequestDigest: a.RequestDigest, Verification: approvalVerification(a)}
 		if a.DecisionID != "" {
 			d, er := decision.Replay(s.List("decision", a.DecisionID))
 			if er != nil {
@@ -242,7 +244,7 @@ func Snapshot(s events.Port) (Projection, error) {
 			return p, x
 		}
 		st := questionState(q)
-		p.Gates = append(p.Gates, Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef})
+		p.Gates = append(p.Gates, Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: claimedVerification(q.Verification)})
 		p.GateCapabilities[q.ID] = gateCapabilities(st, q.MissionID != "" || q.GoalID != "")
 		// RHZ-085 (FR-RHZ-115): counts.needsYou = missions waiting_for_human
 		// + internal gates (questions) pending. A pending question is a ball in
@@ -316,6 +318,23 @@ func Snapshot(s events.Port) (Projection, error) {
 	sort.Slice(p.Deliverables, func(i, j int) bool { return p.Deliverables[i].ID < p.Deliverables[j].ID })
 	sort.Slice(p.Edges, func(i, j int) bool { return p.Edges[i].ID < p.Edges[j].ID })
 	return p, nil
+}
+
+func claimedVerification(claim *question.Verification) *GateVerification {
+	if claim == nil {
+		return nil
+	}
+	return &GateVerification{Status: "claimed", ClaimKind: claim.ClaimKind}
+}
+
+func approvalVerification(a approval.Ref) *GateVerification {
+	if a.Verification != nil {
+		return claimedVerification(a.Verification)
+	}
+	if a.ActorVerified {
+		return &GateVerification{Status: "legacy-asserted"}
+	}
+	return nil
 }
 
 // questionState maps an internal gate (question) to the cockpit state
@@ -464,6 +483,9 @@ type Intent struct {
 	// instruction reuses Instruction (empty = mission description).
 	Budget      *BudgetOverride `json:"budget"`
 	SessionMode string          `json:"sessionMode"`
+	// Verification is decoded strictly by RelayIntentHooks only for gate
+	// decisions. RawMessage preserves exact key casing for the V7 check.
+	Verification json.RawMessage `json:"verification,omitempty"`
 }
 
 // BudgetOverride is the per-mission budget request of mission.start; a nil
@@ -650,6 +672,22 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 	inject := hooks.Inject
 	if s == nil {
 		return RelayResult{}, fmt.Errorf("nil store")
+	}
+	var verification *question.Verification
+	if len(in.Verification) != 0 {
+		switch in.Kind {
+		case "gate.approve", "gate.reject", "gate.requestChanges":
+		default:
+			return RelayResult{Reason: "invalid verification"}, nil
+		}
+		if verified {
+			return RelayResult{Reason: "invalid verification"}, nil
+		}
+		var err error
+		verification, err = question.DecodeIntentVerification(in.Verification, actor)
+		if err != nil {
+			return RelayResult{Reason: "invalid verification"}, nil
+		}
 	}
 	// RHZ-073 (FR-RHZ-103): handles → IDs at the entrance, before any case;
 	// every case below still sees and stores IDs only.
@@ -1216,7 +1254,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 			if in.Kind == "gate.reject" {
 				d = question.Reject
 			}
-			if _, e = (question.Service{Store: s}).Answer(q.ID, d, in.Reason, actor, in.Digest); e != nil {
+			if _, e = (question.Service{Store: s}).Answer(q.ID, d, in.Reason, actor, in.Digest, verification); e != nil {
 				return RelayResult{Reason: e.Error()}, nil
 			}
 			return RelayResult{Accepted: true}, nil
@@ -1253,7 +1291,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		}
 		g := approval.GateFields{GateName: name, GateType: "approval", RequestedAction: name, RiskTier: "logged",
 			Request: approval.Request{Target: "janus", RequestedBy: actor, RequestedAt: time.Now().UTC().Format(time.RFC3339), Reason: gr.Reason}}
-		if _, e = (approval.Service{Store: s}).RecordInputWithGate(gr.Key, d, in.Reason, approval.ResponseIDFor(gr.ID), gr.RequestDigest, actor, "relay", gr.DecisionID, verified, g); e != nil {
+		if _, e = (approval.Service{Store: s}).RecordInputWithGate(gr.Key, d, in.Reason, approval.ResponseIDFor(gr.ID), gr.RequestDigest, actor, "relay", gr.DecisionID, verified, g, verification); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
@@ -1275,10 +1313,13 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 			if strings.TrimSpace(reason) == "" {
 				reason = in.Instruction
 			}
-			if _, e = (question.Service{Store: s}).Answer(q.ID, question.RequestChanges, reason, actor, in.Digest); e != nil {
+			if _, e = (question.Service{Store: s}).Answer(q.ID, question.RequestChanges, reason, actor, in.Digest, verification); e != nil {
 				return RelayResult{Reason: e.Error()}, nil
 			}
 			return RelayResult{Accepted: true}, nil
+		}
+		if verification != nil {
+			return RelayResult{Reason: "invalid verification"}, nil
 		}
 		decisionID := ""
 		if a, e := (approval.Service{Store: s}).Get(in.GateID); e == nil && a.DecisionID != "" {

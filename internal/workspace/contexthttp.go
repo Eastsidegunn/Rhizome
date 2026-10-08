@@ -71,8 +71,9 @@ type contextGateDTO struct {
 	// RHZ-078 (FR-RHZ-109): the latest answer's reason/actor, so a worker
 	// reading its step sees what a changes_requested gate asks for. Additive
 	// (omitempty): pending gates serialize exactly as before.
-	DecisionReason string `json:"decisionReason,omitempty"`
-	DecidedBy      string `json:"decidedBy,omitempty"`
+	DecisionReason string           `json:"decisionReason,omitempty"`
+	DecidedBy      string           `json:"decidedBy,omitempty"`
+	Verification   *verificationDTO `json:"verification,omitempty"`
 }
 type contextMemoryDTO struct {
 	ID       string   `json:"id"`
@@ -394,7 +395,11 @@ func assembleSteps(store events.Port, es edge.Service, taskID string) ([]context
 			return nil, err
 		}
 		if stepSet[q.MissionID] {
-			gatesByMission[q.MissionID] = append(gatesByMission[q.MissionID], contextGateDTO{ID: q.ID, Name: q.Title, State: questionState(q), DecisionReason: q.Reason, DecidedBy: q.ActorRef})
+			var verification *verificationDTO
+			if derived := claimedVerification(q.Verification); derived != nil {
+				verification = &verificationDTO{Status: derived.Status, ClaimKind: derived.ClaimKind}
+			}
+			gatesByMission[q.MissionID] = append(gatesByMission[q.MissionID], contextGateDTO{ID: q.ID, Name: q.Title, State: questionState(q), DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: verification})
 		}
 	}
 	byID := map[string]contextStepDTO{}

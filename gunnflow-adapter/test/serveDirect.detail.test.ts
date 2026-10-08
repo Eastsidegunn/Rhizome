@@ -17,7 +17,7 @@ const wireBody = {
   gates: [
     { id: 'q-pending', state: 'pending', superseded: false, name: 'Publish?', requestDigest: 'sha256:abc', body: BODY, recommendation: 'approve' },
     { id: 'q-bare', state: 'pending', superseded: false },
-    { id: 'q-approved', state: 'approved', superseded: false, body: BODY, decisionReason: 'ok', decidedBy: 'op' },
+    { id: 'q-approved', state: 'approved', superseded: false, body: BODY, decisionReason: 'ok', decidedBy: 'op', verification: { status: 'claimed', claimKind: 'relayed' } },
   ],
   deliverables: [{ id: 'd-1', kind: 'document', missionId: 'm-build', sourceRef: 'sha256:deadbeef', summary: 'Report' }],
   edges: [],

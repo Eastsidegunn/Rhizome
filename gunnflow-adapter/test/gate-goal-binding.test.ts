@@ -22,7 +22,7 @@ const raw = {
     gate('q-none', {}),
     gate('q-both', { missionId: 'm-1', goalId: 'g-1' }),
     // decided gate: must be dropped by liveGates (rule unchanged by RHZ-075)
-    { ...gate('q-decided', { goalId: 'g-1' }), state: 'approved' },
+    { ...gate('q-decided', { goalId: 'g-1' }), state: 'approved', verification: { status: 'claimed', claimKind: 'relayed' } },
   ],
   deliverables: [],
   edges: [],

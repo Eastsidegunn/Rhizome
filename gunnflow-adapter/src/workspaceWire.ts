@@ -44,6 +44,15 @@ interface GateProjection {
   /** Cockpit fields v1 never carries; left absent, never invented. */
   request?: unknown;
   riskTier?: 'logged' | 'privileged';
+  /** Decision provenance as emitted by Rhizome; absent means unverified. */
+  verification?: GateVerification;
+}
+
+/** Additive gate-decision provenance on GET /v1/workspace and its SSE frames. */
+export interface GateVerification {
+  status: string;
+  claimKind?: string;
+  assurance?: string;
 }
 interface DeliverableProjection {
   kind: 'deliverable';
@@ -129,6 +138,7 @@ interface WireGate {
   humanDecision?: string;
   janusDecision?: string;
   superseded: boolean;
+  verification?: GateVerification;
 }
 interface WireDeliverable {
   id: string;
@@ -155,15 +165,88 @@ interface WireEdge {
  * forwarded upstream. Terminal-ness is Rhizome's own emitted state, so this
  * scopes the cockpit over a backend fact — it invents nothing.
  */
-const TERMINAL_TASK_STATES = new Set<NodeState>(['completed', 'failed', 'cancelled']);
+const TERMINAL_TASK_STATES = new Set<string>(['completed', 'failed', 'cancelled']);
 /** Gate states that keep a gate on the cockpit: a decision is still open (RHZ-078, FR-RHZ-109). */
 const LIVE_GATE_STATES = new Set<GateProjection['state']>(['waiting', 'changes_requested']);
+/** Terminal gate decisions; changes_requested remains live and actionable. */
+const DECIDED_GATE_STATES = new Set<GateProjection['state']>(['approved', 'rejected']);
+/** Default number of unverified terminal decisions kept on the cockpit. */
+export const DEFAULT_UNVERIFIED_DECIDED_MAX = 10;
 /** Terminal goal states (RHZ-061): a closed/cancelled goal leaves the cockpit. */
 const TERMINAL_GOAL_STATES = new Set<string>(['achieved', 'failed', 'cancelled']);
 
 /** Items that already carry the cockpit's discriminator pass through untouched. */
 const isAdapted = (x: unknown, kind: string) =>
   (x as { kind?: string }).kind === kind && (kind !== 'deliverable' || 'title' in (x as object));
+
+/** Runtime shape check for the additive wire field; unknown future status strings remain accepted. */
+export function isGateVerification(value: unknown): value is GateVerification {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.status === 'string' && v.status !== '' &&
+    (v.claimKind === undefined || typeof v.claimKind === 'string') &&
+    (v.assurance === undefined || typeof v.assurance === 'string')
+  );
+}
+
+/**
+ * A terminal decision stays visible only when provenance is absent
+ * (unverified) or is the legacy asserted identity signal. Any claimed or
+ * future verified status remains hidden as before.
+ */
+export function isUnverifiedDecidedGate(gate: {
+  state?: string;
+  superseded?: boolean;
+  verification?: unknown;
+}): boolean {
+  if (gate.superseded || !DECIDED_GATE_STATES.has((gate.state ?? '') as GateProjection['state'])) return false;
+  if (!isGateVerification(gate.verification)) return true;
+  return gate.verification.status === 'legacy-asserted';
+}
+
+/**
+ * The uncapped set eligible for decided-gate retention. A bound gate is kept
+ * only while its projected parent is live, matching the RHZ-085 liveness rule
+ * and preventing a member-of relation from naming a hidden node.
+ */
+export function unverifiedDecidedGates<T extends {
+  state?: string;
+  superseded?: boolean;
+  verification?: unknown;
+  missionId?: string;
+  goalId?: string;
+}>(
+  gates: readonly T[],
+  missions: readonly { id: string; state?: string }[],
+  tasks: readonly { id: string; missionId?: string; state?: string }[],
+): T[] {
+  const terminalGoalIds = new Set(
+    missions.filter((mission) => TERMINAL_GOAL_STATES.has(mission.state ?? '')).map((mission) => mission.id),
+  );
+  const liveTasks = tasks.filter(
+    (task) => !TERMINAL_TASK_STATES.has(task.state ?? '') && !terminalGoalIds.has(task.missionId ?? ''),
+  );
+  const liveGoalIds = new Set([
+    ...missions.filter((mission) => !terminalGoalIds.has(mission.id)).map((mission) => mission.id),
+    ...liveTasks.flatMap((task) => task.missionId ? [task.missionId] : []),
+  ]);
+  const liveTaskIds = new Set(liveTasks.map((task) => task.id));
+
+  return gates.filter((gate) => {
+    if (!isUnverifiedDecidedGate(gate)) return false;
+    if (gate.missionId) return liveTaskIds.has(gate.missionId);
+    if (gate.goalId) return liveGoalIds.has(gate.goalId);
+    return true;
+  });
+}
+
+/** Invalid and negative overrides fall back to the documented default; zero is a valid cap. */
+export function unverifiedDecidedMax(value: string | undefined = process.env.RHIZOME_UNVERIFIED_DECIDED_MAX): number {
+  if (value === undefined || !/^\d+$/.test(value)) return DEFAULT_UNVERIFIED_DECIDED_MAX;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_UNVERIFIED_DECIDED_MAX;
+}
 
 export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
   const body = (raw ?? {}) as Record<string, unknown>;
@@ -211,6 +294,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
   const allGates: GateProjection[] = list('gates').map((g) => {
     if (isAdapted(g, 'gate')) return g as GateProjection;
     const w = g as WireGate;
+    const verification = isGateVerification(w.verification) ? w.verification : undefined;
     return {
       kind: 'gate',
       id: w.id,
@@ -222,6 +306,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       gateType: '',
       requestedAction: '',
       state: w.superseded ? 'superseded' : w.state === 'pending' ? 'waiting' : w.state,
+      ...(verification ? { verification } : {}),
     } satisfies GateProjection;
   });
   const allDeliverables: DeliverableProjection[] = list('deliverables').map((d) => {
@@ -267,7 +352,15 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
   const liveTasks = tasks.filter((t) => !TERMINAL_TASK_STATES.has(t.state) && !terminalGoalIds.has(t.missionId));
   // A gate is live while it awaits a human decision: waiting, or changes_requested (RHZ-078,
   // FR-RHZ-109 — the request went back for revision but approve/reject are still open on it).
-  const liveGates = allGates.filter((g) => LIVE_GATE_STATES.has(g.state));
+  // RHZ-105 (FR-RHZ-133): unverified and legacy-asserted terminal decisions remain visible,
+  // capped to the last N by emitted (gate-ID) order — NOT recency; a decision-time field will
+  // replace this. The retained gates preserve their original relative order in the projection.
+  const retainedDecided = unverifiedDecidedGates(allGates, allMissions, tasks);
+  const maxRetainedDecided = unverifiedDecidedMax();
+  const retainedDecidedIds = new Set(
+    retainedDecided.slice(Math.max(0, retainedDecided.length - maxRetainedDecided)).map((g) => g.id),
+  );
+  const liveGates = allGates.filter((g) => LIVE_GATE_STATES.has(g.state) || retainedDecidedIds.has(g.id));
   const liveMissionIds = new Set([...liveMissions.map((m) => m.id), ...liveTasks.map((t) => t.missionId)]);
   const liveTaskIds = new Set(liveTasks.map((t) => t.id));
   // RHZ-081 (FR-RHZ-112): a goal-bound deliverable (missionId "") stays while its goal is live.
