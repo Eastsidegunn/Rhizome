@@ -39,7 +39,7 @@ multi-user production use. The first release, 0.1.0, is described in
 
 You need macOS or Linux and Go 1.23 or newer, and nothing else: the Go module
 has no third-party dependencies, and the board needs no other repository or
-service. (Node.js 22+ is only needed for the optional
+service. (Node.js 22.12+ is only needed for the optional
 [Gunnflow adapter](#gunnflow-adapter-optional).) Windows is not supported yet:
 the journal's single-writer lock uses `flock(2)`.
 
@@ -205,9 +205,10 @@ Adding another ID requires a code change in `validAdapter` in
 ### Gunnflow adapter (optional)
 
 [gunnflow-adapter/](gunnflow-adapter/) serves the Gunnflow direct wire in front
-of a running board. It needs Node.js 22+. This is a source-only integration:
-the package is private (not published to npm) and installs its Gunnflow contract
-packages from the vendored tarballs in `gunnflow-adapter/vendor/` via `npm ci`.
+of a running board. It needs Node.js 22.12+. This is a source-only integration:
+the adapter package itself is private (not published to npm). It installs
+`@gunnflow/contract` from npm; `@gunnflow/upstream-port` is not published yet
+and still comes from the vendored tarball in `gunnflow-adapter/vendor/`.
 
 ```sh
 cd gunnflow-adapter

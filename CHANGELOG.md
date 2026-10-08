@@ -8,6 +8,15 @@ Until 1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- The adapter installs `@gunnflow/contract` 0.3.1 from npm instead of a
+  vendored tarball (the wire is unchanged; 0.3.1 only widens the package's
+  vitest peer range). `@gunnflow/upstream-port` stays vendored until it is
+  published. The adapter test toolchain moves from Vitest 3 to Vitest 5,
+  which clears the known `npm audit` advisories; the adapter now needs
+  Node.js 22.12 or newer.
+
 ### Added
 
 - Gunnflow gate details expose seven canonical Markdown body sections as

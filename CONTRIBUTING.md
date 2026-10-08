@@ -5,7 +5,7 @@ focused pull requests are welcome; for larger changes, open an issue first.
 
 ## Build and test
 
-Requirements: Go 1.23+, and Node.js 22+ for the TypeScript adapter.
+Requirements: Go 1.23+, and Node.js 22.12+ for the TypeScript adapter.
 
 ```sh
 make ci                                      # gofmt check, test, test -race, vet: must exit 0
