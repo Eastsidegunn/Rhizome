@@ -43,6 +43,7 @@ type Ref struct {
 	// (RHZ-078, FR-RHZ-109); the earlier request stays in the journal only.
 	Decision         Decision
 	Reason, ActorRef string
+	Verification     *Verification
 	Revision         uint64
 }
 type Service struct{ Store events.Port }
@@ -51,7 +52,161 @@ type asked struct {
 	Title, Body, Recommendation, MissionID, RequestedBy, CorrelationID, Digest string
 	GoalID                                                                     string `json:",omitempty"` // RHZ-075 (FR-RHZ-108), additive; omitted when empty so mission-bound payloads stay byte-identical to pre-075 journals.
 }
-type answered struct{ Decision, Reason, ActorRef, Digest string }
+type answered struct {
+	Decision, Reason, ActorRef, Digest string
+	Verification                       *Verification `json:",omitempty"`
+}
+
+// Verification is an unverified provenance claim attached to a decision.
+// Display status is deliberately not stored; projections derive it on read.
+type Verification struct {
+	ClaimKind     string
+	OriginClaim   string
+	OriginChannel string   `json:",omitempty"`
+	RelayChain    []string `json:",omitempty"`
+	SessionRef    string   `json:",omitempty"`
+	ObservedAt    string   `json:",omitempty"`
+}
+
+var errInvalidVerification = errors.New("invalid verification")
+
+var payloadVerificationKeys = map[string]bool{
+	"ClaimKind": true, "OriginClaim": true, "OriginChannel": true,
+	"RelayChain": true, "SessionRef": true, "ObservedAt": true,
+}
+
+var intentVerificationKeys = map[string]bool{
+	"claimKind": true, "originClaim": true, "originChannel": true,
+	"relayChain": true, "sessionRef": true, "observedAt": true,
+}
+
+type intentVerification struct {
+	ClaimKind     string   `json:"claimKind"`
+	OriginClaim   string   `json:"originClaim"`
+	OriginChannel string   `json:"originChannel"`
+	RelayChain    []string `json:"relayChain"`
+	SessionRef    string   `json:"sessionRef"`
+	ObservedAt    string   `json:"observedAt"`
+}
+
+// DecodeIntentVerification performs the exact-case, pre-decode key check for
+// the lowerCamel intent surface, then applies the common V1-V7 rules.
+func DecodeIntentVerification(raw json.RawMessage, actor string) (*Verification, error) {
+	keys, err := exactVerificationKeys(raw, intentVerificationKeys)
+	if err != nil {
+		return nil, err
+	}
+	var wire intentVerification
+	if json.Unmarshal(raw, &wire) != nil {
+		return nil, errInvalidVerification
+	}
+	v := &Verification{
+		ClaimKind: wire.ClaimKind, OriginClaim: wire.OriginClaim,
+		OriginChannel: wire.OriginChannel, RelayChain: wire.RelayChain,
+		SessionRef: wire.SessionRef, ObservedAt: wire.ObservedAt,
+	}
+	return validateVerification(v, actor, keys, false)
+}
+
+// DecodePayloadVerification performs the exact-case pre-decode check for the
+// Go-field-name journal surface, then applies the common V1-V7 rules.
+func DecodePayloadVerification(raw json.RawMessage, actor string) (*Verification, error) {
+	keys, err := exactVerificationKeys(raw, payloadVerificationKeys)
+	if err != nil {
+		return nil, err
+	}
+	var v Verification
+	if json.Unmarshal(raw, &v) != nil {
+		return nil, errInvalidVerification
+	}
+	return validateVerification(&v, actor, keys, true)
+}
+
+func exactVerificationKeys(raw json.RawMessage, allowed map[string]bool) (map[string]bool, error) {
+	var object map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &object) != nil || object == nil {
+		return nil, errInvalidVerification
+	}
+	keys := make(map[string]bool, len(object))
+	for key := range object {
+		if !allowed[key] {
+			return nil, errInvalidVerification
+		}
+		keys[key] = true
+	}
+	return keys, nil
+}
+
+// ValidateVerification applies the common write/replay shape rules to a
+// programmatically supplied claim and returns a normalized copy.
+func ValidateVerification(v *Verification, actor string) (*Verification, error) {
+	if v == nil {
+		return nil, nil
+	}
+	keys := map[string]bool{}
+	if v.OriginChannel != "" {
+		keys["OriginChannel"] = true
+	}
+	if v.RelayChain != nil {
+		keys["RelayChain"] = true
+	}
+	if v.SessionRef != "" {
+		keys["SessionRef"] = true
+	}
+	if v.ObservedAt != "" {
+		keys["ObservedAt"] = true
+	}
+	return validateVerification(v, actor, keys, true)
+}
+
+func validateVerification(v *Verification, actor string, keys map[string]bool, payloadKeys bool) (*Verification, error) {
+	key := func(payload, intent string) bool {
+		if payloadKeys {
+			return keys[payload]
+		}
+		return keys[intent]
+	}
+	if v == nil || (v.ClaimKind != "relayed" && v.ClaimKind != "session-direct") || v.OriginClaim != "H" {
+		return nil, errInvalidVerification
+	}
+	actor, err := normalizeActor(actor)
+	if err != nil {
+		return nil, errInvalidVerification
+	}
+	out := *v
+	out.RelayChain = append([]string(nil), v.RelayChain...)
+	if key("ObservedAt", "observedAt") {
+		if _, err := time.Parse(time.RFC3339, v.ObservedAt); err != nil {
+			return nil, errInvalidVerification
+		}
+	}
+	switch v.ClaimKind {
+	case "relayed":
+		if len(out.RelayChain) == 0 || key("SessionRef", "sessionRef") {
+			return nil, errInvalidVerification
+		}
+		for i := range out.RelayChain {
+			out.RelayChain[i], err = normalizeActor(out.RelayChain[i])
+			if err != nil {
+				return nil, errInvalidVerification
+			}
+		}
+		if out.RelayChain[len(out.RelayChain)-1] != actor {
+			return nil, errInvalidVerification
+		}
+		if key("OriginChannel", "originChannel") && out.OriginChannel != "ops-session" && out.OriginChannel != "board" {
+			return nil, errInvalidVerification
+		}
+	case "session-direct":
+		if strings.TrimSpace(out.SessionRef) == "" || key("RelayChain", "relayChain") {
+			return nil, errInvalidVerification
+		}
+		if key("OriginChannel", "originChannel") && out.OriginChannel != "dev-session" {
+			return nil, errInvalidVerification
+		}
+	}
+	return &out, nil
+}
 
 func Digest(title, body, recommendation string) string {
 	h := sha256.Sum256([]byte(title + "\x00" + body + "\x00" + recommendation))
@@ -144,7 +299,7 @@ func (s Service) Ask(title, body, recommendation, missionID, goalID, requestedBy
 	}
 	return Replay(s.Store.List("question", id))
 }
-func (s Service) Answer(id string, d Decision, reason, actor, digest string) (Ref, error) {
+func (s Service) Answer(id string, d Decision, reason, actor, digest string, verification ...*Verification) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -165,7 +320,17 @@ func (s Service) Answer(id string, d Decision, reason, actor, digest string) (Re
 	if err != nil {
 		return Ref{}, err
 	}
-	p, _ := json.Marshal(answered{string(d), reason, actor, digest})
+	if len(verification) > 1 {
+		return Ref{}, errInvalidVerification
+	}
+	var claim *Verification
+	if len(verification) == 1 {
+		claim, err = ValidateVerification(verification[0], actor)
+		if err != nil {
+			return Ref{}, err
+		}
+	}
+	p, _ := json.Marshal(answered{Decision: string(d), Reason: reason, ActorRef: actor, Digest: digest, Verification: claim})
 	e := events.Event{AggregateType: "question", AggregateID: id, Revision: r.Revision + 1, Type: "question.answered", Payload: p, CreatedAt: time.Now().UTC()}
 	if err := s.Store.Append(r.Revision, e); err != nil {
 		return Ref{}, err
@@ -225,6 +390,18 @@ func Replay(log []events.Event) (Ref, error) {
 			if json.Unmarshal(e.Payload, &p) != nil {
 				return Ref{}, fmt.Errorf("invalid answered")
 			}
+			p.Verification = nil
+			var object map[string]json.RawMessage
+			if json.Unmarshal(e.Payload, &object) != nil {
+				return Ref{}, fmt.Errorf("invalid answered")
+			}
+			if raw, ok := object["Verification"]; ok {
+				var err error
+				p.Verification, err = DecodePayloadVerification(raw, p.ActorRef)
+				if err != nil {
+					return Ref{}, errInvalidVerification
+				}
+			}
 			d := Decision(p.Decision)
 			if err := nextDecision(r.Decision, d); err != nil {
 				return Ref{}, err
@@ -241,6 +418,7 @@ func Replay(log []events.Event) (Ref, error) {
 			r.Decision = d
 			r.Reason = p.Reason
 			r.ActorRef = p.ActorRef
+			r.Verification = p.Verification
 			r.Revision = uint64(i + 1)
 		}
 	}

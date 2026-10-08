@@ -17,12 +17,14 @@
 import type { DetailItem, NodeDetail } from '@gunnflow/contract';
 import { parseGateBodySections } from './gateBody.js';
 import { WORKSPACE_NODE_ID } from './nodes.js';
+import { isGateVerification, unverifiedDecidedGates, type GateVerification } from './workspaceWire.js';
 
 /** The slice of Rhizome's /v1/workspace body (workspace/http.go DTOs) the detail reads. */
 export interface WireDetailBody {
-  missions?: Array<{ id: string; name?: string; success?: string }>;
+  missions?: Array<{ id: string; name?: string; state?: string; success?: string }>;
   tasks?: Array<{
     id: string;
+    missionId?: string;
     state?: string;
     currentAction?: string;
     progress?: number;
@@ -38,6 +40,10 @@ export interface WireDetailBody {
     recommendation?: string;
     decisionReason?: string;
     decidedBy?: string;
+    superseded?: boolean;
+    verification?: GateVerification;
+    missionId?: string;
+    goalId?: string;
   }>;
   deliverables?: Array<{ id: string }>;
   counts?: { running?: number; needsYou?: number; blocked?: number };
@@ -54,12 +60,24 @@ export interface WireWorkspaceEnvelope {
  * changes_requested (RHZ-078, FR-RHZ-109) is a recorded decision too — its
  * reason is the change request — so it shows under the same `decision` label.
  */
-const DECIDED_GATE_STATES = new Set(['approved', 'rejected', 'changes_requested']);
+const DECISION_GATE_STATES = new Set(['approved', 'rejected', 'changes_requested']);
+/** Only terminal approval outcomes carry approval provenance detail. */
+const APPROVAL_STATUS_GATE_STATES = new Set(['approved', 'rejected']);
 /** The workspace root's count labels, in a fixed order (same vocabulary as Gunnflow's fake-contracts). */
 const COUNT_LABELS = ['running', 'needsYou', 'blocked'] as const;
 
 const text = (label: string, value: unknown): DetailItem[] =>
   typeof value === 'string' && value !== '' ? [{ label, text: value }] : [];
+
+/** Exact display vocabulary for the additive provenance DTO. */
+const verificationText = (verification: unknown): string => {
+  if (!isGateVerification(verification)) return 'unverified';
+  const base =
+    verification.status === 'claimed' && (verification.claimKind === 'relayed' || verification.claimKind === 'session-direct')
+      ? `claimed (${verification.claimKind})`
+      : verification.status;
+  return verification.assurance ? `${base} (${verification.assurance})` : base;
+};
 
 /**
  * The detail of one node, or undefined when the node has none (the 404 path).
@@ -76,15 +94,26 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
   // Workspace root: the status counts, each as a string, fixed order.
   if (nodeId === rootId) {
     const counts = body.counts;
-    if (!counts) return undefined;
-    return COUNT_LABELS.flatMap((label) => (typeof counts[label] === 'number' ? [{ label, text: String(counts[label]) }] : []));
+    const unverifiedDecisions = unverifiedDecidedGates(
+      body.gates ?? [],
+      body.missions ?? [],
+      body.tasks ?? [],
+    ).length;
+    const countItems = counts
+      ? COUNT_LABELS.flatMap((label) => (typeof counts[label] === 'number' ? [{ label, text: String(counts[label]) }] : []))
+      : [];
+    return [
+      ...countItems,
+      ...(unverifiedDecisions > 0 ? [{ label: '승인 미확인 결정', text: String(unverifiedDecisions) }] : []),
+    ];
   }
 
   // Gate (internal question): the request body, the recommendation, the
   // decision (only once decided), who decided, and the request digest.
   const gate = body.gates?.find((g) => g.id === nodeId);
   if (gate) {
-    const decided = DECIDED_GATE_STATES.has(gate.state ?? '');
+    const hasDecision = DECISION_GATE_STATES.has(gate.state ?? '');
+    const hasApprovalStatus = APPROVAL_STATUS_GATE_STATES.has(gate.state ?? '');
     const parsedBody = typeof gate.body === 'string' ? parseGateBodySections(gate.body) : undefined;
     const structuredBody = parsedBody && parsedBody.sections.length > 0;
     const hasStructuredRecommendation = parsedBody?.sections.some(({ label }) => label === '권고') ?? false;
@@ -96,7 +125,8 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
           ]
         : text('request', gate.body)),
       ...(hasStructuredRecommendation ? [] : text('recommendation', gate.recommendation)),
-      ...(decided ? text('decision', gate.decisionReason) : []),
+      ...(hasApprovalStatus ? [{ label: '승인 상태', text: verificationText(gate.verification) }] : []),
+      ...(hasDecision ? text('decision', gate.decisionReason) : []),
       ...text('decidedBy', gate.decidedBy),
       ...text('digest', gate.requestDigest),
     ];

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"rhizome/internal/decision"
 	"rhizome/internal/events"
+	"rhizome/internal/question"
 	"sort"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ type Ref struct {
 	RequestDigest string
 	ActorRef      string
 	ActorVerified bool
+	Verification  *question.Verification
 	CorrelationID string
 	State         State
 	ResponseSeq   int64
@@ -68,6 +70,7 @@ type input struct {
 	Reason, ResponseID, RequestDigest, ActorRef, CorrelationID, DecisionID string
 	ActorVerified                                                          bool
 	GateFields
+	Verification *question.Verification `json:",omitempty"`
 }
 type dispatched struct {
 	ResponseID            string
@@ -144,7 +147,7 @@ func validGate(g GateFields) error {
 	return nil
 }
 
-func (s Service) RecordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool) (Ref, error) {
+func (s Service) RecordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, verification ...*question.Verification) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -169,9 +172,9 @@ func (s Service) RecordInput(k RequestKey, d Decision, reason, response, digest,
 			return Ref{}, fmt.Errorf("invalid wait_human decision")
 		}
 	}
-	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, GateFields{})
+	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, GateFields{}, verification...)
 }
-func (s Service) recordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields) (Ref, error) {
+func (s Service) recordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields, verification ...*question.Verification) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -199,11 +202,22 @@ func (s Service) recordInput(k RequestKey, d Decision, reason, response, digest,
 			return Ref{}, fmt.Errorf("invalid wait_human decision")
 		}
 	}
-	p, _ := json.Marshal(input{RequestKey: k, Decision: d, Reason: reason, ResponseID: response, RequestDigest: digest, ActorRef: actor, ActorVerified: verified, CorrelationID: correlation, DecisionID: decisionID, GateFields: g})
+	if len(verification) > 1 || (verified && len(verification) == 1 && verification[0] != nil) {
+		return Ref{}, fmt.Errorf("invalid verification")
+	}
+	var claim *question.Verification
+	if len(verification) == 1 {
+		var err error
+		claim, err = question.ValidateVerification(verification[0], actor)
+		if err != nil {
+			return Ref{}, fmt.Errorf("invalid verification")
+		}
+	}
+	p, _ := json.Marshal(input{RequestKey: k, Decision: d, Reason: reason, ResponseID: response, RequestDigest: digest, ActorRef: actor, ActorVerified: verified, CorrelationID: correlation, DecisionID: decisionID, GateFields: g, Verification: claim})
 	return s.append(id(k), "approval.input_recorded", p, 0)
 }
-func (s Service) RecordInputWithGate(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields) (Ref, error) {
-	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, g)
+func (s Service) RecordInputWithGate(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields, verification ...*question.Verification) (Ref, error) {
+	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, g, verification...)
 }
 
 func (s Service) append(a, t string, p []byte, rev uint64) (Ref, error) {
@@ -259,10 +273,25 @@ func Replay(log []events.Event) (Ref, error) {
 			if e.Type != "approval.input_recorded" || json.Unmarshal(e.Payload, &p) != nil {
 				return Ref{}, fmt.Errorf("invalid input")
 			}
+			p.Verification = nil
+			var object map[string]json.RawMessage
+			if json.Unmarshal(e.Payload, &object) != nil {
+				return Ref{}, fmt.Errorf("invalid input")
+			}
+			if raw, ok := object["Verification"]; ok {
+				if p.ActorVerified {
+					return Ref{}, fmt.Errorf("invalid verification")
+				}
+				var err error
+				p.Verification, err = question.DecodePayloadVerification(raw, p.ActorRef)
+				if err != nil {
+					return Ref{}, fmt.Errorf("invalid verification")
+				}
+			}
 			if p.RequestKey.valid() != nil || validGate(p.GateFields) != nil || (p.GateFields.ReasonRequired && p.Reason == "") || p.GateFields.Supersedes == e.AggregateID || strings.TrimSpace(p.ActorRef) == "" || (!p.ActorVerified && !strings.HasPrefix(p.ActorRef, "unverified-local-operator:")) || !validDec(p.Decision) || p.RequestDigest == "" || p.ResponseID == "" || (p.Decision == Deny && p.Reason == "") || e.AggregateID != id(p.RequestKey) {
 				return Ref{}, fmt.Errorf("invalid input")
 			}
-			r = Ref{ID: e.AggregateID, Key: p.RequestKey, HumanDecision: p.Decision, Reason: p.Reason, ResponseID: p.ResponseID, RequestDigest: p.RequestDigest, ActorRef: p.ActorRef, ActorVerified: p.ActorVerified, CorrelationID: p.CorrelationID, State: InputRecorded, Revision: 1, GateFields: p.GateFields, InputAt: e.CreatedAt, DecisionID: p.DecisionID}
+			r = Ref{ID: e.AggregateID, Key: p.RequestKey, HumanDecision: p.Decision, Reason: p.Reason, ResponseID: p.ResponseID, RequestDigest: p.RequestDigest, ActorRef: p.ActorRef, ActorVerified: p.ActorVerified, Verification: p.Verification, CorrelationID: p.CorrelationID, State: InputRecorded, Revision: 1, GateFields: p.GateFields, InputAt: e.CreatedAt, DecisionID: p.DecisionID}
 			continue
 		}
 		if r.State == Observed {
@@ -322,7 +351,7 @@ func (s Service) ByTrace(t string) ([]Ref, error) {
 	return out, nil
 }
 
-func (s Service) Supersede(old string, k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields) (Ref, error) {
+func (s Service) Supersede(old string, k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields, verification ...*question.Verification) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -333,7 +362,7 @@ func (s Service) Supersede(old string, k RequestKey, d Decision, reason, respons
 		return Ref{}, fmt.Errorf("self supersede")
 	}
 	g.Supersedes = old
-	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, g)
+	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, g, verification...)
 }
 func (s Service) IsSuperseded(aggregateID string) (bool, error) {
 	if s.Store == nil {

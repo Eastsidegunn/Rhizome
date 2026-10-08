@@ -14,7 +14,7 @@ const raw = {
     { id: 'q-pending', state: 'pending', superseded: false, missionId: 'm-1', requestDigest: 'rhz-question-v1:a' },
     { id: 'q-changes', state: 'changes_requested', superseded: false, missionId: 'm-1', requestDigest: 'rhz-question-v1:b', body: 'req', decisionReason: 'make it shorter', decidedBy: 'unverified-local-operator:alice' },
     { id: 'q-changes-goal', state: 'changes_requested', superseded: false, goalId: 'g-1', requestDigest: 'rhz-question-v1:c' },
-    { id: 'q-approved', state: 'approved', superseded: false, missionId: 'm-1', decisionReason: 'ok', decidedBy: 'bob' },
+    { id: 'q-approved', state: 'approved', superseded: false, missionId: 'm-1', decisionReason: 'ok', decidedBy: 'bob', verification: { status: 'claimed', claimKind: 'relayed' } },
   ],
   deliverables: [],
   edges: [],
