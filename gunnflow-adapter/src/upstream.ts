@@ -48,7 +48,7 @@ const TERMINAL_UNSUPPORTED = 'Rhizome provides no terminal surface yet (its term
 const STREAM_UNSUPPORTED = 'Rhizome provides no contiguous-seq stream channel yet';
 
 /** Fields the cockpit's intents carry; anything else is dropped before sending. */
-const INTENT_FIELDS = new Set([
+export const INTENT_FIELDS: ReadonlySet<string> = new Set([
   'name',
   'prompt',
   'from',
@@ -93,6 +93,22 @@ export function toRhizomeAddress(i: Record<string, unknown>): { kind: string | u
     : action.startsWith('session.') ? { sessionId: nodeId }
     : {};
   return { kind: action, rest: { ...slots, ...address } };
+}
+
+/**
+ * Gate decisions must be bound to the request they answer: Rhizome refuses
+ * gate.approve / gate.reject / gate.requestChanges without the gate's
+ * requestDigest. The adapter supplies it from its own latest snapshot and
+ * never trusts a digest the cockpit sends (FR-RHZ-163).
+ */
+export const DIGEST_BOUND_KINDS: ReadonlySet<string> = new Set(['gate.approve', 'gate.reject', 'gate.requestChanges']);
+export const DIGEST_UNAVAILABLE = 'gate digest unavailable in adapter snapshot';
+
+export function snapshotDigest(wire: UpstreamProjectionEnvelope, gateId: unknown): string | undefined {
+  if (typeof gateId !== 'string') return undefined;
+  const gates = (wire.body as { gates?: Array<{ id?: unknown; requestDigest?: unknown }> }).gates ?? [];
+  const gate = gates.find((g) => g.id === gateId);
+  return typeof gate?.requestDigest === 'string' && gate.requestDigest !== '' ? gate.requestDigest : undefined;
 }
 
 /** Rhizome names the human's text by intent kind: `name` for missions, `instruction` for directions. */
@@ -406,6 +422,12 @@ export async function createRhizomeUpstream(
       const { kind, rest } = toRhizomeAddress((intent ?? {}) as Record<string, unknown>);
       // Only known intent fields travel (the idempotency key is not one yet); kind and actor are set last.
       const fields = toRhizomeFields(kind, Object.fromEntries(Object.entries(rest).filter(([k]) => INTENT_FIELDS.has(k))));
+      if (kind !== undefined && DIGEST_BOUND_KINDS.has(kind)) {
+        // The digest comes from this adapter's snapshot only; a cockpit-sent value never reaches Rhizome.
+        const digest = snapshotDigest(lastWire, rest.gateId);
+        if (digest === undefined) return { accepted: false, reason: DIGEST_UNAVAILABLE };
+        fields.digest = digest;
+      }
       const res = await fetch(`${baseUrl}/v1/intent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

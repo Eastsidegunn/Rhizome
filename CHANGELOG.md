@@ -8,6 +8,15 @@ Until 1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Gunnflow adapter binds `gate.approve`, `gate.reject` and
+  `gate.requestChanges` to the gate's `requestDigest` taken from its own
+  latest snapshot, so cockpit decisions are no longer refused with
+  "digest required". A digest sent by the cockpit is never forwarded, and
+  a gate with no digest in the adapter's snapshot is refused before
+  anything is sent (FR-RHZ-163).
+
 ### Changed
 
 - Journal write or sync failures now poison the process-wide writer until
