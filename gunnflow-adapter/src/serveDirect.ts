@@ -8,7 +8,7 @@
  * id/kind/label/state/relations, revision, the actually-supported capabilities
  * (task pause/resume/instruct, mission.create); artifacts answer 404.
  *
- * Paths come from the contract's DIRECT_WIRE (npm @gunnflow/contract 0.3.1, RHZ-094). The
+ * Paths come from the contract's DIRECT_WIRE (npm @gunnflow/contract 0.3.2, RHZ-094). The
  * optional fifth endpoint, GET /detail/:nodeId, answers
  * from the snapshot already held (./details.ts); its only further fetch is the
  * goal/mission about notes from /v1/context (RHZ-086), failure-isolated.

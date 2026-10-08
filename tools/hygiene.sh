@@ -10,7 +10,6 @@ check_file() {
 			printf '%s\n' "$path" >> "$violations"
 			return 0
 		;;
-		*/gunnflow-adapter/vendor/*.tgz|gunnflow-adapter/vendor/*.tgz) return 0 ;;
 	esac
 	[ -s "$path" ] || return 0
 	if ! LC_ALL=C grep -qI . "$path" 2>/dev/null; then

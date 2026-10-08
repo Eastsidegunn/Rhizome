@@ -252,7 +252,7 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
     expect(ids).toEqual(['gate-3', 'gate-4', 'gate-5']);
   });
 
-  it('A7: every node in a mixed retained projection passes the vendored contract validator', () => {
+  it('A7: every node in a mixed retained projection passes the contract validator', () => {
     const raw = bodyOf([
       gate('unverified', { decidedAt: '2026-10-08T03:12:00Z' }),
       gate('legacy', { verification: { status: 'legacy-asserted' } }),

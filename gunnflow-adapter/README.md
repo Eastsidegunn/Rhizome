@@ -29,10 +29,9 @@ detail item; `decidedAt` is never added to the closed node shape.
 
 ## Requirements and install
 
-Node.js 22.12 or newer is required. The Gunnflow contract package
-`@gunnflow/contract` is installed from npm (MIT). `@gunnflow/upstream-port` is
-not published yet and is still installed from the vendored tarball in
-`vendor/` (license notice: `vendor/LICENSE-gunnflow`).
+Node.js 22.12 or newer is required. Both Gunnflow packages,
+`@gunnflow/contract` and `@gunnflow/upstream-port`, are installed from npm
+(MIT); nothing is vendored.
 
 ```sh
 npm ci

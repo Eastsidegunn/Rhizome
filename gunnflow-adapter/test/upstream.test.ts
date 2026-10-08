@@ -110,7 +110,8 @@ describe('Rhizome upstream adapter', () => {
     // RHZ-072 (FR-RHZ-101): re-packed to contract 0.2.0 (node detail surface); 0.x is minor-strict.
     // RHZ-094 (FR-RHZ-121): re-packed to contract 0.3.0 (execution surface on the wire); 0.2.x is rejected.
     // RHZ-103: contract from npm, 0.3.1 (wire unchanged; peer range only).
-    expect(contractVersion).toBe('0.3.1');
+    // 0.3.2: credential-bearing live URLs are rejected; wire unchanged.
+    expect(contractVersion).toBe('0.3.2');
     expect(u.snapshot().revision).toBeGreaterThanOrEqual(3);
     u.close?.();
   });

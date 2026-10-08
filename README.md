@@ -212,8 +212,7 @@ Adding another ID requires a code change in `validAdapter` in
 [gunnflow-adapter/](gunnflow-adapter/) serves the Gunnflow direct wire in front
 of a running board. It needs Node.js 22.12+. This is a source-only integration:
 the adapter package itself is private (not published to npm). It installs
-`@gunnflow/contract` from npm; `@gunnflow/upstream-port` is not published yet
-and still comes from the vendored tarball in `gunnflow-adapter/vendor/`.
+`@gunnflow/contract` and `@gunnflow/upstream-port` from npm.
 
 ```sh
 cd gunnflow-adapter

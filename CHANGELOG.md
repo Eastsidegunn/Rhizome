@@ -14,12 +14,15 @@ Until 1.0, minor versions may contain breaking changes.
   restart. Write-capable HTTP routes fail with a fixed 503 while read-only
   routes remain available; invalid `serve` flags no longer echo arguments
   (FR-RHZ-144).
-- The adapter installs `@gunnflow/contract` 0.3.1 from npm instead of a
-  vendored tarball (the wire is unchanged; 0.3.1 only widens the package's
-  vitest peer range). `@gunnflow/upstream-port` stays vendored until it is
-  published. The adapter test toolchain moves from Vitest 3 to Vitest 5,
-  which clears the known `npm audit` advisories; the adapter now needs
-  Node.js 22.12 or newer.
+- The adapter installs `@gunnflow/contract` 0.3.2 and
+  `@gunnflow/upstream-port` 0.1.0 from npm instead of vendored tarballs
+  (the wire is unchanged; 0.3.1 only widened the package's vitest peer
+  range and 0.3.2 only adds a rule rejecting live URLs that carry
+  credentials) and claims contract version 0.3.2. The directory
+  `gunnflow-adapter/vendor/` and its vendoring instructions are gone. The
+  adapter test toolchain moves from Vitest 3 to Vitest 5, which clears the
+  known `npm audit` advisories; the adapter now needs Node.js 22.12 or
+  newer.
 
 ### Added
 
