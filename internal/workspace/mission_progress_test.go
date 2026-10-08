@@ -16,7 +16,6 @@ import (
 
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/surface"
 )
@@ -24,7 +23,7 @@ import (
 func progress082(t *testing.T, s events.Port, id string, in Intent) RelayResult {
 	t.Helper()
 	in.Kind, in.MissionID = "mission.progress", id
-	res, err := RelayIntent(s, in, "tester", true)
+	res, err := RelayIntent(s, in, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +156,7 @@ func TestMissionProgressValidationNoWriteFRRHZ113(t *testing.T) {
 			t.Fatalf("%+v: %+v (want %q)", c.in, res, c.want)
 		}
 	}
-	if res, err := RelayIntent(s, Intent{Kind: "mission.progress", CurrentAction: "x"}, "tester", true); err != nil || res.Accepted || res.Reason != "missionId required" {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.progress", CurrentAction: "x"}, "tester", noAuthority()); err != nil || res.Accepted || res.Reason != "missionId required" {
 		t.Fatalf("missing id: %+v %v", res, err)
 	}
 	if after := journalBytes069(t, s); after != before {
@@ -284,7 +283,7 @@ func TestMissionProgressIdempotentFRRHZ113(t *testing.T) {
 // mission with no surface stream replay unchanged.
 func TestMissionProgressJournalRoundTripFRRHZ113(t *testing.T) {
 	path := t.TempDir() + "/j.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +294,7 @@ func TestMissionProgressJournalRoundTripFRRHZ113(t *testing.T) {
 	if _, err = (surface.Service{Store: j}).ReportProgress("mission-2", "legacy step", f082(.4), "coordinator"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = (surface.Service{Store: j}).Instruct("mission-2", "keep going", "test-operator", true, "c-1"); err != nil {
+	if _, err = (surface.Service{Store: j}).Instruct("mission-2", "keep going", "test-operator", noAuthority(), "c-1"); err != nil {
 		t.Fatal(err)
 	}
 	steps := []struct {
@@ -310,7 +309,7 @@ func TestMissionProgressJournalRoundTripFRRHZ113(t *testing.T) {
 		{Intent{Kind: "mission.progress", MissionID: "mission-3", CurrentAction: "y"}, false},
 	}
 	for _, st := range steps {
-		res, e := RelayIntent(j, st.in, "tester", true)
+		res, e := RelayIntent(j, st.in, "tester", noAuthority())
 		if e != nil || res.Accepted != st.want {
 			t.Fatalf("%+v: %+v err=%v", st.in, res, e)
 		}
@@ -337,7 +336,7 @@ func TestMissionProgressJournalRoundTripFRRHZ113(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if j, err = journal.Open(path); err != nil {
+	if j, err = openTestJournal(path); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = j.Close() })
@@ -349,7 +348,7 @@ func TestMissionProgressJournalRoundTripFRRHZ113(t *testing.T) {
 		t.Fatalf("context diverged: %v vs %v", ctx1, ctx2)
 	}
 	sv, err := (surface.Service{Store: j}).ByMission("mission-1")
-	if err != nil || sv.Revision != 2 || sv.ProgressSource != "relay:tester" || sv.BlockedReason != "flaky" {
+	if err != nil || sv.Revision != 2 || sv.ProgressSource != "relay:unverified-local-operator:tester" || sv.BlockedReason != "flaky" {
 		t.Fatalf("surface replay: %+v err=%v", sv, err)
 	}
 }
@@ -362,7 +361,7 @@ func TestMissionProgressBlockedReasonNotAfterTerminalFRRHZ113(t *testing.T) {
 	if res := progress082(t, s, "mission-p6", Intent{BlockedReason: "waiting on CI"}); !res.Accepted {
 		t.Fatalf("progress: %+v", res)
 	}
-	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-p6"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-p6"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("complete: %v %+v", err, res)
 	}
 	p, err := Snapshot(s)

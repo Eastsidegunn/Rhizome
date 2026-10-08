@@ -13,7 +13,6 @@ import (
 
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 )
 
@@ -70,7 +69,7 @@ func TestMissionCompleteFromWaitingHumanFRRHZ110(t *testing.T) {
 			t.Fatalf("%s: needsYou=%d attention=%d before, want 1/1", c.kind, ny, att)
 		}
 		n := len(s.All())
-		res, err := RelayIntent(s, Intent{Kind: c.kind, MissionID: id, Reason: "closed by reviewer"}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: c.kind, MissionID: id, Reason: "closed by reviewer"}, "tester", noAuthority())
 		if err != nil || !res.Accepted {
 			t.Fatalf("%s: %+v err=%v", c.kind, res, err)
 		}
@@ -84,7 +83,7 @@ func TestMissionCompleteFromWaitingHumanFRRHZ110(t *testing.T) {
 		if p.To != string(c.to) || p.DecisionID != "decision-"+c.kind+"-"+id || p.Reason != "closed by reviewer" {
 			t.Fatalf("%s: payload %s", c.kind, last.Payload)
 		}
-		if last.CorrelationID != "relay:tester" {
+		if last.CorrelationID != "relay:unverified-local-operator:tester" {
 			t.Fatalf("%s: correlation %q", c.kind, last.CorrelationID)
 		}
 		m := replay069(t, s, id)
@@ -101,7 +100,7 @@ func TestMissionCompleteFromWaitingHumanFRRHZ110(t *testing.T) {
 	// 미검증 actor → correlation 프리픽스 규약(069 변형 2와 동일).
 	s := &events.Store{}
 	missionIn062(t, s, "mission-h-unv", path...)
-	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-h-unv"}, "op", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-h-unv"}, "op", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	if last, p := lastPayload069(t, s); last.CorrelationID != "relay:unverified-local-operator:op" || p.Reason != "" {
@@ -120,7 +119,7 @@ func TestMissionFailFromBlockedFRRHZ110(t *testing.T) {
 	}
 	before := journalBytes069(t, s)
 	for _, reason := range []string{"", "  "} {
-		res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-b", Reason: reason}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-b", Reason: reason}, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != "reason required" {
 			t.Fatalf("reason %q: %+v err=%v", reason, res, err)
 		}
@@ -129,7 +128,7 @@ func TestMissionFailFromBlockedFRRHZ110(t *testing.T) {
 		t.Fatal("rejected fail changed journal")
 	}
 	n := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-b", Reason: "dependency never came"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-b", Reason: "dependency never came"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -137,7 +136,7 @@ func TestMissionFailFromBlockedFRRHZ110(t *testing.T) {
 		t.Fatalf("journal grew %d, want exactly 1 (no intermediate ready/running)", got-n)
 	}
 	last, p := lastPayload069(t, s)
-	if p.To != "failed" || p.DecisionID != "decision-mission.fail-mission-b" || p.Reason != "dependency never came" || last.CorrelationID != "relay:tester" {
+	if p.To != "failed" || p.DecisionID != "decision-mission.fail-mission-b" || p.Reason != "dependency never came" || last.CorrelationID != "relay:unverified-local-operator:tester" {
 		t.Fatalf("payload %+v corr=%q", p, last.CorrelationID)
 	}
 	m := replay069(t, s, "mission-b")
@@ -156,7 +155,7 @@ func TestMissionFailFromBlockedFRRHZ110(t *testing.T) {
 	s = &events.Store{}
 	blockedIn079(t, s, "mission-b2", "dependency unavailable")
 	n = len(s.All())
-	res, err = RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-b2"}, "tester", true)
+	res, err = RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-b2"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -192,7 +191,7 @@ func TestMissionCompleteTerminalStillRejectedFRRHZ110(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: id}, "tester", true); err != nil || !res.Accepted {
+			if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: id}, "tester", noAuthority()); err != nil || !res.Accepted {
 				t.Fatal(res, err)
 			}
 		},
@@ -204,7 +203,7 @@ func TestMissionCompleteTerminalStillRejectedFRRHZ110(t *testing.T) {
 			if _, err := ms.TransitionWithReason(id, 2, domain.MissionBlocked, "dep"); err != nil {
 				t.Fatal(err)
 			}
-			if res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: id, Reason: "gave up"}, "tester", true); err != nil || !res.Accepted {
+			if res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: id, Reason: "gave up"}, "tester", noAuthority()); err != nil || !res.Accepted {
 				t.Fatal(res, err)
 			}
 		},
@@ -216,7 +215,7 @@ func TestMissionCompleteTerminalStillRejectedFRRHZ110(t *testing.T) {
 		setup(t, s, id)
 		before := journalBytes069(t, s)
 		for _, kind := range []string{"mission.complete", "mission.fail"} {
-			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", true)
+			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", noAuthority())
 			if err != nil || res.Accepted || res.Reason != domain.ErrInvalidState.Error() {
 				t.Fatalf("%s on %s: %+v err=%v", kind, state, res, err)
 			}
@@ -243,7 +242,7 @@ func TestMissionCompleteQueuedPausedStillRejectedFRRHZ110(t *testing.T) {
 		missionIn062(t, s, id, c.path...)
 		before := journalBytes069(t, s)
 		for _, kind := range []string{"mission.complete", "mission.fail"} {
-			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", true)
+			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", noAuthority())
 			if err != nil || res.Accepted || res.Reason != c.state+"에서 종결 불가: task.resume 먼저" {
 				t.Fatalf("%s %s: %+v err=%v", id, kind, res, err)
 			}
@@ -262,7 +261,7 @@ func TestResumeFromWaitingHumanBlockedStillRejectedFRRHZ110(t *testing.T) {
 	blockedIn079(t, s, "mission-b", "dep")
 	before := journalBytes069(t, s)
 	for _, id := range []string{"mission-h", "mission-b"} {
-		res, err := RelayIntent(s, Intent{Kind: "task.resume", TaskID: id}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "task.resume", TaskID: id}, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != domain.ErrInvalidState.Error() {
 			t.Fatalf("%s resume: %+v err=%v", id, res, err)
 		}
@@ -271,7 +270,7 @@ func TestResumeFromWaitingHumanBlockedStillRejectedFRRHZ110(t *testing.T) {
 		t.Fatal("rejected resume changed journal")
 	}
 	for id, kind := range map[string]string{"mission-h": "mission.complete", "mission-b": "mission.fail"} {
-		if res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "closed"}, "tester", true); err != nil || !res.Accepted {
+		if res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "closed"}, "tester", noAuthority()); err != nil || !res.Accepted {
 			t.Fatalf("%s %s: %+v err=%v", id, kind, res, err)
 		}
 	}
@@ -283,7 +282,7 @@ func TestResumeFromWaitingHumanBlockedStillRejectedFRRHZ110(t *testing.T) {
 // mission.created/mission.transitioned만(신규 타입 0).
 func TestMissionCompleteWaitingHumanBlockedJournalRoundTripFRRHZ110(t *testing.T) {
 	path := t.TempDir() + "/j.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +301,7 @@ func TestMissionCompleteWaitingHumanBlockedJournalRoundTripFRRHZ110(t *testing.T
 		{Intent{Kind: "mission.complete", MissionID: "mission-b2"}, true},
 	}
 	for _, st := range steps {
-		res, e := RelayIntent(j, st.in, "tester", true)
+		res, e := RelayIntent(j, st.in, "tester", noAuthority())
 		if e != nil || res.Accepted != st.want {
 			t.Fatalf("%+v: %+v err=%v", st.in, res, e)
 		}
@@ -329,7 +328,7 @@ func TestMissionCompleteWaitingHumanBlockedJournalRoundTripFRRHZ110(t *testing.T
 			}
 			if p.To == "succeeded" || p.To == "failed" {
 				terminals++
-				if p.DecisionID == "" || e.CorrelationID != "relay:tester" {
+				if p.DecisionID == "" || e.CorrelationID != "relay:unverified-local-operator:tester" {
 					t.Fatalf("terminal without decision/correlation: %+v %s", e, e.Payload)
 				}
 			}
@@ -348,7 +347,7 @@ func TestMissionCompleteWaitingHumanBlockedJournalRoundTripFRRHZ110(t *testing.T
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

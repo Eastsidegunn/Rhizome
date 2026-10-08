@@ -2,6 +2,7 @@ package journal
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"rhizome/internal/events"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type journalFile interface {
@@ -21,6 +23,8 @@ type Journal struct {
 	mu       sync.RWMutex
 	file     journalFile
 	store    *events.Store
+	guard    events.Guard
+	readOnly bool
 	poisoned atomic.Bool
 	// OnPoison is invoked exactly once, while mu is held, when a file Write or
 	// Sync first poisons the journal. The callback must not call List or All.
@@ -30,8 +34,23 @@ type Journal struct {
 var _ events.Port = (*Journal)(nil)
 var _ events.PoisonLatch = (*Journal)(nil)
 
-func Open(path string) (*Journal, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+func OpenGuarded(path string, guard events.Guard) (*Journal, error) {
+	return open(path, guard, false)
+}
+
+func OpenReadOnly(path string, guard events.Guard) (*Journal, error) {
+	return open(path, guard, true)
+}
+
+func open(path string, guard events.Guard, readOnly bool) (*Journal, error) {
+	if guard == nil {
+		return nil, fmt.Errorf("nil journal guard")
+	}
+	flags := os.O_RDWR | os.O_CREATE | os.O_APPEND
+	if readOnly {
+		flags = os.O_RDONLY
+	}
+	f, err := os.OpenFile(path, flags, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -60,13 +79,17 @@ func Open(path string) (*Journal, error) {
 			f.Close()
 			return nil, fmt.Errorf("sequence gap")
 		}
+		if er = guard.CheckReplay(s, e); er != nil {
+			f.Close()
+			return nil, er
+		}
 		if er = s.AppendRevision(e); er != nil {
 			f.Close()
 			return nil, er
 		}
 		seq++
 	}
-	return &Journal{file: f, store: s}, nil
+	return &Journal{file: f, store: s, guard: guard, readOnly: readOnly}, nil
 }
 
 func (j *Journal) Poisoned() bool {
@@ -89,11 +112,15 @@ func (j *Journal) Append(expected uint64, e events.Event) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	e.Payload = bytes.Clone(e.Payload)
 	if j.Poisoned() {
 		return events.ErrPoisoned
 	}
 	if j.file == nil {
 		return fmt.Errorf("closed journal")
+	}
+	if j.readOnly {
+		return fmt.Errorf("read-only journal")
 	}
 	if e.Revision != expected+1 {
 		return events.ErrRevisionConflict
@@ -105,6 +132,9 @@ func (j *Journal) Append(expected uint64, e events.Event) error {
 		return events.ErrRevisionConflict
 	}
 	e.Sequence = uint64(j.store.Len() + 1)
+	if err := j.guard.CheckAppend(j.store, e, time.Now().UTC()); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(e)
 	if err != nil {
 		return err

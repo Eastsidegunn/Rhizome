@@ -36,7 +36,7 @@ func fixture065(t *testing.T) (s *events.Store, noteIDv string) {
 	if _, err := ms.Create("mission-dev", "goal-dev", "dev mission", "done"); err != nil {
 		t.Fatal(err)
 	}
-	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "dev loop note", MemoryKind: "observation", GoalID: "goal-dev"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "dev loop note", MemoryKind: "observation", GoalID: "goal-dev"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -45,7 +45,7 @@ func fixture065(t *testing.T) (s *events.Store, noteIDv string) {
 
 func relay065(t *testing.T, s *events.Store, in Intent) RelayResult {
 	t.Helper()
-	res, err := RelayIntent(s, in, "tester", true)
+	res, err := RelayIntent(s, in, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}

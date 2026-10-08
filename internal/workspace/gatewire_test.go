@@ -88,7 +88,7 @@ func TestSnapshotPendingGateFromRequestFRRHZ078(t *testing.T) {
 // digest and display material.
 func TestSnapshotGateIdentityContinuityFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
-	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -107,7 +107,7 @@ func TestSnapshotGateDTOSchemaFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
 	// A smoke-style input without any surfaced record: digest yes, display no.
 	smokeKey := approval.RequestKey{TraceID: gwTrace, SpanID: gwSpan, RequestID: "r-smoke"}
-	smoke, err := (approval.Service{Store: s}).RecordInputWithGate(smokeKey, approval.Allow, "", "resp-manual", "hx-args-digest-v1:smoke", "test-operator", "smoke", "", true, approval.GateFields{})
+	smoke, err := appendLegacyApprovalInput(s, smokeKey, approval.Allow, "", "resp-manual", "hx-args-digest-v1:smoke", "test-operator", "smoke", "", approval.GateFields{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestSnapshotGateDTOSchemaFRRHZ078(t *testing.T) {
 // response_id deterministic, actor marked unverified.
 func TestGateApproveRecordsInputFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
-	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -182,11 +182,11 @@ func TestGateApproveRecordsInputFRRHZ078(t *testing.T) {
 func TestGateRejectRequiresReasonVerbatimFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: gr.ID, Digest: gwDigest}, "alice", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: gr.ID, Digest: gwDigest}, "alice", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "reason required" || len(s.All()) != before {
 		t.Fatal(res, err)
 	}
-	res, err = RelayIntent(s, Intent{Kind: "gate.reject", GateID: gr.ID, Digest: gwDigest, Reason: "위험한 작업"}, "alice", false)
+	res, err = RelayIntent(s, Intent{Kind: "gate.reject", GateID: gr.ID, Digest: gwDigest, Reason: "위험한 작업"}, "alice", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -201,7 +201,7 @@ func TestGateRejectRequiresReasonVerbatimFRRHZ078(t *testing.T) {
 func TestGateApproveWithoutRequestRejectedFRRHZ078(t *testing.T) {
 	s := &events.Store{}
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: "appr-nonexistent", Digest: gwDigest}, "alice", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: "appr-nonexistent", Digest: gwDigest}, "alice", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "관측된 승인 요청 없음" || len(s.All()) != before {
 		t.Fatal(res, err)
 	}
@@ -221,7 +221,7 @@ func TestGateApproveDigestMismatchRejectedFRRHZ078(t *testing.T) {
 		{noPrefix.ID, "raw-equal-digest", "digest mismatch"}, // equal but unprefixed: VerifyDigest refuses
 	}
 	for _, c := range cases {
-		res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: c.gate, Digest: c.digest}, "alice", false)
+		res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: c.gate, Digest: c.digest}, "alice", noAuthority())
 		if err != nil || res.Accepted || res.Reason != c.reason {
 			t.Fatalf("%+v -> %+v %v", c, res, err)
 		}
@@ -235,11 +235,11 @@ func TestGateApproveDigestMismatchRejectedFRRHZ078(t *testing.T) {
 // the established wording.
 func TestGateApproveAlreadyInputRejectedFRRHZ078(t *testing.T) {
 	s, gr := pendingGateFixture(t)
-	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "bob", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "bob", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "gate already has input" || len(s.All()) != before {
 		t.Fatal(res, err)
 	}
@@ -258,14 +258,14 @@ func TestGateRequestChangesPendingFRRHZ078(t *testing.T) {
 		}
 		return n
 	}
-	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: gr.ID, Instruction: "고쳐주세요"}, "alice", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: gr.ID, Instruction: "고쳐주세요"}, "alice", noAuthority())
 	if err != nil || !res.Accepted || countInstruct() != 1 {
 		t.Fatal(res, err, countInstruct())
 	}
-	if res, err = RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", false); err != nil || !res.Accepted {
+	if res, err = RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest}, "alice", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
-	res, err = RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: gr.ID, Instruction: "고쳐주세요"}, "alice", false)
+	res, err = RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: gr.ID, Instruction: "고쳐주세요"}, "alice", noAuthority())
 	if err != nil || !res.Accepted || countInstruct() != 2 {
 		t.Fatal(res, err, countInstruct())
 	}

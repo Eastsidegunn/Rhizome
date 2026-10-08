@@ -18,7 +18,6 @@ import (
 
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 )
 
 func workspaceBody080(t *testing.T, s events.Port, query string) []byte {
@@ -71,7 +70,7 @@ func assignedCount080(s events.Port, id string) int {
 
 func assign080(t *testing.T, s events.Port, id, assignee string) RelayResult {
 	t.Helper()
-	res, err := RelayIntent(s, Intent{Kind: "mission.assign", MissionID: id, Assignee: assignee, Reason: "handoff"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.assign", MissionID: id, Assignee: assignee, Reason: "handoff"}, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +186,7 @@ func TestMissionAssignRejectedNoWriteFRRHZ111(t *testing.T) {
 		{Intent{Kind: "mission.assign", MissionID: "mission-nope", Assignee: "agent-a"}, "mission event stream is empty"},
 	}
 	for _, c := range cases {
-		res, err := RelayIntent(s, c.in, "tester", true)
+		res, err := RelayIntent(s, c.in, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != c.want {
 			t.Fatalf("%+v: %+v err=%v (want reason %q)", c.in, res, err, c.want)
 		}
@@ -316,7 +315,7 @@ func TestMissionAssignByHandleFRRHZ111(t *testing.T) {
 	if tk := tasks080(t, workspaceBody080(t, s, ""))["mission-h"]; tk["handle"] != handle {
 		t.Fatalf("handle fixture %v", tk)
 	}
-	res, err := RelayIntent(s, Intent{Kind: "mission.assign", MissionID: handle, Assignee: "agent-a"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.assign", MissionID: handle, Assignee: "agent-a"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("%+v err=%v", res, err)
 	}
@@ -333,7 +332,7 @@ func TestMissionAssignByHandleFRRHZ111(t *testing.T) {
 // /v1/workspace (filtered and not) byte-identical across the restart.
 func TestMissionAssignJournalRoundTripFRRHZ111(t *testing.T) {
 	path := t.TempDir() + "/j.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +351,7 @@ func TestMissionAssignJournalRoundTripFRRHZ111(t *testing.T) {
 		{Intent{Kind: "mission.assign", MissionID: "mission-1", Assignee: " "}, false},
 	}
 	for _, st := range steps {
-		res, e := RelayIntent(j, st.in, "tester", true)
+		res, e := RelayIntent(j, st.in, "tester", noAuthority())
 		if e != nil || res.Accepted != st.want {
 			t.Fatalf("%+v: %+v err=%v", st.in, res, e)
 		}
@@ -385,7 +384,7 @@ func TestMissionAssignJournalRoundTripFRRHZ111(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

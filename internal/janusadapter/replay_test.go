@@ -88,7 +88,7 @@ func observationStore(t *testing.T) (*events.Store, execution.Ref, approval.Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := (approval.Service{Store: s}).RecordInput(approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "r1"}, approval.Allow, "", "resp", "hx-args-digest-v1:opaque", "operator", "corr", "", false)
+	a, err := (approval.Service{Store: s}).RecordInput(approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "r1"}, approval.Allow, "", "resp", "hx-args-digest-v1:opaque", "operator", "corr", "", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestApprovalObservationTupleMatchFRRHZ076(t *testing.T) {
 			if field == "trace_id" {
 				other := approval.RequestKey{TraceID: strings.Repeat("a", 32), SpanID: replaySpan, RequestID: "r1"}
 				var err error
-				a, err = (approval.Service{Store: s}).RecordInput(other, approval.Allow, "", "resp", "digest", "op", "", "", false)
+				a, err = (approval.Service{Store: s}).RecordInput(other, approval.Allow, "", "resp", "digest", "op", "", "", noAuthority())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -538,7 +538,7 @@ func TestExecutionAppendFailureAndRetryFRRHZ076(t *testing.T) {
 	}
 	// Also fail the second approval append after the first has committed.
 	s, r, a = observationStore(t)
-	a2, err := (approval.Service{Store: s}).RecordInput(approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "r2"}, approval.Allow, "", "resp2", "digest", "op", "", "", false)
+	a2, err := (approval.Service{Store: s}).RecordInput(approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "r2"}, approval.Allow, "", "resp2", "digest", "op", "", "", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ func TestQuestionLifecycleAndDigestFRRHZ081(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if q.Digest != question.Digest(q.Title, q.Body, q.Recommendation) || q.ID != question.IDFor(q.Title, q.Body, q.Recommendation) {
+	if q.Digest != question.Digest(q.Title, q.Body, q.Recommendation) || q.ID != mustQuestionID(q.Title, q.Body, q.Recommendation) {
 		t.Fatal("digest/id")
 	}
 	q2, e := svc.Ask("Title", body, "recommend", "", "", "req", "corr")
@@ -142,7 +142,7 @@ func TestQuestionAnswerDigestGuardsFRRHZ081(t *testing.T) {
 	}
 	for _, digest := range []string{q2.Digest, "hx-args-digest-v1:" + q3.Digest[len("rhz-question-v1:"):]} {
 		before = len(s.All())
-		res, relayErr := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: q3.ID, Digest: digest}, "operator", false)
+		res, relayErr := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: q3.ID, Digest: digest}, "operator", noAuthority())
 		if relayErr != nil || res.Accepted || res.Reason == "" {
 			t.Fatalf("relay accepted invalid digest: result=%+v err=%v", res, relayErr)
 		}
@@ -150,7 +150,7 @@ func TestQuestionAnswerDigestGuardsFRRHZ081(t *testing.T) {
 			t.Fatalf("relay mismatch appended event: %d -> %d", before, got)
 		}
 	}
-	res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: q3.ID, Digest: q3.Digest}, "operator", false)
+	res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: q3.ID, Digest: q3.Digest}, "operator", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("valid relay digest rejected: %+v %v", res, err)
 	}

@@ -44,7 +44,7 @@ func devSteps() []procedure.Step {
 }
 
 func spec063(runID string) RunSpec {
-	return RunSpec{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: runID, Params: map[string]string{"branch": "feat-x"}, Actor: "tester", Verified: true}
+	return RunSpec{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: runID, Params: map[string]string{"branch": "feat-x"}, Actor: "tester"}
 }
 
 type createdPayload struct {
@@ -223,10 +223,10 @@ func TestRunPrevalidationNoPartialWriteFRRHZ092(t *testing.T) {
 	}
 	before, _ := json.Marshal(s.All())
 	bad := []RunSpec{
-		{ProcedureID: "proc-ghost", GoalID: "goal-dev", RunID: "x1", Actor: "t", Verified: true},
-		{ProcedureID: "proc-dev", GoalID: "goal-ghost", RunID: "x2", Actor: "t", Verified: true},
-		{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: "r4", Actor: "t", Verified: true}, // 사용 중
-		{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: "", Actor: "t", Verified: true},
+		{ProcedureID: "proc-ghost", GoalID: "goal-dev", RunID: "x1", Actor: "t"},
+		{ProcedureID: "proc-dev", GoalID: "goal-ghost", RunID: "x2", Actor: "t"},
+		{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: "r4", Actor: "t"}, // 사용 중
+		{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: "", Actor: "t"},
 	}
 	for _, spec := range bad {
 		if _, err := Run(s, spec); err == nil {

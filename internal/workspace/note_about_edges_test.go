@@ -67,7 +67,7 @@ func edgeEvents(s *events.Store) []events.Event {
 func TestNoteCreateDualWritesAboutEdgeFRRHZ087(t *testing.T) {
 	s := rhz057Fixture(t)
 	n := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "linked note", MemoryKind: "observation", MissionID: "mission-ms"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "linked note", MemoryKind: "observation", MissionID: "mission-ms"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -96,7 +96,7 @@ func TestNoteCreateDualWritesAboutEdgeFRRHZ087(t *testing.T) {
 // T6: 무타깃 note.create는 기존 동작과 완전 동일 — 엣지 0, FK 빈 값.
 func TestNoteCreateWithoutTargetUnchangedFRRHZ087(t *testing.T) {
 	s := rhz057Fixture(t)
-	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "plain note", MemoryKind: "observation"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "plain note", MemoryKind: "observation"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -118,7 +118,7 @@ func TestNoteCreateUnknownTargetNoPartialWriteFRRHZ087(t *testing.T) {
 		{Kind: "note.create", Content: "ghost mission note", MemoryKind: "observation", MissionID: "mission-ghost"},
 		{Kind: "note.create", Content: "ghost goal note", MemoryKind: "observation", GoalID: "goal-ghost"},
 	} {
-		res, err := RelayIntent(s, in, "tester", true)
+		res, err := RelayIntent(s, in, "tester", noAuthority())
 		if err != nil || res.Accepted {
 			t.Fatal(res, err)
 		}
@@ -137,11 +137,11 @@ func TestNoteCreateUnknownTargetNoPartialWriteFRRHZ087(t *testing.T) {
 func TestNoteCreateResubmitNoDuplicateEdgeFRRHZ087(t *testing.T) {
 	s := rhz057Fixture(t)
 	in := Intent{Kind: "note.create", Content: "idempotent note", MemoryKind: "observation", MissionID: "mission-ms"}
-	if res, err := RelayIntent(s, in, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, in, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	before := journalJSON(t, s)
-	res, err := RelayIntent(s, in, "tester", true)
+	res, err := RelayIntent(s, in, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -155,12 +155,12 @@ func TestNoteCreateResubmitNoDuplicateEdgeFRRHZ087(t *testing.T) {
 func TestKnowledgeAboutReverseQueryFRRHZ087(t *testing.T) {
 	s := rhz057Fixture(t)
 	in := Intent{Kind: "note.create", Content: "both targets", MemoryKind: "observation", GoalID: "goal-g", MissionID: "mission-ms"}
-	if res, err := RelayIntent(s, in, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, in, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	id := noteID("both targets")
 	// 무관 엣지: contains(goal-g→goal-g2).
-	if _, err := (edge.Service{Store: s}).Create(edge.Edge{ID: "e-contains", From: edge.Endpoint{Type: "goal", ID: "goal-g"}, To: edge.Endpoint{Type: "goal", ID: "goal-g2"}, Kind: edge.Contains, Actor: "tester", Correlation: "test", Verified: true}); err != nil {
+	if _, err := (edge.Service{Store: s}).Create(edge.Spec{ID: "e-contains", From: edge.Endpoint{Type: "goal", ID: "goal-g"}, To: edge.Endpoint{Type: "goal", ID: "goal-g2"}, Kind: edge.Contains, Actor: "tester", Correlation: "test"}, noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	p, err := KnowledgeAbout(s, id)
@@ -175,7 +175,7 @@ func TestKnowledgeAboutReverseQueryFRRHZ087(t *testing.T) {
 		t.Fatalf("targets %+v, want %+v", p.Targets, want)
 	}
 	// 엣지 없는 memory.
-	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "lonely", MemoryKind: "observation"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "lonely", MemoryKind: "observation"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	p2, err := KnowledgeAbout(s, noteID("lonely"))
@@ -233,7 +233,7 @@ func TestKnowledgeAboutHTTPFRRHZ087(t *testing.T) {
 		t.Fatal("revision missing")
 	}
 	// 엣지 없는 memory → 빈 배열 리터럴.
-	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "lonely wire", MemoryKind: "observation"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "lonely wire", MemoryKind: "observation"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	resp2, err := http.Get(srv.URL + "/v1/knowledge?about=" + noteID("lonely wire"))
@@ -261,10 +261,10 @@ func TestKnowledgeAboutHTTPFRRHZ087(t *testing.T) {
 // 나타나고 기존 스냅샷 재생이 오류 없이 동작.
 func TestWorkspaceProjectionIncludesNewKindsFRRHZ087(t *testing.T) {
 	s := rhz057Fixture(t)
-	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "proj note", MemoryKind: "observation", MissionID: "mission-ms"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "proj note", MemoryKind: "observation", MissionID: "mission-ms"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
-	if _, err := (edge.Service{Store: s}).Create(edge.Edge{ID: "e-proj-contains", From: edge.Endpoint{Type: "goal", ID: "goal-g"}, To: edge.Endpoint{Type: "goal", ID: "goal-g2"}, Kind: edge.Contains, Actor: "tester", Correlation: "test", Verified: true}); err != nil {
+	if _, err := (edge.Service{Store: s}).Create(edge.Spec{ID: "e-proj-contains", From: edge.Endpoint{Type: "goal", ID: "goal-g"}, To: edge.Endpoint{Type: "goal", ID: "goal-g2"}, Kind: edge.Contains, Actor: "tester", Correlation: "test"}, noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(NewHTTP(s).Handler())
@@ -283,7 +283,7 @@ func TestWorkspaceProjectionIncludesNewKindsFRRHZ087(t *testing.T) {
 // T12: 파생 재계산 — 저널 재생본에서 역방향 질의 결과 동일.
 func TestAboutRecomputableFromEventsFRRHZ087(t *testing.T) {
 	s := rhz057Fixture(t)
-	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "replay note", MemoryKind: "observation", GoalID: "goal-g", MissionID: "mission-ms"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "replay note", MemoryKind: "observation", GoalID: "goal-g", MissionID: "mission-ms"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	id := noteID("replay note")

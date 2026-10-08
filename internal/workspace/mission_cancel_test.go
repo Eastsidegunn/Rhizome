@@ -39,7 +39,7 @@ func missionIn062(t *testing.T, s *events.Store, id string, path ...domain.Missi
 
 func cancelMission062(t *testing.T, s *events.Store, id string) RelayResult {
 	t.Helper()
-	res, err := RelayIntent(s, Intent{Kind: "mission.cancel", MissionID: id}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.cancel", MissionID: id}, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestMissionCancelUnknownTargetRejectedFRRHZ091(t *testing.T) {
 		{Kind: "mission.cancel", MissionID: "mission-ghost"},
 		{Kind: "mission.cancel"},
 	} {
-		res, err := RelayIntent(s, in, "tester", true)
+		res, err := RelayIntent(s, in, "tester", noAuthority())
 		if err != nil || res.Accepted {
 			t.Fatalf("%+v: %+v err=%v", in, res, err)
 		}
@@ -249,7 +249,7 @@ func TestMissionCancelRecomputableFRRHZ091(t *testing.T) {
 // 둘 다 cancelled로 투영. RHZ-061의 반쪽 sweep이 완성됨을 한 시나리오로 핀.
 func TestFullSweepGoalAndMissionHTTPFRRHZ091(t *testing.T) {
 	s := &events.Store{}
-	if res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "leftover", Prompt: "done"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "leftover", Prompt: "done"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	srv := httptest.NewServer(NewHTTP(s).Handler())

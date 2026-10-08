@@ -6,6 +6,7 @@ import (
 	"math"
 	"rhizome/internal/events"
 	"rhizome/internal/projector"
+	"rhizome/internal/trust"
 	"sort"
 	"strings"
 	"time"
@@ -113,14 +114,14 @@ func (s Service) Progress(id, actor, action string, p *float64, blockedReason st
 	}
 	return s.append(id, "surface.progressed", progressed{id, actor, action, blockedReason, p}, cur.Revision)
 }
-func (s Service) Instruct(id, text, actor string, verified bool, correlation string) (State, error) {
+func (s Service) Instruct(id, text, actor string, auth trust.Authority, correlation string) (State, error) {
 	if s.Store == nil {
 		return State{}, fmt.Errorf("nil event store")
 	}
 	if strings.TrimSpace(text) == "" || strings.TrimSpace(actor) == "" || strings.TrimSpace(correlation) == "" {
 		return State{}, fmt.Errorf("invalid instruction")
 	}
-	if !verified && !strings.HasPrefix(actor, "unverified-local-operator:") {
+	if auth == (trust.Authority{}) && !strings.HasPrefix(actor, "unverified-local-operator:") {
 		actor = "unverified-local-operator:" + actor
 	}
 	cur, e := s.ByMission(id)

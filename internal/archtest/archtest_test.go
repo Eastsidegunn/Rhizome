@@ -143,6 +143,37 @@ func TestRepositoryObeysKernelBoundaryFRRHZ085(t *testing.T) {
 	}
 }
 
+func TestTrustImportsOnlyStdlibAndEventsFRRHZ146(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "trust", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var productionFiles int
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		productionFiles++
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imported := range parsed.Imports {
+			importPath := strings.Trim(imported.Path.Value, `"`)
+			if importPath == "rhizome/internal/events" {
+				continue
+			}
+			first := strings.SplitN(importPath, "/", 2)[0]
+			if strings.HasPrefix(importPath, "rhizome/") || strings.Contains(first, ".") {
+				t.Errorf("%s imports %q; only stdlib and rhizome/internal/events are allowed", path, importPath)
+			}
+		}
+	}
+	if productionFiles == 0 {
+		t.Fatal("no production Go files found in internal/trust")
+	}
+}
+
 // FR-RHZ-154: request is an exec-kernel package; Allowed remains the exact
 // pre-RHZ-118 exception list.
 func TestRequestLayerPinnedFRRHZ154(t *testing.T) {

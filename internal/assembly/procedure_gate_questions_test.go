@@ -33,7 +33,7 @@ func plainSteps083() []procedure.Step {
 }
 
 func spec083(runID string) RunSpec {
-	return RunSpec{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: runID, Actor: "tester", Verified: true, Correlation: "corr-" + runID}
+	return RunSpec{ProcedureID: "proc-dev", GoalID: "goal-dev", RunID: runID, Actor: "tester", Correlation: "corr-" + runID}
 }
 
 func questionEvents(s *events.Store, from int) []events.Event {
@@ -84,7 +84,7 @@ func TestRunAsksGateQuestionPerNeedsGateStepFRRHZ114(t *testing.T) {
 		if q.RequestedBy != "unverified-local-operator:tester" || q.CorrelationID != "corr-r1" || qs[i].CorrelationID != "corr-r1" {
 			t.Fatalf("question %d requestedBy=%q corr=%q/%q", i, q.RequestedBy, q.CorrelationID, qs[i].CorrelationID)
 		}
-		if q.ID != question.IDFor(q.Title, q.Body, q.Recommendation) || res.GateQuestionIDs[stepMission] != q.ID {
+		if q.ID != mustQuestionID(q.Title, q.Body, q.Recommendation) || res.GateQuestionIDs[stepMission] != q.ID {
 			t.Fatalf("question %d id %q result map %v", i, q.ID, res.GateQuestionIDs)
 		}
 		if q.Decision != "" {
@@ -192,7 +192,7 @@ func TestRunPrevalidatesLaterStepGateFRRHZ114(t *testing.T) {
 	// run mission·step a·spawn이 먼저 쓰이는 고아 run이 생기지 않는다.
 	for i, actor := range []string{"", "unverified-local-operator:", "unverified-local-operator:   ", "   "} {
 		bad := spec083(fmt.Sprintf("r7%d", i))
-		bad.Actor, bad.Verified = actor, false
+		bad.Actor = actor
 		if _, err := Run(s, bad); err == nil || !strings.Contains(err.Error(), "actor required") {
 			t.Fatalf("actor %q with gated steps accepted: %v", actor, err)
 		}
@@ -208,7 +208,7 @@ func TestRunPrevalidatesLaterStepGateFRRHZ114(t *testing.T) {
 	}
 	// 양성: 이미 접두사가 붙은 유효 actor는 그대로 통과하고 requestedBy에 보존된다.
 	ok := spec083("r8")
-	ok.Actor, ok.Verified = "unverified-local-operator:op", false
+	ok.Actor = "unverified-local-operator:op"
 	res, err := Run(s, ok)
 	if err != nil {
 		t.Fatal(err)

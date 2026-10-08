@@ -17,7 +17,6 @@ import (
 
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/procedure"
 	"rhizome/internal/question"
@@ -43,11 +42,11 @@ func decode078(t *testing.T, s events.Port) wire078 {
 // askBound078 asks a mission-bound question through the relay and returns id + digest.
 func askBound078(t *testing.T, s events.Port, name string) (string, string) {
 	t.Helper()
-	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: name, Body: "body " + name, Recommendation: "r", MissionID: "mission-078"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: name, Body: "body " + name, Recommendation: "r", MissionID: "mission-078"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("ask %s: %v %+v", name, err, res)
 	}
-	return question.IDFor(name, "body "+name, "r"), question.Digest(name, "body "+name, "r")
+	return mustQuestionID(name, "body "+name, "r"), question.Digest(name, "body "+name, "r")
 }
 
 func store078(t *testing.T) *events.Store {
@@ -73,7 +72,7 @@ func TestGateRequestChangesRecordsQuestionAnsweredFRRHZ109(t *testing.T) {
 	s := store078(t)
 	id, digest := askBound078(t, s, "r1")
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id, Digest: digest, Reason: "  더 짧게  "}, "alice", true)
+	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id, Digest: digest, Reason: "  더 짧게  "}, "alice", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("requestChanges: %v %+v", err, res)
 	}
@@ -93,7 +92,7 @@ func TestGateRequestChangesRecordsQuestionAnsweredFRRHZ109(t *testing.T) {
 	}
 	// instruction fallback: the cockpit's decision text for gate.requestChanges travels as `instruction`
 	id2, digest2 := askBound078(t, s, "r1b")
-	if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id2, Digest: digest2, Instruction: "via instruction"}, "alice", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id2, Digest: digest2, Instruction: "via instruction"}, "alice", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("instruction fallback: %v %+v", err, res)
 	}
 	if q, _ := (question.Service{Store: s}).Get(id2); q.Decision != question.RequestChanges || q.Reason != "via instruction" {
@@ -114,7 +113,7 @@ func TestGateRequestChangesGuardsFRRHZ109(t *testing.T) {
 	}
 	wantReason := map[string]string{"empty reason": "reason required", "whitespace reason": "reason required", "missing digest": "digest required", "digest mismatch": question.ErrDigestMismatch.Error()}
 	for name, in := range cases {
-		res, err := RelayIntent(s, in, "alice", true)
+		res, err := RelayIntent(s, in, "alice", noAuthority())
 		if err != nil || res.Accepted || res.Reason != wantReason[name] {
 			t.Errorf("%s: %v %+v", name, err, res)
 		}
@@ -132,15 +131,15 @@ func TestGateRequestChangesAfterTerminalRejectedFRRHZ109(t *testing.T) {
 	s := store078(t)
 	ida, da := askBound078(t, s, "r3a")
 	idr, dr := askBound078(t, s, "r3r")
-	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: ida, Digest: da}, "alice", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: ida, Digest: da}, "alice", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("approve: %v %+v", err, res)
 	}
-	if res, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: idr, Digest: dr, Reason: "no"}, "alice", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: idr, Digest: dr, Reason: "no"}, "alice", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("reject: %v %+v", err, res)
 	}
 	before := journalBytes075(t, s)
 	for _, c := range [][2]string{{ida, da}, {idr, dr}} {
-		res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: c[0], Digest: c[1], Reason: "too late"}, "alice", true)
+		res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: c[0], Digest: c[1], Reason: "too late"}, "alice", noAuthority())
 		if err != nil || res.Accepted || res.Reason != "gate already has input" {
 			t.Errorf("%s: %v %+v", c[0], err, res)
 		}
@@ -161,12 +160,12 @@ func TestGateRequestChangesThenDecideFRRHZ109(t *testing.T) {
 	ida, da := askBound078(t, s, "r4a")
 	idr, dr := askBound078(t, s, "r4r")
 	for _, c := range [][2]string{{ida, da}, {idr, dr}} {
-		if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: c[0], Digest: c[1], Reason: "first"}, "alice", true); err != nil || !res.Accepted {
+		if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: c[0], Digest: c[1], Reason: "first"}, "alice", noAuthority()); err != nil || !res.Accepted {
 			t.Fatalf("requestChanges %s: %v %+v", c[0], err, res)
 		}
 	}
 	before := journalBytes075(t, s)
-	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: ida, Digest: da, Reason: "second"}, "alice", true)
+	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: ida, Digest: da, Reason: "second"}, "alice", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "changes already requested" {
 		t.Fatalf("second requestChanges: %v %+v", err, res)
 	}
@@ -174,10 +173,10 @@ func TestGateRequestChangesThenDecideFRRHZ109(t *testing.T) {
 		t.Fatal("journal changed on second requestChanges")
 	}
 	// approve after changes_requested — same digest, no re-ask
-	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: ida, Digest: da, Reason: "fine now"}, "bob", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: ida, Digest: da, Reason: "fine now"}, "bob", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("approve after changes_requested: %v %+v", err, res)
 	}
-	if res, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: idr, Digest: dr, Reason: "still wrong"}, "bob", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: idr, Digest: dr, Reason: "still wrong"}, "bob", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("reject after changes_requested: %v %+v", err, res)
 	}
 	w := decode078(t, s)
@@ -197,7 +196,7 @@ func TestGateRequestChangesThenDecideFRRHZ109(t *testing.T) {
 	}
 	// terminal now: nothing more
 	for _, k := range []string{"gate.approve", "gate.reject", "gate.requestChanges"} {
-		if res, err := RelayIntent(s, Intent{Kind: k, GateID: ida, Digest: da, Reason: "x"}, "bob", true); err != nil || res.Accepted {
+		if res, err := RelayIntent(s, Intent{Kind: k, GateID: ida, Digest: da, Reason: "x"}, "bob", noAuthority()); err != nil || res.Accepted {
 			t.Errorf("%s after approve accepted: %+v", k, res)
 		}
 	}
@@ -231,20 +230,20 @@ func TestGateCapabilitiesMatchRelayFRRHZ109(t *testing.T) {
 			if _, err := (mission.Service{Store: s}).CreateGoal("goal-r5", "g", "ok", ""); err != nil {
 				t.Fatal(err)
 			}
-			if res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "pg", Body: "body pg", Recommendation: "r", GoalID: "goal-r5"}, "tester", true); err != nil || !res.Accepted {
+			if res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "pg", Body: "body pg", Recommendation: "r", GoalID: "goal-r5"}, "tester", noAuthority()); err != nil || !res.Accepted {
 				t.Fatalf("goal-bound ask: %v %+v", err, res)
 			}
-			id, digest = question.IDFor("pg", "body pg", "r"), question.Digest("pg", "body pg", "r")
+			id, digest = mustQuestionID("pg", "body pg", "r"), question.Digest("pg", "body pg", "r")
 		default:
 			id, digest = askBound078(t, s, state)
 		}
 		switch state {
 		case "changes_requested":
-			if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id, Digest: digest, Reason: "r"}, "tester", true); err != nil || !res.Accepted {
+			if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id, Digest: digest, Reason: "r"}, "tester", noAuthority()); err != nil || !res.Accepted {
 				t.Fatalf("fixture: %v %+v", err, res)
 			}
 		case "approved":
-			if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: id, Digest: digest}, "tester", true); err != nil || !res.Accepted {
+			if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: id, Digest: digest}, "tester", noAuthority()); err != nil || !res.Accepted {
 				t.Fatalf("fixture: %v %+v", err, res)
 			}
 		}
@@ -265,7 +264,7 @@ func TestGateCapabilitiesMatchRelayFRRHZ109(t *testing.T) {
 		}
 		for kind, level := range map[string]string{"gate.approve": got["approve"], "gate.reject": got["reject"], "gate.requestChanges": got["requestChanges"]} {
 			fs, fid, fdigest := build(t, state)
-			res, err := RelayIntent(fs, Intent{Kind: kind, GateID: fid, Digest: fdigest, Reason: "because"}, "tester", true)
+			res, err := RelayIntent(fs, Intent{Kind: kind, GateID: fid, Digest: fdigest, Reason: "because"}, "tester", noAuthority())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -281,7 +280,7 @@ func TestGateCapabilitiesMatchRelayFRRHZ109(t *testing.T) {
 // Snapshot; a legacy journal (approve/reject only) replays unchanged.
 func TestJournalRoundTripChangesRequestedFRRHZ109(t *testing.T) {
 	path := t.TempDir() + "/events.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,16 +294,16 @@ func TestJournalRoundTripChangesRequestedFRRHZ109(t *testing.T) {
 	idc, dc := askBound078(t, j, "rc")
 	ida, da := askBound078(t, j, "ra")
 	for _, c := range [][2]string{{idc, dc}, {ida, da}} {
-		if res, err := RelayIntent(j, Intent{Kind: "gate.requestChanges", GateID: c[0], Digest: c[1], Reason: "tighten"}, "alice", true); err != nil || !res.Accepted {
+		if res, err := RelayIntent(j, Intent{Kind: "gate.requestChanges", GateID: c[0], Digest: c[1], Reason: "tighten"}, "alice", noAuthority()); err != nil || !res.Accepted {
 			t.Fatalf("requestChanges: %v %+v", err, res)
 		}
 	}
-	if res, err := RelayIntent(j, Intent{Kind: "gate.approve", GateID: ida, Digest: da}, "bob", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(j, Intent{Kind: "gate.approve", GateID: ida, Digest: da}, "bob", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("approve: %v %+v", err, res)
 	}
 	// legacy: question.answered exactly as a pre-RHZ-078 kernel wrote it (reject)
 	dl := question.Digest("ql", "b", "r")
-	legacyID := question.IDForDigest(dl)
+	legacyID := mustQuestionIDForDigest(dl)
 	asked, _ := json.Marshal(map[string]string{"Title": "ql", "Body": "b", "Recommendation": "r", "MissionID": "mission-078", "RequestedBy": "unverified-local-operator:legacy", "CorrelationID": "", "Digest": dl})
 	if err := j.Append(0, events.Event{AggregateType: "question", AggregateID: legacyID, Revision: 1, Type: "question.asked", Payload: asked, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
@@ -326,7 +325,7 @@ func TestJournalRoundTripChangesRequestedFRRHZ109(t *testing.T) {
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +380,7 @@ func TestContextStepGateShowsChangeRequestFRRHZ109(t *testing.T) {
 	if code != 200 || strings.Contains(string(body), "decisionReason") || strings.Contains(string(body), "decidedBy") {
 		t.Fatalf("pending gates must not carry decision keys: %d %s", code, body)
 	}
-	qa := question.IDFor("q-a", "body q-a", "approve")
+	qa := mustQuestionID("q-a", "body q-a", "approve")
 	if out := postIntent057(t, srv, map[string]any{"kind": "gate.requestChanges", "gateId": qa, "digest": question.Digest("q-a", "body q-a", "approve"), "reason": "add tests first", "actor": "test-operator"}); out["Accepted"] != true {
 		t.Fatalf("requestChanges: %v", out)
 	}

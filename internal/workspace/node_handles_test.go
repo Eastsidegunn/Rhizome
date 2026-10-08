@@ -282,7 +282,7 @@ func TestIntentByHandleFRRHZ103(t *testing.T) {
 
 	// Unknown handle shape → literal id → the existing error, zero writes.
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "m-ffffffff"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "m-ffffffff"}, "tester", noAuthority())
 	_, wantErr := projector.ReplayMission(s.List("mission", "m-ffffffff"))
 	if err != nil || res.Accepted || wantErr == nil || res.Reason != wantErr.Error() {
 		t.Fatalf("unknown handle must behave as a literal id: %+v %v (want %v)", res, err, wantErr)

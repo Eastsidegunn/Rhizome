@@ -87,7 +87,7 @@ func rhz044Store(t *testing.T, state domain.MissionState) *events.Store {
 
 func rhz044Resume(t *testing.T, s events.Port) RelayResult {
 	t.Helper()
-	r, err := RelayIntent(s, Intent{Kind: "task.resume", TaskID: "m044"}, "test-operator", true)
+	r, err := RelayIntent(s, Intent{Kind: "task.resume", TaskID: "m044"}, "test-operator", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,9 +276,9 @@ func rhz044GateJSON(t *testing.T, linked bool, name string) map[string]json.RawM
 	var a approval.Ref
 	var err error
 	if name == "" {
-		a, err = as.RecordInput(key, approval.Allow, "", "response044", "digest044", "test-operator", "corr044", did, true)
+		a, err = as.RecordInput(key, approval.Allow, "", "response044", "digest044", "test-operator", "corr044", did, noAuthority())
 	} else {
-		a, err = as.RecordInputWithGate(key, approval.Allow, "", "response044", "digest044", "test-operator", "corr044", did, true, approval.GateFields{
+		a, err = as.RecordInputWithGate(key, approval.Allow, "", "response044", "digest044", "test-operator", "corr044", did, noAuthority(), approval.GateFields{
 			GateName: name, GateType: "approval", RequestedAction: "review", RiskTier: "logged",
 			Request: approval.Request{Target: "workspace", RequestedBy: "test-operator", RequestedAt: "2000-01-01T00:00:00Z"},
 		})

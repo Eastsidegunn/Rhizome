@@ -469,7 +469,7 @@ func TestTickCursorHeldWhileRequestUnsurfacedFRRHZ119(t *testing.T) {
 	s, r := loopStore(t)
 	as := approval.Service{Store: s}
 	k2 := gateKey("r2")
-	if _, err := as.RecordInput(k2, approval.Allow, "", "resp", gateDigest, "test-operator", "", "", true); err != nil {
+	if _, err := as.RecordInput(k2, approval.Allow, "", "resp", gateDigest, "test-operator", "", "", noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	stream := requestLine(1, "r1") + requestLine(2, "r2") + policyLineFor(3, "r2") + replayLine(4, "other", `{}`)

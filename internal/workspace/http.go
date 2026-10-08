@@ -6,11 +6,17 @@ import (
 	"net/http"
 	"net/url"
 	"rhizome/internal/events"
+	"rhizome/internal/trust"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 )
+
+type intentRequest struct {
+	Intent
+	Actor string `json:"actor"`
+}
 
 type missionDTO struct {
 	ID        string `json:"id"`
@@ -541,17 +547,13 @@ func (h *HTTPServer) Handler() http.Handler {
 				http.Error(w, "invalid json", 400)
 				return
 			}
-			var in struct {
-				Intent
-				Actor    string `json:"actor"`
-				Verified bool   `json:"verified"`
-			}
+			var in intentRequest
 			if json.Unmarshal(raw, &in) != nil {
 				http.Error(w, "invalid json", 400)
 				return
 			}
 			in.Intent.requestUnknownField = requestIntentHasUnknownField(raw, in.Kind)
-			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, false, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart})
+			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, trust.Authority{}, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart})
 			if storePoisoned(h.Store) || errors.Is(e, events.ErrPoisoned) {
 				servePoisoned(w)
 				return

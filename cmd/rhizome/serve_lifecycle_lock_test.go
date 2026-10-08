@@ -19,8 +19,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"rhizome/internal/journal"
 )
 
 // T1: a lock file left behind by a dead process (content present, nobody holds
@@ -263,7 +261,7 @@ func TestServeShutdownDrainsInFlightFRRHZ107(t *testing.T) {
 	cancel()
 	waitDone(t, done, eout, 10*time.Second)
 	// Observable: the mission event is in the journal after serveCtx returned.
-	j, e := journal.Open(jp)
+	j, e := openTestJournal(jp)
 	if e != nil {
 		t.Fatal(e)
 	}

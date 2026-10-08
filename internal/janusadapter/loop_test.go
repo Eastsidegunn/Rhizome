@@ -20,7 +20,6 @@ import (
 	"rhizome/internal/approval"
 	"rhizome/internal/events"
 	"rhizome/internal/execution"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/policy"
 	"rhizome/internal/question"
@@ -208,7 +207,7 @@ func TestTickQuestionCoexistsWithJANUSApprovalFRRHZ081(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "coexist"}
-	if _, err := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "resp-coexist", "hx-args-digest-v1:opaque", "operator", "corr", "", false); err != nil {
+	if _, err := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "resp-coexist", "hx-args-digest-v1:opaque", "operator", "corr", "", noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	questionBefore := countType(s, "question.asked") + countType(s, "question.answered")
@@ -548,7 +547,7 @@ func TestTickApprovalObservedViaReplayOnlyFRRHZ077(t *testing.T) {
 func TestTickApprovalDenyVerbatimNoSynthesisFRRHZ077(t *testing.T) {
 	s := &events.Store{}
 	k := approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "r2"}
-	a, err := (approval.Service{Store: s}).RecordInput(k, approval.Deny, "policy says no", "resp2", "hx-args-digest-v1:opaque", "operator", "corr", "", false)
+	a, err := (approval.Service{Store: s}).RecordInput(k, approval.Deny, "policy says no", "resp2", "hx-args-digest-v1:opaque", "operator", "corr", "", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -755,12 +754,12 @@ func TestTickRevisionConflictSurfacesAndConvergesFRRHZ077(t *testing.T) {
 // journal without corruption (-race is part of make ci).
 func TestConcurrentLoopAndIntentRaceFRRHZ077(t *testing.T) {
 	path := t.TempDir() + "/journal.log"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	k := approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "rc"}
-	if _, err = (approval.Service{Store: j}).RecordInput(k, approval.Allow, "", "resp", "hx-args-digest-v1:opaque", "operator", "", "", false); err != nil {
+	if _, err = (approval.Service{Store: j}).RecordInput(k, approval.Allow, "", "resp", "hx-args-digest-v1:opaque", "operator", "", "", noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(workspace.NewHTTP(j).Handler())
@@ -789,7 +788,7 @@ func TestConcurrentLoopAndIntentRaceFRRHZ077(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j2, err := journal.Open(path)
+	j2, err := openTestJournal(path)
 	if err != nil {
 		t.Fatalf("journal corrupted: %v", err)
 	}
@@ -846,7 +845,7 @@ func TestLoopErrorHookNotFatalNotSilentFRRHZ077(t *testing.T) {
 	s, _ := loopStore(t) // exec A: /tmp/rhz-043-test-session.db (corrupt stream)
 	b := boundExec(t, s, "loop-b", runTrace, "/tmp/b.db")
 	k := approval.RequestKey{TraceID: replayTrace, SpanID: replaySpan, RequestID: "rh"}
-	if _, err := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "resp", "hx-args-digest-v1:opaque", "operator", "", "", false); err != nil {
+	if _, err := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "resp", "hx-args-digest-v1:opaque", "operator", "", "", noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	corrupt := replayLine(1, "other", `{}`) + replayLine(3, "other", `{}`)

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/memory"
 )
 
@@ -239,7 +238,7 @@ func TestKnowledgeWrongMethod404FRRHZ080(t *testing.T) {
 }
 func TestKnowledgeJournalReopenPreservesSnapshotFRRHZ080(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "journal.ndjson")
-	j, e := journal.Open(p)
+	j, e := openTestJournal(p)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -247,7 +246,7 @@ func TestKnowledgeJournalReopenPreservesSnapshotFRRHZ080(t *testing.T) {
 		t.Fatal(e)
 	}
 	j.Close()
-	j2, e := journal.Open(p)
+	j2, e := openTestJournal(p)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -259,7 +258,7 @@ func TestKnowledgeJournalReopenPreservesSnapshotFRRHZ080(t *testing.T) {
 }
 func TestKnowledgeJournalReopenRevisionFRRHZ080(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "j")
-	j, e := journal.Open(p)
+	j, e := openTestJournal(p)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -267,7 +266,7 @@ func TestKnowledgeJournalReopenRevisionFRRHZ080(t *testing.T) {
 		t.Fatal(e)
 	}
 	j.Close()
-	j, e = journal.Open(p)
+	j, e = openTestJournal(p)
 	if e != nil {
 		t.Fatal(e)
 	}

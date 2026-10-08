@@ -26,7 +26,6 @@ import (
 	"rhizome/internal/domain"
 	"rhizome/internal/edge"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/source"
 )
@@ -41,7 +40,7 @@ func delivID081(binding, kind, summary, ref string) string {
 func register081(t *testing.T, s events.Port, in Intent) RelayResult {
 	t.Helper()
 	in.Kind = "deliverable.register"
-	res, err := RelayIntent(s, in, "tester", true)
+	res, err := RelayIntent(s, in, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +293,7 @@ func TestDeliverableRegisterRejectedNoWriteFRRHZ112(t *testing.T) {
 		t.Fatalf("cancel fixture: %+v", res)
 	}
 	missionIn062(t, s, "mission-failed", domain.MissionReady, domain.MissionRunning)
-	if res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-failed", Reason: "x"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-failed", Reason: "x"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("fail fixture: %+v err=%v", res, err)
 	}
 	ms := mission.Service{Store: s}
@@ -304,7 +303,7 @@ func TestDeliverableRegisterRejectedNoWriteFRRHZ112(t *testing.T) {
 		}
 	}
 	for _, step := range []Intent{{Kind: "goal.fail", GoalID: "goal-failed"}, {Kind: "goal.cancel", GoalID: "goal-cancelled"}, {Kind: "goal.resolve", GoalID: "goal-achieved"}} {
-		if res, err := RelayIntent(s, step, "tester", true); err != nil || !res.Accepted {
+		if res, err := RelayIntent(s, step, "tester", noAuthority()); err != nil || !res.Accepted {
 			t.Fatalf("%+v: %+v err=%v", step, res, err)
 		}
 	}
@@ -336,7 +335,7 @@ func TestDeliverableRegisterRejectedNoWriteFRRHZ112(t *testing.T) {
 	}
 	for _, c := range cases {
 		c.in.Kind = "deliverable.register"
-		res, err := RelayIntent(s, c.in, "tester", true)
+		res, err := RelayIntent(s, c.in, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != c.want {
 			t.Fatalf("%s: %+v err=%v (want reason %q)", c.name, res, err, c.want)
 		}
@@ -350,7 +349,7 @@ func TestDeliverableRegisterRejectedNoWriteFRRHZ112(t *testing.T) {
 	}
 	// succeeded mission / achieved goal: still accepted (post-hoc record).
 	missionIn062(t, s, "mission-done", domain.MissionReady, domain.MissionRunning)
-	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-done"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-done"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("complete fixture: %+v err=%v", res, err)
 	}
 	if res := register081(t, s, with(func(i *Intent) { i.MissionID = "mission-done" })); !res.Accepted {
@@ -417,7 +416,7 @@ func TestDeliverableRegisterIdempotentFRRHZ112(t *testing.T) {
 // /v1/workspace byte-identical; the legacy record replays with GoalID "".
 func TestDeliverableRegisterJournalRoundTripFRRHZ112(t *testing.T) {
 	path := t.TempDir() + "/j.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +455,7 @@ func TestDeliverableRegisterJournalRoundTripFRRHZ112(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

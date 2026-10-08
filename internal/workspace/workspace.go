@@ -24,6 +24,7 @@ import (
 	requestagg "rhizome/internal/request"
 	"rhizome/internal/source"
 	"rhizome/internal/surface"
+	"rhizome/internal/trust"
 	"sort"
 	"strings"
 	"time"
@@ -734,20 +735,21 @@ func resumeToRunning(s events.Port, m mission.Service, id string, ms domain.Miss
 
 // RelayIntent is RelayIntentWith without an injector: every behavior before
 // RHZ-093 is unchanged (task.instruct is recorded only).
-func RelayIntent(s events.Port, in Intent, actor string, verified bool) (RelayResult, error) {
-	return RelayIntentWith(s, in, actor, verified, nil)
+func RelayIntent(s events.Port, in Intent, actor string, auth trust.Authority) (RelayResult, error) {
+	return RelayIntentWith(s, in, actor, auth, nil)
 }
 
 // RelayIntentWith relays one intent; inject, when non-nil, is used by
 // task.instruct after the instruction is durable (FR-RHZ-119).
-func RelayIntentWith(s events.Port, in Intent, actor string, verified bool, inject ExecInjector) (RelayResult, error) {
-	return RelayIntentHooks(s, in, actor, verified, RelayHooks{Inject: inject})
+func RelayIntentWith(s events.Port, in Intent, actor string, auth trust.Authority, inject ExecInjector) (RelayResult, error) {
+	return RelayIntentHooks(s, in, actor, auth, RelayHooks{Inject: inject})
 }
 
 // RelayIntentHooks relays one intent with every composition-root seam
 // (FR-RHZ-119 inject, FR-RHZ-123 start).
-func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hooks RelayHooks) (result RelayResult, err error) {
+func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authority, hooks RelayHooks) (result RelayResult, err error) {
 	inject := hooks.Inject
+	authorized := auth != (trust.Authority{})
 	if s == nil {
 		return RelayResult{}, fmt.Errorf("nil store")
 	}
@@ -767,7 +769,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		default:
 			return RelayResult{Reason: "invalid verification"}, nil
 		}
-		if verified {
+		if authorized {
 			return RelayResult{Reason: "invalid verification"}, nil
 		}
 		var err error
@@ -875,8 +877,8 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 			// The new goal has no edges yet, so the cycle guard of
 			// edge.declare is vacuous here; existence of both endpoints is
 			// the kernel's (edge.Service) own check.
-			x := edge.Edge{ID: "edge-contains-" + in.ParentGoalID + "-" + gid, From: edge.Endpoint{Type: "goal", ID: in.ParentGoalID}, To: edge.Endpoint{Type: "goal", ID: gid}, Kind: edge.Contains, Actor: actor, Correlation: relayCorrelation(in.CorrelationID, actor, verified), Verified: verified}
-			if _, e := (edge.Service{Store: s}).Create(x); e != nil {
+			x := edge.Spec{ID: "edge-contains-" + in.ParentGoalID + "-" + gid, From: edge.Endpoint{Type: "goal", ID: in.ParentGoalID}, To: edge.Endpoint{Type: "goal", ID: gid}, Kind: edge.Contains, Actor: actor, Correlation: relayCorrelation(in.CorrelationID, actor, authorized)}
+			if _, e := (edge.Service{Store: s}).Create(x, auth); e != nil {
 				return RelayResult{Reason: "contains edge: " + e.Error()}, nil
 			}
 		}
@@ -947,8 +949,8 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 			if target.ID == "" {
 				continue
 			}
-			x := edge.Edge{ID: "edge-about-" + short + "-" + target.ID, From: edge.Endpoint{Type: "memory", ID: id}, To: target, Kind: edge.About, Actor: actor, Correlation: corr, Verified: verified}
-			if _, e := (edge.Service{Store: s}).Create(x); e != nil {
+			x := edge.Spec{ID: "edge-about-" + short + "-" + target.ID, From: edge.Endpoint{Type: "memory", ID: id}, To: target, Kind: edge.About, Actor: actor, Correlation: corr}
+			if _, e := (edge.Service{Store: s}).Create(x, auth); e != nil {
 				return RelayResult{Reason: "about edge: " + e.Error()}, nil
 			}
 		}
@@ -965,7 +967,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		if in.Kind == "goal.fail" {
 			to = domain.GoalFailed
 		}
-		corr := relayCorrelation(in.CorrelationID, actor, verified)
+		corr := relayCorrelation(in.CorrelationID, actor, authorized)
 		if _, e := m.ApplyGoalDecision(in.GoalID, "decision-"+in.Kind+"-"+in.GoalID, corr, to); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
@@ -1076,7 +1078,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		if in.ID == "" || in.Name == "" || in.GoalID == "" {
 			return RelayResult{Reason: "id (procedure), name (run id) and goalId required"}, nil
 		}
-		if _, e := assembly.Run(s, assembly.RunSpec{ProcedureID: in.ID, GoalID: in.GoalID, RunID: in.Name, Params: in.Params, Actor: actor, Verified: verified, Correlation: in.CorrelationID}); e != nil {
+		if _, e := assembly.Run(s, assembly.RunSpec{ProcedureID: in.ID, GoalID: in.GoalID, RunID: in.Name, Params: in.Params, Actor: actor, Authority: auth, Correlation: in.CorrelationID}); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
@@ -1115,7 +1117,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		}
 		return RelayResult{Accepted: true}, nil
 	case "deliverable.register":
-		return relayDeliverableRegister(s, in, actor, verified)
+		return relayDeliverableRegister(s, in, actor, auth)
 	case "mission.progress":
 		// RHZ-082 (FR-RHZ-113): record "what is happening now" with NO state
 		// transition — one surface.progressed event through the surface
@@ -1137,7 +1139,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 			return RelayResult{Reason: string(cur.State) + "에서 진척 기록 불가: task.resume 먼저"}, nil
 		}
 		who := actor
-		if !verified && !strings.HasPrefix(who, "unverified-local-operator:") {
+		if !authorized && !strings.HasPrefix(who, "unverified-local-operator:") {
 			who = "unverified-local-operator:" + who
 		}
 		if _, e := (surface.Service{Store: s}).Progress(in.MissionID, who, in.CurrentAction, in.Progress, in.BlockedReason); e != nil {
@@ -1175,7 +1177,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		if cur.State != domain.MissionRunning && cur.State != domain.MissionWaitingResult && cur.State != domain.MissionWaitingHuman && cur.State != domain.MissionBlocked {
 			return RelayResult{Reason: string(cur.State) + "에서 종결 불가: task.resume 먼저"}, nil
 		}
-		corr := relayCorrelation(in.CorrelationID, actor, verified)
+		corr := relayCorrelation(in.CorrelationID, actor, authorized)
 		if _, e := m.ApplyMissionDecision(in.MissionID, cur.Revision, to, "decision-"+in.Kind+"-"+in.MissionID, corr, in.Reason); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
@@ -1234,7 +1236,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 			return RelayResult{Reason: "execution start unavailable"}, nil
 		}
 		who := actor
-		if !verified && !strings.HasPrefix(who, "unverified-local-operator:") {
+		if !authorized && !strings.HasPrefix(who, "unverified-local-operator:") {
 			who = "unverified-local-operator:" + who
 		}
 		req := ExecStartRequest{MissionID: in.MissionID, Instruction: strings.TrimSpace(in.Instruction), SessionMode: in.SessionMode, Actor: who}
@@ -1299,7 +1301,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		// (contract ② v1.6 §3) — a retry may inject twice, so this relay
 		// submits exactly once and consumers dedupe via the user/message kind
 		// (seq) in the session log.
-		if _, e := (surface.Service{Store: s}).Instruct(in.TaskID, in.Instruction, actor, verified, "relay"); e != nil {
+		if _, e := (surface.Service{Store: s}).Instruct(in.TaskID, in.Instruction, actor, auth, "relay"); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		if inject == nil {
@@ -1400,7 +1402,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		}
 		g := approval.GateFields{GateName: name, GateType: "approval", RequestedAction: name, RiskTier: "logged",
 			Request: approval.Request{Target: "janus", RequestedBy: actor, RequestedAt: time.Now().UTC().Format(time.RFC3339), Reason: gr.Reason}}
-		if _, e = (approval.Service{Store: s}).RecordInputWithGate(gr.Key, d, in.Reason, approval.ResponseIDFor(gr.ID), gr.RequestDigest, actor, "relay", gr.DecisionID, verified, g, verification); e != nil {
+		if _, e = (approval.Service{Store: s}).RecordInputWithGate(gr.Key, d, in.Reason, approval.ResponseIDFor(gr.ID), gr.RequestDigest, actor, "relay", gr.DecisionID, auth, g, verification); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
@@ -1443,7 +1445,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		if e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
-		if _, e = (surface.Service{Store: s}).Instruct(d.MissionID, in.Instruction, actor, verified, in.GateID); e != nil {
+		if _, e = (surface.Service{Store: s}).Instruct(d.MissionID, in.Instruction, actor, auth, in.GateID); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
@@ -1498,8 +1500,8 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 		if corr == "" {
 			corr = "relay"
 		}
-		x := edge.Edge{ID: declaredID, From: edge.Endpoint{Type: "goal", ID: fromGoal}, To: edge.Endpoint{Type: "goal", ID: toGoal}, Kind: edge.Contains, Actor: actor, Correlation: corr, Verified: verified}
-		if _, e := es.Create(x); e != nil {
+		x := edge.Spec{ID: declaredID, From: edge.Endpoint{Type: "goal", ID: fromGoal}, To: edge.Endpoint{Type: "goal", ID: toGoal}, Kind: edge.Contains, Actor: actor, Correlation: corr}
+		if _, e := es.Create(x, auth); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
@@ -1514,8 +1516,8 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 			}
 			return edge.Endpoint{Type: parts[0], ID: parts[1]}
 		}
-		x := edge.Edge{ID: in.ID, From: parse(in.From), To: parse(in.To), Kind: edge.Kind(in.EdgeKind), Actor: actor, Correlation: "relay", Verified: verified}
-		if _, e := (edge.Service{Store: s}).Rewire(in.EdgeID, x); e != nil {
+		x := edge.Spec{ID: in.ID, From: parse(in.From), To: parse(in.To), Kind: edge.Kind(in.EdgeKind), Actor: actor, Correlation: "relay"}
+		if _, e := (edge.Service{Store: s}).Rewire(in.EdgeID, x, auth); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
@@ -1535,7 +1537,8 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 // content-derived (binding ‖ kind ‖ summary ‖ sourceRef), so the same
 // registration is idempotent (Accepted, zero writes) and a run that crashed
 // between the two appends is repaired by appending only the missing edge.
-func relayDeliverableRegister(s events.Port, in Intent, actor string, verified bool) (RelayResult, error) {
+func relayDeliverableRegister(s events.Port, in Intent, actor string, auth trust.Authority) (RelayResult, error) {
+	authorized := auth != (trust.Authority{})
 	mid, gid := strings.TrimSpace(in.MissionID), strings.TrimSpace(in.GoalID)
 	if mid == "" && gid == "" {
 		return RelayResult{Reason: "missionId or goalId required"}, nil
@@ -1610,7 +1613,7 @@ func relayDeliverableRegister(s events.Port, in Intent, actor string, verified b
 	}
 	id := deliverableRegisterID(from, kind, summary, ref)
 	edgeID := "edge-produces-" + from.ID + "-" + id
-	corr := relayCorrelation(in.CorrelationID, actor, verified)
+	corr := relayCorrelation(in.CorrelationID, actor, authorized)
 	ds, es := deliverable.Service{Store: s}, edge.Service{Store: s}
 	if _, e := ds.Get(id); e == nil {
 		// Same binding ‖ kind ‖ summary ‖ sourceRef by construction of the ID:
@@ -1619,7 +1622,7 @@ func relayDeliverableRegister(s events.Port, in Intent, actor string, verified b
 		if _, e := es.Get(edgeID); e == nil {
 			return RelayResult{Accepted: true}, nil
 		}
-		if _, e := es.Create(edge.Edge{ID: edgeID, From: from, To: edge.Endpoint{Type: "deliverable", ID: id}, Kind: edge.Produces, Actor: actor, Correlation: corr, Verified: verified}); e != nil {
+		if _, e := es.Create(edge.Spec{ID: edgeID, From: from, To: edge.Endpoint{Type: "deliverable", ID: id}, Kind: edge.Produces, Actor: actor, Correlation: corr}, auth); e != nil {
 			return RelayResult{Reason: "produces edge: " + e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
@@ -1635,7 +1638,7 @@ func relayDeliverableRegister(s events.Port, in Intent, actor string, verified b
 	if _, e := ds.Create(d); e != nil {
 		return RelayResult{Reason: e.Error()}, nil
 	}
-	if _, e := es.Create(edge.Edge{ID: edgeID, From: from, To: edge.Endpoint{Type: "deliverable", ID: id}, Kind: edge.Produces, Actor: actor, Correlation: corr, Verified: verified}); e != nil {
+	if _, e := es.Create(edge.Spec{ID: edgeID, From: from, To: edge.Endpoint{Type: "deliverable", ID: id}, Kind: edge.Produces, Actor: actor, Correlation: corr}, auth); e != nil {
 		return RelayResult{Reason: "produces edge: " + e.Error()}, nil
 	}
 	return RelayResult{Accepted: true}, nil
@@ -1663,12 +1666,12 @@ func deliverableRegisterID(from edge.Endpoint, kind, summary, sourceRef string) 
 // operator prefix applied to an unverified actor (RHZ-061 rule, pinned by
 // goal_lifecycle_test). Shared by goal.resolve/fail and mission.complete/fail
 // (RHZ-069, FR-RHZ-098) so the two surfaces cannot drift.
-func relayCorrelation(given, actor string, verified bool) string {
+func relayCorrelation(given, actor string, authorized bool) string {
 	if given != "" {
 		return given
 	}
 	who := actor
-	if !verified && !strings.HasPrefix(who, "unverified-local-operator:") {
+	if !authorized && !strings.HasPrefix(who, "unverified-local-operator:") {
 		who = "unverified-local-operator:" + who
 	}
 	return "relay:" + who

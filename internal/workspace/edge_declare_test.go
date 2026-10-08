@@ -32,7 +32,7 @@ func goals066(t *testing.T, ids ...string) *events.Store {
 
 func declare066(t *testing.T, s *events.Store, from, to string) RelayResult {
 	t.Helper()
-	res, err := RelayIntent(s, Intent{Kind: "edge.declare", From: "goal:" + from, To: "goal:" + to}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "edge.declare", From: "goal:" + from, To: "goal:" + to}, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestEdgeDeclareOneEventFRRHZ095(t *testing.T) {
 		t.Fatalf("replay %+v err=%v", got, err)
 	}
 	// edgeKind "contains" 명시도 수용.
-	res, err := RelayIntent(s, Intent{Kind: "edge.declare", From: "goal:g-parent", To: "goal:g-other", EdgeKind: "contains"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "edge.declare", From: "goal:g-parent", To: "goal:g-other", EdgeKind: "contains"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -90,7 +90,7 @@ func TestEdgeDeclareIdempotentLiveOnlyFRRHZ095(t *testing.T) {
 		t.Fatal("live redeclare appended")
 	}
 	// rewire로 치워진 뒤 재선언 → "out of scope" 명시 거부.
-	if _, err := (edge.Service{Store: s}).Rewire("edge-contains-g1-g2", edge.Edge{ID: "edge-contains-g1-g3", From: edge.Endpoint{Type: "goal", ID: "g1"}, To: edge.Endpoint{Type: "goal", ID: "g3"}, Kind: edge.Contains, Actor: "tester", Correlation: "test", Verified: true}); err != nil {
+	if _, err := (edge.Service{Store: s}).Rewire("edge-contains-g1-g2", edge.Spec{ID: "edge-contains-g1-g3", From: edge.Endpoint{Type: "goal", ID: "g1"}, To: edge.Endpoint{Type: "goal", ID: "g3"}, Kind: edge.Contains, Actor: "tester", Correlation: "test"}, noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	mid := journal066(t, s)
@@ -118,7 +118,7 @@ func TestEdgeDeclareKernelDelegationFRRHZ095(t *testing.T) {
 		{Kind: "edge.declare", From: "mission:m", To: "goal:g1"},
 		{Kind: "edge.declare", From: "goal:", To: "goal:g1"},
 	} {
-		res, err := RelayIntent(s, in, "tester", true)
+		res, err := RelayIntent(s, in, "tester", noAuthority())
 		if err != nil || res.Accepted {
 			t.Fatalf("%+v: %+v err=%v", in, res, err)
 		}
@@ -144,7 +144,7 @@ func TestEdgeDeclareReverseRejectedFRRHZ095(t *testing.T) {
 		t.Fatal("rejection changed journal")
 	}
 	// g1⊃g2를 rewire로 치우면(→g1⊃g3) 과거 엣지는 live가 아니므로 g2⊃g1 수용.
-	if _, err := (edge.Service{Store: s}).Rewire("edge-contains-g1-g2", edge.Edge{ID: "edge-contains-g1-g3", From: edge.Endpoint{Type: "goal", ID: "g1"}, To: edge.Endpoint{Type: "goal", ID: "g3"}, Kind: edge.Contains, Actor: "tester", Correlation: "test", Verified: true}); err != nil {
+	if _, err := (edge.Service{Store: s}).Rewire("edge-contains-g1-g2", edge.Spec{ID: "edge-contains-g1-g3", From: edge.Endpoint{Type: "goal", ID: "g1"}, To: edge.Endpoint{Type: "goal", ID: "g3"}, Kind: edge.Contains, Actor: "tester", Correlation: "test"}, noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	if res := declare066(t, s, "g2", "g1"); !res.Accepted {
@@ -180,7 +180,7 @@ func TestEdgeDeclareContainsOnlyFRRHZ095(t *testing.T) {
 	s := goals066(t, "g1", "g2")
 	before := journal066(t, s)
 	for _, kind := range []string{"spawn", "dependency", "about", "gate", "produces"} {
-		res, err := RelayIntent(s, Intent{Kind: "edge.declare", From: "goal:g1", To: "goal:g2", EdgeKind: kind}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "edge.declare", From: "goal:g1", To: "goal:g2", EdgeKind: kind}, "tester", noAuthority())
 		if err != nil || res.Accepted || !strings.Contains(res.Reason, "contains only") {
 			t.Fatalf("%s: %+v err=%v", kind, res, err)
 		}

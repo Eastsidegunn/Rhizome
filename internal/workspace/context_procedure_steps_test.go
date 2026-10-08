@@ -150,7 +150,7 @@ func TestContextStepsTopoOrderFRRHZ097(t *testing.T) {
 	// 구현과 TopoOrder 구현을 가른다.
 	defineProc(t, s, "proc-ind", procedure.Step{ID: "x", Action: "x"}, procedure.Step{ID: "y", Action: "y"})
 	runProc(t, srv, "proc-ind", "ind")
-	if _, err := (edge.Service{Store: s}).Create(edge.Edge{ID: "e-late", From: edge.Endpoint{Type: "mission", ID: "mission-ind-x"}, To: edge.Endpoint{Type: "mission", ID: "mission-ind-y"}, Kind: edge.Dependency, Actor: "t", Correlation: "t"}); err != nil {
+	if _, err := (edge.Service{Store: s}).Create(edge.Spec{ID: "e-late", From: edge.Endpoint{Type: "mission", ID: "mission-ind-x"}, To: edge.Endpoint{Type: "mission", ID: "mission-ind-y"}, Kind: edge.Dependency, Actor: "t", Correlation: "t"}, noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, steps := contextSteps(t, h, "mission-ind"); !eq(stepIDs(steps), []string{"mission-ind-y", "mission-ind-x"}) {
@@ -277,10 +277,10 @@ func TestContextStepsCycleAndUnresolvedFRRHZ097(t *testing.T) {
 	runProc(t, srv, "proc-lin", "r1")
 	runProc(t, srv, "proc-one", "r3")
 	es := edge.Service{Store: s}
-	if _, err := es.Create(edge.Edge{ID: "e-cycle", From: edge.Endpoint{Type: "mission", ID: "mission-r1-a"}, To: edge.Endpoint{Type: "mission", ID: "mission-r1-c"}, Kind: edge.Dependency, Actor: "t", Correlation: "t"}); err != nil {
+	if _, err := es.Create(edge.Spec{ID: "e-cycle", From: edge.Endpoint{Type: "mission", ID: "mission-r1-a"}, To: edge.Endpoint{Type: "mission", ID: "mission-r1-c"}, Kind: edge.Dependency, Actor: "t", Correlation: "t"}, noAuthority()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := es.Create(edge.Edge{ID: "e-ghost", From: edge.Endpoint{Type: "mission", ID: "mission-r3-a"}, To: edge.Endpoint{Type: "mission", ID: "mission-x"}, Kind: edge.Dependency, Actor: "t", Correlation: "t"}); err != nil {
+	if _, err := es.Create(edge.Spec{ID: "e-ghost", From: edge.Endpoint{Type: "mission", ID: "mission-r3-a"}, To: edge.Endpoint{Type: "mission", ID: "mission-x"}, Kind: edge.Dependency, Actor: "t", Correlation: "t"}, noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	h := NewHTTP(s).Handler()
@@ -304,12 +304,12 @@ func TestContextStepsSpawnFilterFRRHZ097(t *testing.T) {
 	defer srv.Close()
 	runProc(t, srv, "proc-lin", "r1")
 	es := edge.Service{Store: s}
-	for _, x := range []edge.Edge{
+	for _, x := range []edge.Spec{
 		{ID: "e-in-spawn", From: edge.Endpoint{Type: "mission", ID: "mission-x"}, To: edge.Endpoint{Type: "mission", ID: "mission-r1"}, Kind: edge.Spawn},
 		{ID: "e-out-dep", From: edge.Endpoint{Type: "mission", ID: "mission-r1"}, To: edge.Endpoint{Type: "mission", ID: "mission-x"}, Kind: edge.Dependency},
 	} {
 		x.Actor, x.Correlation = "t", "t"
-		if _, err := es.Create(x); err != nil {
+		if _, err := es.Create(x, noAuthority()); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -22,7 +22,7 @@ func TestProgressAndInstructionFRRHZ064(t *testing.T) {
 	if e != nil || r.Progress != p {
 		t.Fatal(e)
 	}
-	r, e = s.Instruct("m", "do", "bob", false, "c")
+	r, e = s.Instruct("m", "do", "bob", noAuthority(), "c")
 	if e != nil || r.InstructionActor != "unverified-local-operator:bob" {
 		t.Fatal(e)
 	}
@@ -68,7 +68,7 @@ func TestSurfaceNilAndRevisionFRRHZ064(t *testing.T) {
 	if _, e := s.ReportProgress("m", "a", &p, "s"); e == nil {
 		t.Fatal()
 	}
-	if _, e := s.Instruct("m", "x", "a", true, "c"); e == nil {
+	if _, e := s.Instruct("m", "x", "a", noAuthority(), "c"); e == nil {
 		t.Fatal()
 	}
 	if _, e := s.ByMission("m"); e == nil {
@@ -121,7 +121,7 @@ func TestSurfaceMissionStreamImmutableFRRHZ064(t *testing.T) {
 	x := Service{Store: s}
 	p := .3
 	_, _ = x.ReportProgress("m", "a", &p, "src")
-	_, _ = x.Instruct("m", "do", "op", false, "c")
+	_, _ = x.Instruct("m", "do", "op", noAuthority(), "c")
 	after := s.List("mission", "m")
 	if len(before) != len(after) || string(before[0].Payload) != string(after[0].Payload) {
 		t.Fatal("mission stream changed")
@@ -141,7 +141,7 @@ func TestSurfaceMissingAndTerminalMissionFRRHZ064(t *testing.T) {
 		if _, e := x.ReportProgress("m", "a", &p, "s"); e == nil || len(s.All()) != n {
 			t.Fatal(state)
 		}
-		if _, e := x.Instruct("m", "a", "op", true, "c"); e == nil || len(s.All()) != n {
+		if _, e := x.Instruct("m", "a", "op", noAuthority(), "c"); e == nil || len(s.All()) != n {
 			t.Fatal(state)
 		}
 	}

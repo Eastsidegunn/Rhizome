@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"rhizome/internal/journal"
 	"rhizome/internal/memory"
 	"strings"
 	"testing"
@@ -23,7 +22,7 @@ func TestIngestFRRHZ054(t *testing.T) {
 	if c := run([]string{"ingest", "-journal", j, "-blobs", b, "-file", n}, &out, &er); c != 0 {
 		t.Fatal(c, er.String())
 	}
-	x, e := journal.Open(j)
+	x, e := openTestJournal(j)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -41,7 +40,7 @@ func TestIngestFRRHZ054(t *testing.T) {
 		t.Fatal(e)
 	}
 	x.Close()
-	x, e = journal.Open(j)
+	x, e = openTestJournal(j)
 	if e != nil {
 		t.Fatal(e)
 	}

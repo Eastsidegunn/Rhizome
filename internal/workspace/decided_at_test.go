@@ -81,7 +81,7 @@ func TestGateDecidedAtDerivationFRRHZ142(t *testing.T) {
 
 	approvals := approval.Service{Store: source}
 	allowKey := approval.RequestKey{TraceID: "14200000000000000000000000000001", SpanID: "1420000000000001", RequestID: "allow"}
-	allow, err := approvals.RecordInput(allowKey, approval.Allow, "", "response-allow", "digest-allow", "ops", "", "", false)
+	allow, err := approvals.RecordInput(allowKey, approval.Allow, "", "response-allow", "digest-allow", "ops", "", "", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestGateDecidedAtDerivationFRRHZ142(t *testing.T) {
 		t.Fatal(err)
 	}
 	denyKey := approval.RequestKey{TraceID: "14200000000000000000000000000002", SpanID: "1420000000000002", RequestID: "deny"}
-	deny, err := approvals.RecordInput(denyKey, approval.Deny, "human no", "response-deny", "digest-deny", "ops", "", "", false)
+	deny, err := approvals.RecordInput(denyKey, approval.Deny, "human no", "response-deny", "digest-deny", "ops", "", "", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestGateDecidedAtDerivationFRRHZ142(t *testing.T) {
 		t.Fatal(err)
 	}
 	pendingKey := approval.RequestKey{TraceID: "14200000000000000000000000000003", SpanID: "1420000000000003", RequestID: "pending"}
-	pendingApproval, err := approvals.RecordInput(pendingKey, approval.Allow, "", "response-pending", "digest-pending", "ops", "", "", false)
+	pendingApproval, err := approvals.RecordInput(pendingKey, approval.Allow, "", "response-pending", "digest-pending", "ops", "", "", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,10 +170,10 @@ func TestGateDecidedAtDerivationFRRHZ142(t *testing.T) {
 func TestContextGateDecidedAtFRRHZ142(t *testing.T) {
 	s := fixture068(t)
 	defineProc(t, s, "proc-decided-at", procedure.Step{ID: "a", Action: "act-a", NeedsGate: true})
-	if res, err := RelayIntent(s, Intent{Kind: "procedure.run", ID: "proc-decided-at", Name: "decided-at", GoalID: "goal-dev"}, "op", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "procedure.run", ID: "proc-decided-at", Name: "decided-at", GoalID: "goal-dev"}, "op", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("procedure.run: %+v %v", res, err)
 	}
-	q, err := (question.Service{Store: s}).Get(question.IDFor("decided-at · a 게이트", "act-a", ""))
+	q, err := (question.Service{Store: s}).Get(mustQuestionID("decided-at · a 게이트", "act-a", ""))
 	if err != nil {
 		t.Fatal(err)
 	}

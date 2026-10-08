@@ -154,22 +154,22 @@ func TestEdgeReplaySelfReferenceAndSelfSupersedeFRRHZ069(t *testing.T) {
 	}
 }
 func TestEdgeRewireLifecycleFRRHZ069(t *testing.T) {
-	if _, e := (&Service{}).Rewire("missing", Edge{}); e == nil {
+	if _, e := (&Service{}).Rewire("missing", Spec{}, noAuthority()); e == nil {
 		t.Fatal()
 	}
 }
 func TestEdgeRewireObservedOriginalFRRHZ069(t *testing.T) {
-	if _, e := (&Service{}).Rewire("missing", Edge{}); e == nil {
+	if _, e := (&Service{}).Rewire("missing", Spec{}, noAuthority()); e == nil {
 		t.Fatal()
 	}
 }
 func TestEdgeRewireMissingOriginalFRRHZ069(t *testing.T) {
-	if _, e := (&Service{}).Rewire("missing", Edge{}); e == nil {
+	if _, e := (&Service{}).Rewire("missing", Spec{}, noAuthority()); e == nil {
 		t.Fatal()
 	}
 }
 func TestEdgeRewireMultipleReplacementFRRHZ069(t *testing.T) {
-	if _, e := (&Service{}).Rewire("missing", Edge{}); e == nil {
+	if _, e := (&Service{}).Rewire("missing", Spec{}, noAuthority()); e == nil {
 		t.Fatal()
 	}
 }
@@ -190,7 +190,7 @@ func TestEdgeByNodeCorruptionVisibleFRRHZ069(t *testing.T) {
 }
 func TestEdgeNilStoreFRRHZ069(t *testing.T) {
 	s := &Service{}
-	if _, e := s.Create(Edge{}); e == nil {
+	if _, e := s.Create(Spec{}, noAuthority()); e == nil {
 		t.Fatal()
 	}
 	if _, e := s.Get("x"); e == nil {
@@ -229,7 +229,7 @@ func fullStore(t *testing.T) (*events.Store, string, string) {
 		t.Fatal(e)
 	}
 	k := approval.RequestKey{TraceID: "0123456789abcdef0123456789abcdef", SpanID: "0123456789abcdef", RequestID: "r1"}
-	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "resp", "digest", "op", "", "", true)
+	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "resp", "digest", "op", "", "", noAuthority())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -238,8 +238,8 @@ func fullStore(t *testing.T) (*events.Store, string, string) {
 func TestEdgeServiceIntegrationFRRHZ069(t *testing.T) {
 	s, d, g := fullStore(t)
 	svc := Service{Store: s}
-	base := Edge{ID: "e1", From: Endpoint{"mission", "m"}, To: Endpoint{"deliverable", d}, Kind: Produces, Actor: "op", Correlation: "c", Verified: true}
-	e, err := svc.Create(base)
+	base := Spec{ID: "e1", From: Endpoint{"mission", "m"}, To: Endpoint{"deliverable", d}, Kind: Produces, Actor: "op", Correlation: "c"}
+	e, err := svc.Create(base, noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestEdgeServiceIntegrationFRRHZ069(t *testing.T) {
 		t.Fatal()
 	}
 	old := s.List("edge", "e1")
-	rew, err := svc.Rewire("e1", Edge{ID: "e2", From: Endpoint{"gate", g}, To: Endpoint{"mission", "m"}, Kind: Gate, Actor: "op", Correlation: "c", Verified: true})
+	rew, err := svc.Rewire("e1", Spec{ID: "e2", From: Endpoint{"gate", g}, To: Endpoint{"mission", "m"}, Kind: Gate, Actor: "op", Correlation: "c"}, noAuthority())
 	if err != nil || rew.Supersedes != "e1" {
 		t.Fatal(err)
 	}
@@ -267,10 +267,22 @@ func TestEdgeMissingEndpointsAndIsolationFRRHZ069(t *testing.T) {
 	s, _, _ := fullStore(t)
 	svc := Service{Store: s}
 	before := len(s.All())
-	if _, e := svc.Create(Edge{ID: "bad", From: Endpoint{"mission", "missing"}, To: Endpoint{"mission", "m"}, Kind: Dependency, Actor: "op", Correlation: "c", Verified: true}); e == nil || len(s.All()) != before {
+	if _, e := svc.Create(Spec{ID: "bad", From: Endpoint{"mission", "missing"}, To: Endpoint{"mission", "m"}, Kind: Dependency, Actor: "op", Correlation: "c"}, noAuthority()); e == nil || len(s.All()) != before {
 		t.Fatal("missing endpoint")
 	}
 	if len(s.List("mission", "m")) == 0 {
 		t.Fatal("mission stream missing")
+	}
+}
+
+func TestLegacyVerifiedEdgeReplayFRRHZ153(t *testing.T) {
+	p := payload{ID: "legacy", From: Endpoint{"goal", "g1"}, To: Endpoint{"goal", "g2"}, Kind: Contains, Actor: "operator", Correlation: "legacy", Verified: true}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Replay([]events.Event{{AggregateType: "edge", AggregateID: "legacy", Revision: 1, Type: "edge.declared", Payload: raw}})
+	if err != nil || !got.Verified || got.Actor != "operator" {
+		t.Fatalf("legacy verified edge did not replay: %+v err=%v", got, err)
 	}
 }
