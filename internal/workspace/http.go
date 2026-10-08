@@ -75,6 +75,29 @@ type attentionDTO struct {
 	SourceRef   string `json:"sourceRef,omitempty"`
 	IncidentRef string `json:"incidentRef,omitempty"`
 }
+type requestDTO struct {
+	ID          string   `json:"id"`
+	Handle      string   `json:"handle"`
+	Name        string   `json:"name"`
+	State       string   `json:"state"`
+	MissionID   string   `json:"missionId,omitempty"`
+	GoalID      string   `json:"goalId,omitempty"`
+	Why         string   `json:"why"`
+	Where       string   `json:"where"`
+	Commands    []string `json:"commands"`
+	After       string   `json:"after"`
+	Rollback    string   `json:"rollback,omitempty"`
+	RequestedBy string   `json:"requestedBy"`
+	CreatedAt   string   `json:"createdAt"`
+	ClosedBy    string   `json:"closedBy,omitempty"`
+	ClosedAt    string   `json:"closedAt,omitempty"`
+	Memo        string   `json:"memo,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+}
+type requestCapabilityDTO struct {
+	Complete string `json:"complete"`
+	Unable   string `json:"unable"`
+}
 type dto struct {
 	Missions     []missionDTO     `json:"missions"`
 	Tasks        []taskDTO        `json:"tasks"`
@@ -87,6 +110,10 @@ type dto struct {
 		Blocked  int `json:"blocked"`
 	} `json:"counts"`
 	Attention []attentionDTO `json:"attention"`
+	// FR-RHZ-158: omitted together when the journal contains no requests.
+	// They precede the long-pinned final capability fields.
+	Requests            []requestDTO                    `json:"requests,omitempty"`
+	RequestCapabilities map[string]requestCapabilityDTO `json:"requestCapabilities,omitempty"`
 	// RHZ-070 (FR-RHZ-099, additive): always present ({} when empty), keyed
 	// by task id / internal gate id. These MUST stay the last two fields so
 	// the pre-RHZ-070 prefix of the body is provably unchanged (A1 pins it).
@@ -128,6 +155,36 @@ type envelope struct {
 	Body     dto    `json:"body"`
 }
 
+// requestIntentHasUnknownField detects exact, case-sensitive top-level keys only for
+// RHZ-118 request intents. Other intent kinds retain their existing decoder.
+func requestIntentHasUnknownField(raw json.RawMessage, kind string) bool {
+	var allowed map[string]bool
+	switch kind {
+	case "request.create":
+		allowed = map[string]bool{
+			"kind": true, "actor": true, "name": true, "missionId": true,
+			"goalId": true, "why": true, "where": true, "commands": true,
+			"after": true, "rollback": true, "correlationId": true,
+		}
+	case "request.complete":
+		allowed = map[string]bool{"kind": true, "actor": true, "requestId": true, "memo": true, "correlationId": true}
+	case "request.unable", "request.cancel":
+		allowed = map[string]bool{"kind": true, "actor": true, "requestId": true, "reason": true, "correlationId": true}
+	default:
+		return false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil || object == nil {
+		return true
+	}
+	for key := range object {
+		if !allowed[key] {
+			return true
+		}
+	}
+	return false
+}
+
 func toDTO(p Projection) dto {
 	d := dto{Missions: []missionDTO{}, Tasks: []taskDTO{}, Gates: []gateDTO{}, Deliverables: []deliverableDTO{}, Edges: []edgeDTO{}, Attention: []attentionDTO{}, Capabilities: map[string]taskCapabilityDTO{}, GateCapabilities: map[string]gateCapabilityDTO{}}
 	// RHZ-070 (FR-RHZ-099): map keys are emitted in sorted order by
@@ -153,6 +210,21 @@ func toDTO(p Projection) dto {
 	}
 	for _, a := range p.Attention {
 		d.Attention = append(d.Attention, attentionDTO{a.Kind, a.RefID, a.Cause, a.SourceRef, a.IncidentRef})
+	}
+	if p.RequestCapabilities != nil {
+		d.RequestCapabilities = map[string]requestCapabilityDTO{}
+		for id, c := range p.RequestCapabilities {
+			d.RequestCapabilities[id] = requestCapabilityDTO{Complete: c.Complete, Unable: c.Unable}
+		}
+	}
+	for _, r := range p.Requests {
+		commands := append([]string{}, r.Commands...)
+		d.Requests = append(d.Requests, requestDTO{
+			ID: r.ID, Handle: p.handles.of("r", r.ID), Name: r.Name, State: r.State,
+			MissionID: r.MissionID, GoalID: r.GoalID, Why: r.Why, Where: r.Where,
+			Commands: commands, After: r.After, Rollback: r.Rollback, RequestedBy: r.RequestedBy,
+			CreatedAt: r.CreatedAt, ClosedBy: r.ClosedBy, ClosedAt: r.ClosedAt, Memo: r.Memo, Reason: r.Reason,
+		})
 	}
 	d.Counts.Running, d.Counts.NeedsYou, d.Counts.Blocked = p.Counts.Running, p.Counts.NeedsYou, p.Counts.Blocked
 	for _, x := range p.Deliverables {
@@ -464,15 +536,21 @@ func (h *HTTPServer) Handler() http.Handler {
 				servePoisoned(w)
 				return
 			}
+			var raw json.RawMessage
+			if json.NewDecoder(r.Body).Decode(&raw) != nil {
+				http.Error(w, "invalid json", 400)
+				return
+			}
 			var in struct {
 				Intent
 				Actor    string `json:"actor"`
 				Verified bool   `json:"verified"`
 			}
-			if json.NewDecoder(r.Body).Decode(&in) != nil {
+			if json.Unmarshal(raw, &in) != nil {
 				http.Error(w, "invalid json", 400)
 				return
 			}
+			in.Intent.requestUnknownField = requestIntentHasUnknownField(raw, in.Kind)
 			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, false, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart})
 			if storePoisoned(h.Store) || errors.Is(e, events.ErrPoisoned) {
 				servePoisoned(w)

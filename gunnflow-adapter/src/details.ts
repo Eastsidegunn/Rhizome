@@ -47,6 +47,19 @@ export interface WireDetailBody {
     goalId?: string;
   }>;
   deliverables?: Array<{ id: string }>;
+  requests?: Array<{
+    id: string;
+    state: 'waiting' | 'done' | 'unable' | 'cancelled';
+    why?: string;
+    where?: string;
+    commands?: string[];
+    after?: string;
+    rollback?: string;
+    memo?: string;
+    reason?: string;
+    closedBy?: string;
+    closedAt?: string;
+  }>;
   counts?: { running?: number; needsYou?: number; blocked?: number };
 }
 
@@ -106,6 +119,24 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
     return [
       ...countItems,
       ...(unverifiedDecisions > 0 ? [{ label: '승인 미확인 결정', text: String(unverifiedDecisions) }] : []),
+    ];
+  }
+
+  // Human-action request: structured fields are already separate on the
+  // Rhizome wire. Commands remain byte-identical (no fence or truncation).
+  const request = body.requests?.find((r) => r.id === nodeId);
+  if (request) {
+    const closed = request.state !== 'waiting';
+    return [
+      ...text('왜 필요한가', request.why),
+      ...text('어디서', request.where),
+      ...(request.commands ?? []).map((command) => ({ label: '명령', text: command })),
+      ...text('끝나면', request.after),
+      ...text('되돌림', request.rollback),
+      ...(closed && request.state === 'done' ? text('결과 메모', request.memo) : []),
+      ...(closed && request.state !== 'done' ? text('사유', request.reason) : []),
+      ...(closed ? text('닫은 이', request.closedBy) : []),
+      ...(closed ? text('닫은 시각', request.closedAt) : []),
     ];
   }
 

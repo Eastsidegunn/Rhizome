@@ -225,6 +225,14 @@ RHIZOME_URL=http://127.0.0.1:8790 PORT=8792 npx tsx src/serveDirect.ts
 | `RHIZOME_URL` | `http://127.0.0.1:8790` | Base URL of the running `rhizome serve`. |
 | `PORT` | `8792` | Port the adapter listens on (bound to `127.0.0.1`). |
 
+#### Human-action requests
+
+`request.create` records an external hand task and exposes it as a Gunnflow
+`request` node. Closed requests stay visible while their target is live.
+Rhizome and the adapter only describe the work; they never execute the listed
+commands. Do not put secret values in those commands. Write commands so the
+terminal prompts for each secret value at execution time.
+
 ## Build and test
 
 ```sh

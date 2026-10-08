@@ -20,6 +20,8 @@ export const FLAGGED = 'flagged';
  * fact the gate's approve/reject capability reflects, not an inferred judgment.
  */
 export const NEEDS_HUMAN = 'needs_human';
+/** A request waiting for the operator to perform an external hand task. */
+export const NEEDS_HUMAN_ACTION = 'needs_human_action';
 /** Attention cause for a retained terminal decision without verified provenance. */
 export const APPROVAL_UNVERIFIED = 'approval_unverified';
 /**
@@ -40,6 +42,7 @@ const TASK_ACTIONS = {
 /** Rhizome requires text for these (instruction; privileged actions carry a stated reason). */
 const TEXT_REQUIRED = new Set<string>(['instruct', 'cancel', 'forceReplan']);
 const GATE_ACTIONS = { approve: 'gate.approve', reject: 'gate.reject', requestChanges: 'gate.requestChanges' } as const;
+const REQUEST_ACTIONS = { complete: 'request.complete', unable: 'request.unable' } as const;
 
 /**
  * The documented /v1/intent acceptance surface: Rhizome accepts mission.create
@@ -59,14 +62,14 @@ export interface RhizomeIntegrationReport {
   attentionDropped: number;
 }
 
-function levels<K extends string>(caps: unknown, actions: Record<K, string>, text: (k: K) => boolean): Capability[] {
+function levels<K extends string>(caps: unknown, actions: Record<K, string>, text: (k: K) => boolean | undefined): Capability[] {
   return Object.entries((caps ?? {}) as Record<string, unknown>).flatMap(([key, level]) =>
     key in actions && (level === 'enabled' || level === 'disabled' || level === 'hidden')
       ? [
           {
             action: actions[key as K],
             level: level as CapabilityLevel,
-            ...(text(key as K) ? { decision: { input: { required: true } } } : {}),
+            ...(text(key as K) === undefined ? {} : { decision: { input: { required: text(key as K)! } } }),
           },
         ]
       : [],
@@ -123,7 +126,7 @@ export function projectRhizomeNodes(
     ];
   };
 
-  const ids = new Set<string>([...p.missions, ...p.tasks, ...p.gates, ...p.deliverables].map((n) => n.id));
+  const ids = new Set<string>([...p.missions, ...p.tasks, ...p.gates, ...p.deliverables, ...(p.requests ?? [])].map((n) => n.id));
   let rootId = WORKSPACE_NODE_ID;
   while (ids.has(rootId)) rootId = `~${rootId}`;
 
@@ -172,7 +175,7 @@ export function projectRhizomeNodes(
     label: t.name,
     state: { value: t.state },
     relations: [...membership(t.missionId), ...edgesFrom(t.id)],
-    capabilities: levels(p.capabilities[t.id], TASK_ACTIONS, (k) => TEXT_REQUIRED.has(k)),
+    capabilities: levels(p.capabilities[t.id], TASK_ACTIONS, (k) => TEXT_REQUIRED.has(k) ? true : undefined),
     attention: attentionOf(t.id, t.attention),
     artifacts: [],
   }));
@@ -188,7 +191,7 @@ export function projectRhizomeNodes(
     // Approved/rejected gates are retained only for provenance review and are no longer actionable.
     capabilities: isUnverifiedDecidedGate(g)
       ? []
-      : levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'requestChanges'),
+      : levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'requestChanges' ? true : undefined),
     // A waiting gate pulls the human: it is a pending decision by definition. A
     // changes_requested gate (RHZ-078, FR-RHZ-109) passes through as its own state
     // value; the ball is with the worker, so no needs_human is added for it.
@@ -215,5 +218,15 @@ export function projectRhizomeNodes(
     attention: attentionOf(d.id),
     artifacts: artifactsOf(d.id, d.sourceRef),
   }));
-  return { nodes: [root, ...missions, ...tasks, ...gates, ...deliverables], report };
+  const requests: NodeProjection[] = (p.requests ?? []).map((r) => ({
+    id: r.id,
+    kind: 'request',
+    label: r.name,
+    state: { value: r.state },
+    relations: membership(r.membershipId ?? ''),
+    capabilities: levels(p.requestCapabilities?.[r.id], REQUEST_ACTIONS, (k) => k === 'unable'),
+    attention: r.state === 'waiting' ? [{ cause: NEEDS_HUMAN_ACTION, since: r.createdAt }] : [],
+    artifacts: [],
+  }));
+  return { nodes: [root, ...missions, ...tasks, ...gates, ...deliverables, ...requests], report };
 }

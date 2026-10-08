@@ -26,6 +26,10 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- Human-action requests are now durable `request` aggregates with create,
+  complete, unable, and local cancel intents. The workspace and Gunnflow
+  adapter expose waiting work, structured command detail, and operator
+  capabilities without changing request-free workspace bytes (FR-RHZ-154–162).
 - The Gunnflow adapter carries the decision time of retained unverified
   decisions through attention `since` and a `결정 시각` detail item, without
   widening the closed node schema (FR-RHZ-143).

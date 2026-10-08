@@ -21,6 +21,7 @@ import (
 	"rhizome/internal/procedure"
 	"rhizome/internal/projector"
 	"rhizome/internal/question"
+	requestagg "rhizome/internal/request"
 	"rhizome/internal/source"
 	"rhizome/internal/surface"
 	"sort"
@@ -67,6 +68,13 @@ type Gate struct {
 type GateVerification struct{ Status, ClaimKind string }
 type AttentionItem struct{ Kind, RefID, Cause, SourceRef, IncidentRef string }
 
+// Request is the replayed human-action request projected to /v1/workspace.
+type Request struct {
+	ID, Name, State, MissionID, GoalID, Why, Where, After, Rollback string
+	Commands                                                        []string
+	RequestedBy, CreatedAt, ClosedBy, ClosedAt, Memo, Reason        string
+}
+
 // Capability levels (RHZ-070, FR-RHZ-099) — the cockpit vocabulary the
 // adapter already reads: enabled / disabled / hidden.
 const (
@@ -84,6 +92,10 @@ type TaskCapabilities struct{ Pause, Resume, Instruct string }
 // (question). JANUS gates (approval/approvalrequest) are out of scope and
 // absent from the map.
 type GateCapabilities struct{ Approve, Reject, RequestChanges string }
+
+// RequestCapabilities is the pair of operator actions exposed for a request.
+// cancel remains a direct local intent only and is deliberately absent.
+type RequestCapabilities struct{ Complete, Unable string }
 type Projection struct {
 	Revision     uint64
 	Missions     []Mission
@@ -93,6 +105,9 @@ type Projection struct {
 	Edges        []edge.Edge
 	Counts       struct{ Running, NeedsYou, Blocked int }
 	Attention    []AttentionItem
+	Requests     []Request
+	// Nil when no request aggregate exists, preserving pre-RHZ-118 bytes.
+	RequestCapabilities map[string]RequestCapabilities
 	// Capabilities/GateCapabilities (RHZ-070, FR-RHZ-099) are always non-nil
 	// (empty → {} on the wire), keyed by task id / gate id.
 	Capabilities     map[string]TaskCapabilities
@@ -115,7 +130,7 @@ func Snapshot(s events.Port) (Projection, error) {
 	p.Capabilities, p.GateCapabilities = map[string]TaskCapabilities{}, map[string]GateCapabilities{}
 	all := s.All()
 	p.handles = buildHandleIndex(all)
-	goals, mids, gids, qids, dids, eids, reqs := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	goals, mids, gids, qids, dids, eids, reqs, rids := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range all {
 		if e.Sequence > p.Revision {
 			p.Revision = e.Sequence
@@ -141,6 +156,8 @@ func Snapshot(s events.Port) (Projection, error) {
 			eids[e.AggregateID] = true
 		case "approvalrequest":
 			reqs[e.AggregateID] = true
+		case "request":
+			rids[e.AggregateID] = true
 		}
 	}
 	ids := func(m map[string]bool) []string {
@@ -266,6 +283,33 @@ func Snapshot(s events.Port) (Projection, error) {
 			p.Counts.NeedsYou++
 		}
 	}
+	if len(rids) > 0 {
+		p.RequestCapabilities = map[string]RequestCapabilities{}
+	}
+	for _, id := range ids(rids) {
+		r, x := (requestagg.Service{Store: s}).Get(id)
+		if x != nil {
+			return p, x
+		}
+		state := "waiting"
+		closedBy, closedAt := "", ""
+		caps := RequestCapabilities{Complete: capEnabled, Unable: capEnabled}
+		if r.Decision != "" {
+			state = string(r.Decision)
+			closedBy = r.ActorRef
+			closedAt = r.ClosedAt.UTC().Format(time.RFC3339Nano)
+			caps = RequestCapabilities{Complete: capHidden, Unable: capHidden}
+		} else {
+			p.Counts.NeedsYou++
+		}
+		p.Requests = append(p.Requests, Request{
+			ID: r.ID, Name: r.Name, State: state, MissionID: r.MissionID, GoalID: r.GoalID,
+			Why: r.Why, Where: r.Where, Commands: append([]string(nil), r.Commands...), After: r.After,
+			Rollback: r.Rollback, RequestedBy: r.RequestedBy, CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano),
+			ClosedBy: closedBy, ClosedAt: closedAt, Memo: r.Memo, Reason: r.Reason,
+		})
+		p.RequestCapabilities[r.ID] = caps
+	}
 	for _, id := range ids(dids) {
 		d, x := (deliverable.Service{Store: s}).Get(id)
 		if x != nil {
@@ -325,6 +369,7 @@ func Snapshot(s events.Port) (Projection, error) {
 	sort.Slice(p.Missions, func(i, j int) bool { return p.Missions[i].ID < p.Missions[j].ID })
 	sort.Slice(p.Tasks, func(i, j int) bool { return p.Tasks[i].ID < p.Tasks[j].ID })
 	sort.Slice(p.Gates, func(i, j int) bool { return p.Gates[i].ID < p.Gates[j].ID })
+	sort.Slice(p.Requests, func(i, j int) bool { return p.Requests[i].ID < p.Requests[j].ID })
 	sort.Slice(p.Deliverables, func(i, j int) bool { return p.Deliverables[i].ID < p.Deliverables[j].ID })
 	sort.Slice(p.Edges, func(i, j int) bool { return p.Edges[i].ID < p.Edges[j].ID })
 	return p, nil
@@ -508,6 +553,17 @@ type Intent struct {
 	// Verification is decoded strictly by RelayIntentHooks only for gate
 	// decisions. RawMessage preserves exact key casing for the V7 check.
 	Verification json.RawMessage `json:"verification,omitempty"`
+	// RHZ-118 (FR-RHZ-155/156): human-action request fields.
+	RequestID string   `json:"requestId"`
+	Why       string   `json:"why"`
+	Where     string   `json:"where"`
+	Commands  []string `json:"commands"`
+	After     string   `json:"after"`
+	Rollback  string   `json:"rollback"`
+	Memo      string   `json:"memo"`
+	// requestUnknownField is set only by the HTTP raw-key check. Keeping it
+	// out of JSON lets the request service apply Q11 after Q1-Q10.
+	requestUnknownField bool
 }
 
 // BudgetOverride is the per-mission budget request of mission.start; a nil
@@ -725,6 +781,28 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hoo
 	in = resolveHandles(s, in)
 	m := mission.Service{Store: s}
 	switch in.Kind {
+	case "request.create":
+		_, e := (requestagg.Service{Store: s}).CreateRequest(requestagg.Create{
+			Name: in.Name, MissionID: in.MissionID, GoalID: in.GoalID, Why: in.Why,
+			Where: in.Where, Commands: in.Commands, After: in.After, Rollback: in.Rollback,
+			RequestedBy: actor, CorrelationID: in.CorrelationID,
+		}, in.requestUnknownField)
+		if e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
+	case "request.complete", "request.unable", "request.cancel":
+		decision := requestagg.Done
+		if in.Kind == "request.unable" {
+			decision = requestagg.Unable
+		} else if in.Kind == "request.cancel" {
+			decision = requestagg.Cancelled
+		}
+		_, e := (requestagg.Service{Store: s}).Close(in.RequestID, decision, in.Memo, in.Reason, actor, relayCorrelation(in.CorrelationID, actor, false), in.requestUnknownField)
+		if e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
 	case "mission.create":
 		if in.Name == "" {
 			return RelayResult{Reason: "mission name required"}, nil

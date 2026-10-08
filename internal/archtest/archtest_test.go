@@ -142,3 +142,15 @@ func TestRepositoryObeysKernelBoundaryFRRHZ085(t *testing.T) {
 		t.Fatalf("kernel boundary violations:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// FR-RHZ-154: request is an exec-kernel package; Allowed remains the exact
+// pre-RHZ-118 exception list.
+func TestRequestLayerPinnedFRRHZ154(t *testing.T) {
+	if Layers["request"] != "exec" {
+		t.Fatalf("request layer = %q, want exec", Layers["request"])
+	}
+	want := []string{"coordinator->memory", "coordinator->source"}
+	if !reflect.DeepEqual(Allowed, want) {
+		t.Fatalf("Allowed changed: got %v want %v", Allowed, want)
+	}
+}

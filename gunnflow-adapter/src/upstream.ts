@@ -56,9 +56,11 @@ const INTENT_FIELDS = new Set([
   'edgeKind',
   'taskId',
   'gateId',
+  'requestId',
   'sessionId',
   'instruction',
   'reason',
+  'memo',
   'input',
   'inputRef',
   'decision',
@@ -86,6 +88,7 @@ export function toRhizomeAddress(i: Record<string, unknown>): { kind: string | u
   }
   const address =
     action.startsWith('gate.') ? { gateId: nodeId }
+    : action.startsWith('request.') ? { requestId: nodeId }
     : action.startsWith('task.') || action === 'artifact.edit' ? { taskId: nodeId }
     : action.startsWith('session.') ? { sessionId: nodeId }
     : {};
@@ -97,11 +100,17 @@ const TEXT_FIELD: Record<string, string> = {
   'mission.create': 'name',
   'task.instruct': 'instruction',
   'gate.requestChanges': 'instruction',
+  'request.complete': 'memo',
+  'request.unable': 'reason',
 };
 
 export function toRhizomeFields(kind: string | undefined, fields: Record<string, unknown>): Record<string, unknown> {
   const target = kind ? TEXT_FIELD[kind] : undefined;
   const decision = fields.decision as { text?: unknown } | undefined;
+  if (kind?.startsWith('request.')) {
+    const { decision: _decision, ...rest } = fields;
+    return target && typeof decision?.text === 'string' ? { ...rest, [target]: decision.text } : rest;
+  }
   if (!target || typeof decision?.text !== 'string') return fields;
   const { decision: _d, ...rest } = fields;
   // Rhizome requires a success criterion for missions; the mission's own text stands in when none is given.

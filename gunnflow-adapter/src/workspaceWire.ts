@@ -89,7 +89,19 @@ interface EdgeProjection {
   /** Id of the edge this one replaces (edge.rewire, RHZ-066); the replaced edge is not a live relationship. */
   supersedes?: string;
 }
+export interface RequestProjection {
+  kind: 'request';
+  id: string;
+  name: string;
+  state: 'waiting' | 'done' | 'unable' | 'cancelled';
+  missionId?: string;
+  goalId?: string;
+  /** Live parent only; omitted when a waiting request outlives its target. */
+  membershipId?: string;
+  createdAt: string;
+}
 type TaskCapabilities = Partial<Record<'pause' | 'resume' | 'instruct' | 'cancel' | 'forceReplan', CapabilityLevel>>;
+type RequestCapabilities = Partial<Record<'complete' | 'unable', CapabilityLevel>>;
 export interface WorkspaceProjection {
   revision: number;
   missions: MissionProjection[];
@@ -97,6 +109,8 @@ export interface WorkspaceProjection {
   gates: GateProjection[];
   deliverables: DeliverableProjection[];
   edges: EdgeProjection[];
+  /** Absent when Rhizome omitted requests, preserving request-free bodies. */
+  requests?: RequestProjection[];
   /**
    * RHZ-076 (FR-RHZ-104): ids that are the target of a `contains` edge anywhere
    * in the raw snapshot, whether or not both ends survive the cockpit's live
@@ -113,6 +127,7 @@ export interface WorkspaceProjection {
   sessions: unknown[];
   capabilities: Record<string, TaskCapabilities>;
   gateCapabilities: Record<string, unknown>;
+  requestCapabilities?: Record<string, RequestCapabilities>;
   effects: unknown[];
 }
 
@@ -160,6 +175,14 @@ interface WireEdge {
   supersedes?: string;
   actor?: string;
   correlation?: string;
+}
+interface WireRequest {
+  id: string;
+  name: string;
+  state: RequestProjection['state'];
+  missionId?: string;
+  goalId?: string;
+  createdAt: string;
 }
 
 /**
@@ -392,6 +415,24 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
   const liveGates = allGates.filter((g) => LIVE_GATE_STATES.has(g.state) || retainedDecidedIds.has(g.id));
   const liveMissionIds = new Set([...liveMissions.map((m) => m.id), ...liveTasks.map((t) => t.missionId)]);
   const liveTaskIds = new Set(liveTasks.map((t) => t.id));
+  // FR-RHZ-159: waiting requests survive a terminal/hidden target as
+  // top-level nodes; closed requests survive only while their target is live.
+  const allRequests: RequestProjection[] = list('requests').map((r) => {
+    if (isAdapted(r, 'request')) return r as RequestProjection;
+    const w = r as WireRequest;
+    return {
+      kind: 'request', id: w.id, name: w.name, state: w.state,
+      ...(w.missionId ? { missionId: w.missionId } : {}),
+      ...(w.goalId ? { goalId: w.goalId } : {}),
+      createdAt: w.createdAt,
+    };
+  });
+  const liveRequests = allRequests.flatMap((r): RequestProjection[] => {
+    const target = r.missionId || r.goalId || '';
+    const targetLive = r.missionId ? liveTaskIds.has(r.missionId) : !!r.goalId && liveMissionIds.has(r.goalId);
+    if (r.state !== 'waiting' && !targetLive) return [];
+    return [{ ...r, ...(targetLive && target ? { membershipId: target } : {}) }];
+  });
   // RHZ-081 (FR-RHZ-112): a goal-bound deliverable (missionId "") stays while its goal is live.
   // RHZ-085 (FR-RHZ-115): a deliverable is live iff its owning GOAL is live (goal = result,
   // RHZ-074). A mission-bound deliverable whose task is terminal (hidden) resolves the task's
@@ -411,6 +452,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
     ...liveTaskIds,
     ...liveGates.map((g) => g.id),
     ...liveDeliverables.map((d) => d.id),
+    ...liveRequests.map((r) => r.id),
   ]);
   // RHZ-066 edge.rewire: an edge another edge supersedes is no live relationship.
   const supersededEdgeIds = new Set(allEdges.flatMap((e) => (e.supersedes ? [e.supersedes] : [])));
@@ -429,12 +471,16 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
     gates: liveGates,
     deliverables: liveDeliverables,
     edges: liveEdges,
+    ...(Object.prototype.hasOwnProperty.call(body, 'requests') ? { requests: liveRequests } : {}),
     containedIds,
     counts: (body.counts as WorkspaceProjection['counts'] | undefined) ?? { running: 0, needsYou: 0, blocked: 0 },
     activities: (body.activities as WorkspaceProjection['activities'] | undefined) ?? [],
     sessions: (body.sessions as WorkspaceProjection['sessions'] | undefined) ?? [],
     capabilities,
     gateCapabilities: (body.gateCapabilities as WorkspaceProjection['gateCapabilities'] | undefined) ?? {},
+    ...(Object.prototype.hasOwnProperty.call(body, 'requestCapabilities')
+      ? { requestCapabilities: body.requestCapabilities as Record<string, RequestCapabilities> }
+      : {}),
     effects: (body.effects as WorkspaceProjection['effects'] | undefined) ?? [],
   };
 }
