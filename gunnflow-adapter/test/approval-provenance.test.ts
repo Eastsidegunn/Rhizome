@@ -20,6 +20,7 @@ type TestGate = NonNullable<WireDetailBody['gates']>[number] & {
   missionId?: string;
   goalId?: string;
   name?: string;
+  decidedAt?: string;
 };
 
 const gate = (id: string, extra: Partial<TestGate> = {}): TestGate => ({
@@ -194,15 +195,52 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
     expect(detailItems(raw, WORKSPACE_NODE_ID)?.map((item) => item.label)).not.toContain('승인 미확인 결정');
   });
 
-  it('A5: 12 decided-unverified gates retain the last 10 while root detail reports all 12', () => {
-    const gates = Array.from({ length: 12 }, (_, i) => gate(`gate-${String(i).padStart(2, '0')}`));
+  it('A5: 12 decided-unverified gates retain the 10 newest by decidedAt while root detail reports all 12', () => {
+    const gates = Array.from({ length: 12 }, (_, i) => gate(`gate-${String(i).padStart(2, '0')}`, {
+      // Reverse timestamp order relative to gate-id order so this proves the
+      // cap ranks the decision envelope time rather than emitted order.
+      decidedAt: new Date(Date.UTC(2026, 9, 8, 3, 12 - i)).toISOString(),
+    }));
     const raw = bodyOf(gates);
     const ids = nodesOf(adaptWithReport({ revision: 3, body: raw }).envelope)
       .filter((n) => n.kind === 'gate')
       .map((n) => n.id);
 
-    expect(ids).toEqual(gates.slice(2).map((g) => g.id));
+    expect(ids).toEqual(gates.slice(0, 10).map((g) => g.id));
     expect(detailItems(raw, WORKSPACE_NODE_ID)?.at(-1)).toEqual({ label: '승인 미확인 결정', text: '12' });
+  });
+
+  it('A5b: absent decidedAt falls back to the previous gate-id cap order', () => {
+    const gates = Array.from({ length: 12 }, (_, i) => gate(`gate-${String(i).padStart(2, '0')}`));
+    const ids = nodesOf(adaptWithReport({ revision: 3, body: bodyOf(gates) }).envelope)
+      .filter((n) => n.kind === 'gate')
+      .map((n) => n.id);
+
+    expect(ids).toEqual(gates.slice(2).map((g) => g.id));
+  });
+
+  it('A5c: decidedAt ranking preserves event-envelope nanosecond precision', () => {
+    process.env[ENV] = '1';
+    const gates = [
+      gate('gate-a', { decidedAt: '2026-10-08T03:12:00.000000001Z' }),
+      gate('gate-z', { decidedAt: '2026-10-08T03:12:00Z' }),
+    ];
+    const ids = nodesOf(adaptWithReport({ revision: 3, body: bodyOf(gates) }).envelope)
+      .filter((n) => n.kind === 'gate')
+      .map((n) => n.id);
+
+    expect(ids).toEqual(['gate-a']);
+  });
+
+  it('A5d: equal decidedAt values use descending gate-id order as the tiebreak', () => {
+    process.env[ENV] = '1';
+    const decidedAt = '2026-10-08T03:12:00Z';
+    const gates = [gate('gate-a', { decidedAt }), gate('gate-z', { decidedAt })];
+    const ids = nodesOf(adaptWithReport({ revision: 3, body: bodyOf(gates) }).envelope)
+      .filter((n) => n.kind === 'gate')
+      .map((n) => n.id);
+
+    expect(ids).toEqual(['gate-z']);
   });
 
   it('A6: RHIZOME_UNVERIFIED_DECIDED_MAX overrides the default cap', () => {
@@ -216,7 +254,7 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
 
   it('A7: every node in a mixed retained projection passes the vendored contract validator', () => {
     const raw = bodyOf([
-      gate('unverified'),
+      gate('unverified', { decidedAt: '2026-10-08T03:12:00Z' }),
       gate('legacy', { verification: { status: 'legacy-asserted' } }),
       gate('claimed', { verification: { status: 'claimed', claimKind: 'relayed' } }),
       gate('pending', { state: 'pending' }),

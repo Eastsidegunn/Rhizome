@@ -13,12 +13,16 @@ unchanged. A structured `권고` replaces the legacy `recommendation` item.
 Gate decision provenance from `/v1/workspace` and its SSE stream is shown as
 `승인 상태` in approved/rejected gate detail. Unverified and `legacy-asserted`
 terminal decisions remain visible with `approval_unverified` attention. They
-are capped to the last N by emitted (gate-ID) order — NOT recency; a
-decision-time field will replace this. N defaults to 10 and is configurable
-with `RHIZOME_UNVERIFIED_DECIDED_MAX`; the root detail counts the full uncapped
-set. A `claimed` status with a missing or unknown claim kind displays as
-`claimed`. A future `verified` status displays as `verified`, followed by
-` (assurance)` when assurance is present.
+are capped to the N most recent by `decidedAt`; gate-ID order breaks ties and
+is the fallback for older servers that omit it. `decidedAt` is RFC3339 UTC
+with an optional variable-length fraction (trailing zeros trimmed), so compare
+it as an instant, never as a string. A JANUS gate carries it only once JANUS
+has observed the decision; a human input not yet observed still shows as
+pending without it. N defaults to 10 and is
+configurable with `RHIZOME_UNVERIFIED_DECIDED_MAX`; the root detail counts the
+full uncapped set. A `claimed` status with a missing or unknown claim kind
+displays as `claimed`. A future `verified` status displays as `verified`,
+followed by ` (assurance)` when assurance is present.
 
 ## Requirements and install
 

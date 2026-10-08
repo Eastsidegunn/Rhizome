@@ -59,7 +59,10 @@ type Gate struct {
 	RequestDigest, DisplaySummary                           string
 	ExpiresAt                                               int64
 	Source, Body, Recommendation, DecisionReason, DecidedBy string
-	Verification                                            *GateVerification
+	// DecidedAt is derived on read from the terminal decision event envelope.
+	// It is never persisted in a domain payload.
+	DecidedAt    string
+	Verification *GateVerification
 }
 type GateVerification struct{ Status, ClaimKind string }
 type AttentionItem struct{ Kind, RefID, Cause, SourceRef, IncidentRef string }
@@ -202,6 +205,9 @@ func Snapshot(s events.Port) (Projection, error) {
 		}
 		sup, _ := (approval.Service{Store: s}).IsSuperseded(id)
 		g := Gate{ID: a.ID, Source: "janus", State: st, HumanDecision: string(a.HumanDecision), JanusDecision: string(a.JanusDecision), Superseded: sup, Name: a.GateName, RequestDigest: a.RequestDigest, Verification: approvalVerification(a)}
+		if (st == "approved" || st == "rejected") && a.HumanDecision != "" {
+			g.DecidedAt = latestEventCreatedAt(s.List("approval", id), "approval.input_recorded")
+		}
 		if a.DecisionID != "" {
 			d, er := decision.Replay(s.List("decision", a.DecisionID))
 			if er != nil {
@@ -244,7 +250,11 @@ func Snapshot(s events.Port) (Projection, error) {
 			return p, x
 		}
 		st := questionState(q)
-		p.Gates = append(p.Gates, Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: claimedVerification(q.Verification)})
+		g := Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: claimedVerification(q.Verification)}
+		if st == "approved" || st == "rejected" {
+			g.DecidedAt = latestEventCreatedAt(s.List("question", id), "question.answered")
+		}
+		p.Gates = append(p.Gates, g)
 		p.GateCapabilities[q.ID] = gateCapabilities(st, q.MissionID != "" || q.GoalID != "")
 		// RHZ-085 (FR-RHZ-115): counts.needsYou = missions waiting_for_human
 		// + internal gates (questions) pending. A pending question is a ball in
@@ -318,6 +328,18 @@ func Snapshot(s events.Port) (Projection, error) {
 	sort.Slice(p.Deliverables, func(i, j int) bool { return p.Deliverables[i].ID < p.Deliverables[j].ID })
 	sort.Slice(p.Edges, func(i, j int) bool { return p.Edges[i].ID < p.Edges[j].ID })
 	return p, nil
+}
+
+// latestEventCreatedAt returns the event-envelope time in an unambiguous UTC
+// RFC3339 representation. RFC3339Nano preserves envelope precision, so two
+// decisions made within one second can still be ranked honestly.
+func latestEventCreatedAt(log []events.Event, eventType string) string {
+	for i := len(log) - 1; i >= 0; i-- {
+		if log[i].Type == eventType {
+			return log[i].CreatedAt.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return ""
 }
 
 func claimedVerification(claim *question.Verification) *GateVerification {

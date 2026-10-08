@@ -73,6 +73,7 @@ type contextGateDTO struct {
 	// (omitempty): pending gates serialize exactly as before.
 	DecisionReason string           `json:"decisionReason,omitempty"`
 	DecidedBy      string           `json:"decidedBy,omitempty"`
+	DecidedAt      string           `json:"decidedAt,omitempty"`
 	Verification   *verificationDTO `json:"verification,omitempty"`
 }
 type contextMemoryDTO struct {
@@ -399,7 +400,12 @@ func assembleSteps(store events.Port, es edge.Service, taskID string) ([]context
 			if derived := claimedVerification(q.Verification); derived != nil {
 				verification = &verificationDTO{Status: derived.Status, ClaimKind: derived.ClaimKind}
 			}
-			gatesByMission[q.MissionID] = append(gatesByMission[q.MissionID], contextGateDTO{ID: q.ID, Name: q.Title, State: questionState(q), DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: verification})
+			state := questionState(q)
+			decidedAt := ""
+			if state == "approved" || state == "rejected" {
+				decidedAt = latestEventCreatedAt(store.List("question", q.ID), "question.answered")
+			}
+			gatesByMission[q.MissionID] = append(gatesByMission[q.MissionID], contextGateDTO{ID: q.ID, Name: q.Title, State: state, DecisionReason: q.Reason, DecidedBy: q.ActorRef, DecidedAt: decidedAt, Verification: verification})
 		}
 	}
 	byID := map[string]contextStepDTO{}

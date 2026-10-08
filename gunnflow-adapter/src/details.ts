@@ -40,6 +40,7 @@ export interface WireDetailBody {
     recommendation?: string;
     decisionReason?: string;
     decidedBy?: string;
+    decidedAt?: string;
     superseded?: boolean;
     verification?: GateVerification;
     missionId?: string;

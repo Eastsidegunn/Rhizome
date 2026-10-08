@@ -19,6 +19,10 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- Decided gates expose their decision-event time as `decidedAt`, and the
+  Gunnflow adapter uses it to retain the 10 most recent unverified decisions
+  (FR-RHZ-142). The value is RFC3339 UTC with an optional variable-length
+  fraction; compare it as an instant, not as a string.
 - Unix-socket peer credential verification and terminal I/O primitives, backed
   only by `golang.org/x/sys` and `golang.org/x/term` (FR-RHZ-130).
 - The Gunnflow adapter retains capped unverified gate decisions with

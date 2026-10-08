@@ -46,6 +46,8 @@ interface GateProjection {
   riskTier?: 'logged' | 'privileged';
   /** Decision provenance as emitted by Rhizome; absent means unverified. */
   verification?: GateVerification;
+  /** Decision-event envelope time as emitted by Rhizome; absent on older servers/open gates. */
+  decidedAt?: string;
 }
 
 /** Additive gate-decision provenance on GET /v1/workspace and its SSE frames. */
@@ -139,6 +141,7 @@ interface WireGate {
   janusDecision?: string;
   superseded: boolean;
   verification?: GateVerification;
+  decidedAt?: string;
 }
 interface WireDeliverable {
   id: string;
@@ -241,6 +244,31 @@ export function unverifiedDecidedGates<T extends {
   });
 }
 
+/**
+ * Rank terminal decisions newest-first. Known decision times precede missing
+ * legacy values; gate id descending preserves the former cap selection as the
+ * deterministic tiebreak and as the complete fallback for old servers.
+ */
+function rankUnverifiedDecidedGates<T extends { id?: string; decidedAt?: string }>(gates: readonly T[]): T[] {
+  const timeOf = (gate: T): string | undefined => {
+    if (!gate.decidedAt) return undefined;
+    // The core emits UTC RFC3339Nano. Normalize its optional fraction to nine
+    // digits so lexical comparison preserves the full envelope precision.
+    const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(gate.decidedAt);
+    return match ? `${match[1]}.${(match[2] ?? '').padEnd(9, '0')}Z` : undefined;
+  };
+  return [...gates].sort((a, b) => {
+    const aTime = timeOf(a);
+    const bTime = timeOf(b);
+    if (aTime !== undefined && bTime !== undefined && aTime !== bTime) return aTime < bTime ? 1 : -1;
+    if (aTime !== undefined && bTime === undefined) return -1;
+    if (aTime === undefined && bTime !== undefined) return 1;
+    const aID = String(a.id ?? '');
+    const bID = String(b.id ?? '');
+    return aID < bID ? 1 : aID > bID ? -1 : 0;
+  });
+}
+
 /** Invalid and negative overrides fall back to the documented default; zero is a valid cap. */
 export function unverifiedDecidedMax(value: string | undefined = process.env.RHIZOME_UNVERIFIED_DECIDED_MAX): number {
   if (value === undefined || !/^\d+$/.test(value)) return DEFAULT_UNVERIFIED_DECIDED_MAX;
@@ -307,6 +335,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       requestedAction: '',
       state: w.superseded ? 'superseded' : w.state === 'pending' ? 'waiting' : w.state,
       ...(verification ? { verification } : {}),
+      ...(w.decidedAt ? { decidedAt: w.decidedAt } : {}),
     } satisfies GateProjection;
   });
   const allDeliverables: DeliverableProjection[] = list('deliverables').map((d) => {
@@ -352,13 +381,13 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
   const liveTasks = tasks.filter((t) => !TERMINAL_TASK_STATES.has(t.state) && !terminalGoalIds.has(t.missionId));
   // A gate is live while it awaits a human decision: waiting, or changes_requested (RHZ-078,
   // FR-RHZ-109 — the request went back for revision but approve/reject are still open on it).
-  // RHZ-105 (FR-RHZ-133): unverified and legacy-asserted terminal decisions remain visible,
-  // capped to the last N by emitted (gate-ID) order — NOT recency; a decision-time field will
-  // replace this. The retained gates preserve their original relative order in the projection.
+  // RHZ-105/FR-RHZ-142: unverified and legacy-asserted terminal decisions remain visible,
+  // capped to the N most recent by decidedAt. Gate-id order breaks ties and is the fallback
+  // for older servers that omit decidedAt. Retained gates preserve their projection order.
   const retainedDecided = unverifiedDecidedGates(allGates, allMissions, tasks);
   const maxRetainedDecided = unverifiedDecidedMax();
   const retainedDecidedIds = new Set(
-    retainedDecided.slice(Math.max(0, retainedDecided.length - maxRetainedDecided)).map((g) => g.id),
+    rankUnverifiedDecidedGates(retainedDecided).slice(0, maxRetainedDecided).map((g) => g.id),
   );
   const liveGates = allGates.filter((g) => LIVE_GATE_STATES.has(g.state) || retainedDecidedIds.has(g.id));
   const liveMissionIds = new Set([...liveMissions.map((m) => m.id), ...liveTasks.map((t) => t.missionId)]);
