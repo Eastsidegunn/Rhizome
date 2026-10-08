@@ -91,7 +91,7 @@ func TestIndexCLIVerifiesExistingCacheFRRHZ089(t *testing.T) {
 func TestServeCodeIndexWiringFRRHZ089(t *testing.T) {
 	repo, jp, outDir := fixture058(t)
 	// ① 둘 다: 조립 레벨에서 라우트 활성.
-	handler, loop := assembleServe(&events.Store{}, nil, repo, outDir, nil, io.Discard)
+	handler, loop := assembleServe(&events.Store{}, nil, repo, outDir, nil, io.Discard, false)
 	if loop != nil {
 		t.Fatal("loop constructed without janus configuration")
 	}
@@ -110,7 +110,7 @@ func TestServeCodeIndexWiringFRRHZ089(t *testing.T) {
 		t.Fatal("partial-config serve acquired the journal lock")
 	}
 	// ③ 미설정: 기존과 동일, /v1/codeindex는 404.
-	disabled, _ := assembleServe(&events.Store{}, nil, "", "", nil, io.Discard)
+	disabled, _ := assembleServe(&events.Store{}, nil, "", "", nil, io.Discard, false)
 	srv2 := httptest.NewServer(disabled)
 	defer srv2.Close()
 	resp2, err := http.Get(srv2.URL + "/v1/codeindex")

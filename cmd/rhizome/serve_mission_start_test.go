@@ -113,7 +113,7 @@ func TestServeMissionStartWiredFRRHZ123(t *testing.T) {
 		b, _ := json.Marshal(c)
 		return strings.NewReader(string(b) + "\n"), nil
 	}
-	handler, loop := assembleServe(s, nil, "", "", jc, io.Discard)
+	handler, loop := assembleServe(s, nil, "", "", jc, io.Discard, false)
 	if loop == nil {
 		t.Fatal("loop")
 	}
@@ -172,7 +172,7 @@ func TestServeMissionStartWithoutLedgerFRRHZ123(t *testing.T) {
 		t.Fatal("runner without ledger")
 		return nil, nil
 	}
-	handler, _ := assembleServe(s, nil, "", "", jc, io.Discard)
+	handler, _ := assembleServe(s, nil, "", "", jc, io.Discard, false)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	before := len(s.All())
@@ -180,7 +180,7 @@ func TestServeMissionStartWithoutLedgerFRRHZ123(t *testing.T) {
 		t.Fatalf("%v", out)
 	}
 	// Adapter fully off: the hook is nil.
-	handler, _ = assembleServe(s, nil, "", "", nil, io.Discard)
+	handler, _ = assembleServe(s, nil, "", "", nil, io.Discard, false)
 	srv2 := httptest.NewServer(handler)
 	defer srv2.Close()
 	if out := postIntent(t, srv2.URL, `{"kind":"mission.start","missionId":"mission-1"}`); out["Accepted"] != false || out["Reason"] != "execution start unavailable" || len(s.All()) != before {

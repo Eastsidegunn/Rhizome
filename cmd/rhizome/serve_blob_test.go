@@ -44,7 +44,7 @@ func TestAssembleServeBlobRouteFRRHZ086(t *testing.T) {
 	if _, err := (source.Service{Store: s}).Register(content, "text/plain", "note://wired"); err != nil {
 		t.Fatal(err)
 	}
-	handler, loop := assembleServe(s, fsStore, "", "", nil, io.Discard)
+	handler, loop := assembleServe(s, fsStore, "", "", nil, io.Discard, false)
 	if loop != nil {
 		t.Fatal("loop constructed without janus configuration")
 	}
@@ -62,7 +62,7 @@ func TestAssembleServeBlobRouteFRRHZ086(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); ct != "text/plain" {
 		t.Fatalf("content-type %q", ct)
 	}
-	disabled, _ := assembleServe(s, nil, "", "", nil, io.Discard)
+	disabled, _ := assembleServe(s, nil, "", "", nil, io.Discard, false)
 	srv2 := httptest.NewServer(disabled)
 	defer srv2.Close()
 	resp2, err := http.Get(srv2.URL + "/v1/blob/" + id)

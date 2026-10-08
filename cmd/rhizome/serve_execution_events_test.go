@@ -89,7 +89,7 @@ func TestServeExecEventsProjectsReplayFixtureFRRHZ118(t *testing.T) {
 		t.Fatal(jc, err)
 	}
 	var eout bytes.Buffer
-	handler, loop := assembleServe(s, nil, "", "", jc, &eout)
+	handler, loop := assembleServe(s, nil, "", "", jc, &eout, false)
 	if loop == nil {
 		t.Fatal("loop missing despite full configuration")
 	}
@@ -138,7 +138,7 @@ func TestServeJanusLoopIdlesWithoutExecutionsFRRHZ118(t *testing.T) {
 	}
 	var eout bytes.Buffer
 	s := &events.Store{}
-	_, loop := assembleServe(s, nil, "", "", jc, &eout)
+	_, loop := assembleServe(s, nil, "", "", jc, &eout, false)
 	if loop == nil || loop.Replay == nil || loop.Client.Dial == nil || loop.ES.Store == nil || loop.AS.Store == nil {
 		t.Fatalf("loop seams not wired: %+v", loop)
 	}

@@ -55,6 +55,16 @@ export interface GateVerification {
   status: string;
   claimKind?: string;
   assurance?: string;
+  keyId?: string;
+  keyRevokedNow?: boolean;
+}
+interface WireTrustSummary {
+  journalId: string;
+  genesisKeyId: string;
+}
+interface WireWorkspaceBody extends Record<string, unknown> {
+  /** Read-only trust-domain metadata is accepted but never projected to nodes. */
+  trust?: WireTrustSummary;
 }
 interface DeliverableProjection {
   kind: 'deliverable';
@@ -205,21 +215,28 @@ const TERMINAL_GOAL_STATES = new Set<string>(['achieved', 'failed', 'cancelled']
 const isAdapted = (x: unknown, kind: string) =>
   (x as { kind?: string }).kind === kind && (kind !== 'deliverable' || 'title' in (x as object));
 
-/** Runtime shape check for the additive wire field; unknown future status strings remain accepted. */
+/** Runtime shape check for the additive wire field; malformed values fail closed. */
 export function isGateVerification(value: unknown): value is GateVerification {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const v = value as Record<string, unknown>;
-  return (
-    typeof v.status === 'string' && v.status !== '' &&
-    (v.claimKind === undefined || typeof v.claimKind === 'string') &&
-    (v.assurance === undefined || typeof v.assurance === 'string')
-  );
+  const allowed = new Set(['status', 'claimKind', 'assurance', 'keyId', 'keyRevokedNow']);
+  if (Object.keys(v).some((key) => !allowed.has(key))) return false;
+  if (typeof v.status !== 'string' || v.status === '') return false;
+  if (v.claimKind !== undefined && typeof v.claimKind !== 'string') return false;
+  if (v.assurance !== undefined && typeof v.assurance !== 'string') return false;
+  if (v.keyId !== undefined && typeof v.keyId !== 'string') return false;
+  if (v.keyRevokedNow !== undefined && typeof v.keyRevokedNow !== 'boolean') return false;
+  if (v.status === 'verified') {
+    return v.claimKind === undefined && v.assurance === 'key' &&
+      typeof v.keyId === 'string' && /^sha256:[0-9a-f]{64}$/.test(v.keyId);
+  }
+  return v.assurance === undefined && v.keyId === undefined && v.keyRevokedNow === undefined;
 }
 
 /**
  * A terminal decision stays visible only when provenance is absent
- * (unverified) or is the legacy asserted identity signal. Any claimed or
- * future verified status remains hidden as before.
+ * (unverified), malformed, legacy asserted, or unknown. Only a valid claimed
+ * or verified status clears approval_unverified.
  */
 export function isUnverifiedDecidedGate(gate: {
   state?: string;
@@ -228,7 +245,7 @@ export function isUnverifiedDecidedGate(gate: {
 }): boolean {
   if (gate.superseded || !DECIDED_GATE_STATES.has((gate.state ?? '') as GateProjection['state'])) return false;
   if (!isGateVerification(gate.verification)) return true;
-  return gate.verification.status === 'legacy-asserted';
+  return gate.verification.status !== 'claimed' && gate.verification.status !== 'verified';
 }
 
 /**
@@ -300,7 +317,7 @@ export function unverifiedDecidedMax(value: string | undefined = process.env.RHI
 }
 
 export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
-  const body = (raw ?? {}) as Record<string, unknown>;
+  const body = (raw ?? {}) as WireWorkspaceBody;
   const list = (k: string) => (body[k] as unknown[] | undefined) ?? [];
 
   const tasks: TaskProjection[] = list('tasks').map((t) => {

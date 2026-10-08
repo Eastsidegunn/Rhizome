@@ -44,6 +44,7 @@ const serveHelpGoldenFRRHZ144 = `Usage of serve:
   -journal string
     	
   -trust-anchor string
+` + "    \t\n" + `  -trust-enforce-janus string
 ` + "    \t\n"
 
 // FR-RHZ-144: help remains byte-for-byte identical to the pre-change binary.

@@ -23,6 +23,7 @@ import (
 	"rhizome/internal/janusadapter"
 	"rhizome/internal/journal"
 	"rhizome/internal/memory"
+	"rhizome/internal/question"
 	"rhizome/internal/source"
 	"rhizome/internal/trust"
 	"rhizome/internal/workspace"
@@ -266,6 +267,16 @@ type janusServeConfig struct {
 	Runner janusadapter.Runner
 }
 
+func trustEnforceJANUS(raw string, set bool) (bool, error) {
+	if !set {
+		return false, nil
+	}
+	if raw != "all" {
+		return false, fmt.Errorf("invalid trust enforcement selector")
+	}
+	return true, nil
+}
+
 // execStarter adapts janusadapter.Starter to the workspace seam at the
 // composition root (workspace never imports the adapter).
 type execStarter struct{ st janusadapter.Starter }
@@ -381,8 +392,9 @@ func blobStoreFromFlag(dir string) workspace.BlobGetter {
 // assembleServeInspect exposes the assembled workspace wiring to package tests.
 var assembleServeInspect func(*workspace.HTTPServer)
 
-func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, errOut io.Writer, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
+func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, errOut io.Writer, enforceAll bool, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
 	h := workspace.NewHTTP(store)
+	h.EnforceJANUS = enforceAll
 	if len(verifiers) > 0 && verifiers[0] != nil {
 		h.Trust = verifiers[0]
 	}
@@ -450,6 +462,8 @@ func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, ind
 		// FR-RHZ-119: idle-timeout stop (tail path only), process clock.
 		IdleTimeout: jc.IdleTimeout,
 		Cfg:         jc.Cfg,
+		Trust:       h.Trust,
+		EnforceAll:  enforceAll,
 		OnError: func(scope, id string, err error) {
 			fmt.Fprintf(errOut, "janus loop %s %s: %v\n", scope, id, err)
 		},
@@ -507,6 +521,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jIdle := f.Duration("janus-idle-timeout", defaultJanusIdleTimeout, "")
 	jExec := f.String("janus-exec-config", "", "")
 	trustAnchor := f.String("trust-anchor", "", "")
+	trustEnforce := f.String("trust-enforce-janus", "", "")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			f.SetOutput(errOut)
@@ -521,7 +536,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		}
 		return 2
 	}
-	journalSet, blobsSet, janusEnvModeSet, trustAnchorSet := false, false, false, false
+	journalSet, blobsSet, janusEnvModeSet, trustAnchorSet, trustEnforceSet := false, false, false, false, false
 	f.Visit(func(v *flag.Flag) {
 		switch v.Name {
 		case "journal":
@@ -532,8 +547,19 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			janusEnvModeSet = true
 		case "trust-anchor":
 			trustAnchorSet = true
+		case "trust-enforce-janus":
+			trustEnforceSet = true
 		}
 	})
+	enforceAll, e := trustEnforceJANUS(*trustEnforce, trustEnforceSet)
+	if e != nil {
+		fmt.Fprintln(errOut, "serve: usage")
+		return 2
+	}
+	if enforceAll && (!trustAnchorSet || *trustAnchor == "") {
+		fmt.Fprintln(errOut, "trust-enforce-janus requires -trust-anchor")
+		return 2
+	}
 	// Preserve the original silent usage failure for an explicitly empty
 	// journal flag. In particular, do not resolve the default data directory.
 	if journalSet && *jp == "" {
@@ -586,12 +612,14 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	var verifier *trust.Verifier
 	if trustAnchorSet && *trustAnchor == "" {
 		fmt.Fprintln(errOut, "invalid trust anchor")
+		fmt.Fprintln(errOut, "format")
 		return 2
 	}
 	if *trustAnchor != "" {
 		anchor, e = trust.LoadAnchor(*trustAnchor)
 		if e != nil {
 			fmt.Fprintln(errOut, "invalid trust anchor")
+			fmt.Fprintln(errOut, trustAnchorFailureReason(e))
 			return 2
 		}
 		verifier = trust.NewAnchored(anchor)
@@ -617,7 +645,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			return 1
 		}
 	}
-	handler, loop := assembleServe(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, errOut, verifier)
+	handler, loop := assembleServe(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, errOut, enforceAll, verifier)
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
 	}
@@ -665,6 +693,178 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 // slow request can be put in flight during shutdown. nil in production.
 var serveHandlerWrap func(http.Handler) http.Handler
 
+func trustAnchorFailureReason(err error) string {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "wrong owner"), strings.Contains(message, "owner unavailable"):
+		return "owner"
+	case strings.Contains(message, "insecure permissions"):
+		return "permissions"
+	case strings.Contains(message, "file too large"):
+		return "size"
+	case strings.Contains(message, "not a regular file"):
+		return "not-regular"
+	default:
+		return "format"
+	}
+}
+
+func gateDigestVersion(digest string) (string, error) {
+	switch {
+	case strings.HasPrefix(digest, "rhz-question-v1:"):
+		return "v1", nil
+	case strings.HasPrefix(digest, "rhz-question-v2:"):
+		return "v2", nil
+	case strings.HasPrefix(digest, "hx-args-digest-v1:"):
+		return "hx-v1", nil
+	default:
+		return "", fmt.Errorf("unknown digest version")
+	}
+}
+
+func gateVerify(args []string, out, errOut io.Writer) int {
+	f := flag.NewFlagSet("gate verify", flag.ContinueOnError)
+	f.SetOutput(errOut)
+	journalPath := f.String("journal", "", "")
+	dataDir := f.String("data-dir", "", "")
+	anchorPath := f.String("trust-anchor", "", "")
+	showDomain := f.Bool("show-domain", false, "")
+	if f.Parse(args) != nil {
+		return 2
+	}
+	journalSet, dataDirSet, anchorSet := false, false, false
+	f.Visit(func(v *flag.Flag) {
+		switch v.Name {
+		case "journal":
+			journalSet = true
+		case "data-dir":
+			dataDirSet = true
+		case "trust-anchor":
+			anchorSet = true
+		}
+	})
+	if f.NArg() != 1 || (journalSet && dataDirSet) || (journalSet && *journalPath == "") || (anchorSet && *anchorPath == "") {
+		return 2
+	}
+	var verifier *trust.Verifier
+	anchorLabel := "absent"
+	if anchorSet {
+		anchor, err := trust.LoadAnchor(*anchorPath)
+		if err != nil {
+			fmt.Fprintln(errOut, "invalid trust anchor")
+			return 2
+		}
+		verifier = trust.NewAnchored(anchor)
+	} else {
+		verifier = trust.NewUnanchored()
+	}
+	path, _, _, err := resolveExistingJournal(*dataDir, *journalPath, journalSet)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		fmt.Fprintf(errOut, "journal not found: %s\n", path)
+		return 1
+	}
+	unlock, err := acquireJournalLock(path, errOut)
+	if err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			fmt.Fprintln(out, "journal in use: stop serve, or read the serve's derived status from GET /v1/workspace")
+			return 3
+		}
+		return 1
+	}
+	defer unlock()
+	j, err := journal.OpenReadOnly(path, verifier)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	defer j.Close()
+	summary, err := verifier.TrustSummary(j)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if anchorSet {
+		if summary == nil {
+			fmt.Fprintln(errOut, "trust genesis missing")
+			return 1
+		}
+		anchorLabel = "matched"
+	}
+	id, err := workspace.ResolveGateReference(j, f.Arg(0))
+	if err != nil {
+		fmt.Fprintln(errOut, "gate not found")
+		return 1
+	}
+	projection, err := workspace.Snapshot(j, verifier)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	var gate *workspace.Gate
+	for i := range projection.Gates {
+		if projection.Gates[i].ID == id {
+			gate = &projection.Gates[i]
+			break
+		}
+	}
+	if gate == nil {
+		fmt.Fprintln(errOut, "gate not found")
+		return 1
+	}
+	consumer, decision, digest := "approval", gate.HumanDecision, gate.RequestDigest
+	if len(j.List("question", id)) != 0 {
+		q, e := (question.Service{Store: j}).Get(id)
+		if e != nil {
+			fmt.Fprintln(errOut, e)
+			return 1
+		}
+		consumer, decision, digest = "question", string(q.Decision), q.Digest
+	}
+	version, err := gateDigestVersion(digest)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	status := "pending"
+	if decision != "" {
+		status = "unverified"
+		if gate.Verification != nil {
+			status = gate.Verification.Status
+		}
+	}
+	fmt.Fprintf(out, "gate=%s\nconsumer=%s\ndecision=%s\nrequestDigest=%s\ndigestVersion=%s\nstatus=%s\n", id, consumer, decision, digest, version, status)
+	if gate.Verification != nil && gate.Verification.Assurance != "" {
+		fmt.Fprintf(out, "assurance=%s\n", gate.Verification.Assurance)
+	}
+	if gate.Verification != nil && gate.Verification.KeyID != "" {
+		fmt.Fprintf(out, "keyId=%s\nkeyRevokedNow=%t\n", gate.Verification.KeyID, gate.Verification.KeyRevokedNow)
+	}
+	fmt.Fprintf(out, "anchor=%s\n", anchorLabel)
+	if *showDomain {
+		journalID, genesisKeyID := "", ""
+		if summary != nil {
+			journalID, genesisKeyID = summary.JournalID, summary.GenesisKeyID
+		}
+		fmt.Fprintf(out, "journalId=%s\ngenesisKeyId=%s\n", journalID, genesisKeyID)
+	}
+	if status == "verified" {
+		return 0
+	}
+	return 3
+}
+
+func gate(args []string, out, errOut io.Writer) int {
+	if len(args) == 0 || args[0] != "verify" {
+		return 2
+	}
+	return gateVerify(args[1:], out, errOut)
+}
+
 func run(args []string, out, errOut io.Writer) int {
 	if len(args) == 0 {
 		return 2
@@ -680,6 +880,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return indexCmd(args[1:], out, errOut)
 	case "graph":
 		return graphCmd(args[1:], out, errOut)
+	case "gate":
+		return gate(args[1:], out, errOut)
 	default:
 		return 2
 	}

@@ -86,11 +86,14 @@ const text = (label: string, value: unknown): DetailItem[] =>
 /** Exact display vocabulary for the additive provenance DTO. */
 const verificationText = (verification: unknown): string => {
   if (!isGateVerification(verification)) return 'unverified';
+  if (verification.status === 'verified') {
+    return `verified (key)${verification.keyRevokedNow ? ' · 키 폐기됨' : ''}`;
+  }
   const base =
     verification.status === 'claimed' && (verification.claimKind === 'relayed' || verification.claimKind === 'session-direct')
       ? `claimed (${verification.claimKind})`
       : verification.status;
-  return verification.assurance ? `${base} (${verification.assurance})` : base;
+  return base;
 };
 
 /**

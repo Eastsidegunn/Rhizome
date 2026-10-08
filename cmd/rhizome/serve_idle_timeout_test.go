@@ -50,12 +50,12 @@ func TestServeIdleTimeoutWiredIntoLoopFRRHZ119(t *testing.T) {
 		t.Fatal(jc, err)
 	}
 	jc.IdleTimeout = 7 * time.Minute
-	_, loop := assembleServe(s, nil, "", "", jc, &bytes.Buffer{})
+	_, loop := assembleServe(s, nil, "", "", jc, &bytes.Buffer{}, false)
 	if loop == nil || loop.IdleTimeout != 7*time.Minute || loop.Now != nil {
 		t.Fatalf("loop wiring: %+v", loop)
 	}
 	jc.IdleTimeout = 0
-	if _, loop = assembleServe(s, nil, "", "", jc, &bytes.Buffer{}); loop.IdleTimeout != 0 {
+	if _, loop = assembleServe(s, nil, "", "", jc, &bytes.Buffer{}, false); loop.IdleTimeout != 0 {
 		t.Fatal("0 must stay 0 (off)")
 	}
 }

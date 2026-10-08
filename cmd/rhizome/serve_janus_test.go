@@ -34,7 +34,7 @@ func TestServeNoJanusFlagsUnchangedFRRHZ077(t *testing.T) {
 	if err != nil || jc != nil {
 		t.Fatal(jc, err)
 	}
-	handler, loop := assembleServe(&events.Store{}, nil, "", "", jc, io.Discard)
+	handler, loop := assembleServe(&events.Store{}, nil, "", "", jc, io.Discard, false)
 	if loop != nil {
 		t.Fatal("loop constructed without configuration")
 	}
@@ -67,7 +67,7 @@ func TestExecutionRoutesIdenticalWithAdapterFRRHZ077(t *testing.T) {
 	if err != nil || jc == nil {
 		t.Fatal(jc, err)
 	}
-	handler, loop := assembleServe(&events.Store{}, nil, "", "", jc, io.Discard)
+	handler, loop := assembleServe(&events.Store{}, nil, "", "", jc, io.Discard, false)
 	if loop == nil {
 		t.Fatal("loop missing despite full configuration")
 	}
@@ -226,7 +226,7 @@ func TestAssembleServeJanusEnvWiringFRRHZ126(t *testing.T) {
 		starterCfg = starter.st.Cfg
 	}
 	t.Cleanup(func() { assembleServeInspect = oldInspect })
-	_, loop := assembleServe(&events.Store{}, nil, "", "", jc, io.Discard)
+	_, loop := assembleServe(&events.Store{}, nil, "", "", jc, io.Discard, false)
 	if loop == nil {
 		t.Fatal("loop missing")
 	}
@@ -284,7 +284,7 @@ func TestExecutionSurfaceWorksWithoutAdapterFRRHZ077(t *testing.T) {
 	if _, err = es.ObserveState(r.ID, "0000000000000000001", "", "src", execution.Observing); err != nil {
 		t.Fatal(err)
 	}
-	handler, loop := assembleServe(s, nil, "", "", nil, io.Discard)
+	handler, loop := assembleServe(s, nil, "", "", nil, io.Discard, false)
 	if loop != nil {
 		t.Fatal("loop constructed without configuration")
 	}

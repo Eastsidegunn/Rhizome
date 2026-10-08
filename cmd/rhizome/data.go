@@ -79,3 +79,20 @@ func resolveJournal(dataDirFlag, journal string, journalSet bool) (path, dataDir
 	}
 	return filepath.Join(dataDir, "journal.ndjson"), dataDir, true, nil
 }
+
+// resolveExistingJournal applies the same path policy as resolveJournal but
+// never creates the data directory. Read-only commands use it so a typo cannot
+// leave behind a directory, journal, or sidecar lock.
+func resolveExistingJournal(dataDirFlag, journal string, journalSet bool) (path, dataDir string, defaulted bool, err error) {
+	if journalSet {
+		if journal == "" {
+			return "", "", false, fmt.Errorf("journal is required")
+		}
+		return journal, "", false, nil
+	}
+	dataDir, err = commandDataDir(dataDirFlag)
+	if err != nil {
+		return "", "", false, err
+	}
+	return filepath.Join(dataDir, "journal.ndjson"), dataDir, true, nil
+}

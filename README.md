@@ -146,7 +146,32 @@ still print the full static flag list and exit with status 2.
 | `-addr <host:port>` | `127.0.0.1:8080` | Listen address. There is no authentication, so keep it on loopback. |
 | `-blobs <dir>` | `<data-dir>/blobs` when `-journal` is omitted; otherwise *(off)* | Content-addressed blob store. Enables `POST /v1/blob` and `GET /v1/blob/{id}`. |
 | `-index-repo <dir>` and `-index-out <dir>` | *(off)* | Code index of a git checkout, served at `GET /v1/codeindex`. Give both or neither. |
+| `-trust-anchor <file>` | *(off)* | Validate the journal trust root against an operator-owned public-key anchor and verify signed gate decisions. |
+| `-trust-enforce-janus=all` | *(off)* | Require verified signatures for both allow and deny decisions on every JANUS gate. Requires `-trust-anchor`. |
 | `-janus-*` | *(off)* | Optional JANUS execution wiring, see below. |
+
+### Signed gate verification
+
+With `-trust-anchor`, `serve` records or validates the journal's trust genesis
+and projects valid signed decisions as `verification.status:"verified"`.
+`-trust-enforce-janus=all` additionally rejects unsigned JANUS allow and deny
+inputs and rechecks them immediately before dispatch and submission. It does
+not change internal question gates. Without enforcement, signed verification
+is available but existing unsigned decision behavior is unchanged.
+
+With `serve` stopped, inspect one gate directly from the journal:
+
+```sh
+./rhizome gate verify -data-dir ./rhizome-data -trust-anchor ./trust-anchor.json -show-domain q-...
+```
+
+The final argument may be a gate ID or handle. With an anchor, a verified
+decision exits 0. Without an anchor, a cryptographically valid journal chain
+is reported as `chain-valid` and exits 3; pending and other unverified states
+also exit 3. Missing or corrupt journals exit 1, usage errors exit 2. The
+command never creates a journal and refuses to read one held by a running
+writer. Anchor files contain public keys only; keep signing keys outside
+Rhizome.
 
 ### JANUS execution (advanced, optional)
 

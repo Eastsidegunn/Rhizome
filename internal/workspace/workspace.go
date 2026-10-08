@@ -398,6 +398,20 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 	return p, nil
 }
 
+// ResolveGateReference resolves a gate id or projected short handle without
+// exposing the handle index itself. Only question and JANUS approval streams
+// are eligible; handles for other node kinds are never accepted as gates.
+func ResolveGateReference(s events.Port, ref string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("nil store")
+	}
+	id := buildHandleIndex(s.All()).resolve(ref)
+	if len(s.List("question", id)) == 0 && len(s.List("approval", id)) == 0 && len(s.List("approvalrequest", id)) == 0 {
+		return "", fmt.Errorf("gate not found")
+	}
+	return id, nil
+}
+
 // latestEventCreatedAt returns the event-envelope time in an unambiguous UTC
 // RFC3339 representation. RFC3339Nano preserves envelope precision, so two
 // decisions made within one second can still be ranked honestly.
@@ -827,8 +841,9 @@ type ExecStarter interface {
 // durable record (task.instruct) or before/after the mission transition
 // (mission.start). nil members = not wired.
 type RelayHooks struct {
-	Inject ExecInjector
-	Start  ExecStarter
+	Inject       ExecInjector
+	Start        ExecStarter
+	EnforceJANUS bool
 }
 
 // ExecInjector delivers an instruction text to a running external session
@@ -1534,6 +1549,12 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		}
 		if approval.VerifyDigest(in.Digest, gr.RequestDigest) != nil {
 			return RelayResult{Reason: "digest mismatch"}, nil
+		}
+		// FR-RHZ-151: enforcement is an operator-owned narrowing policy. It is
+		// applied only after resolving this as a JANUS gate, so internal
+		// questions remain governed by their existing rules.
+		if hooks.EnforceJANUS && (verification == nil || verification.Signature == nil) {
+			return RelayResult{Reason: "verified decision required"}, nil
 		}
 		d := approval.Allow
 		if in.Kind == "gate.reject" {

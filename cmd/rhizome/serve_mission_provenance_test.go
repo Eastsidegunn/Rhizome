@@ -35,7 +35,7 @@ func TestServeMissionStartProvenanceFRRHZ124(t *testing.T) {
 		b, _ := json.Marshal(c)
 		return strings.NewReader(string(b) + "\n"), nil
 	}
-	handler, _ := assembleServe(s, nil, "", "", jc, io.Discard)
+	handler, _ := assembleServe(s, nil, "", "", jc, io.Discard, false)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	out := postIntent(t, srv.URL, `{"kind":"mission.start","missionId":"mission-1","actor":"operator","budget":{"tokens":1000}}`)

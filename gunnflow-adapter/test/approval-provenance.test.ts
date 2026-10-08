@@ -49,11 +49,11 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
   it('A1: decided detail uses exact status strings, appends assurance, and inserts status before decision', () => {
     const body = bodyOf([
       gate('relayed', { state: 'approved', verification: { status: 'claimed', claimKind: 'relayed' } }),
-      gate('direct', { state: 'rejected', verification: { status: 'claimed', claimKind: 'session-direct', assurance: 'operator-present' } }),
+      gate('direct', { state: 'rejected', verification: { status: 'claimed', claimKind: 'session-direct' } }),
       gate('claimed-missing-kind', { verification: { status: 'claimed' } }),
       gate('claimed-unknown-kind', { verification: { status: 'claimed', claimKind: 'future-kind' } }),
-      gate('verified', { verification: { status: 'verified' } }),
-      gate('verified-assured', { verification: { status: 'verified', assurance: 'hardware-backed' } }),
+      gate('verified', { verification: { status: 'verified', assurance: 'key', keyId: `sha256:${'a'.repeat(64)}` } }),
+      gate('verified-assured', { verification: { status: 'verified', assurance: 'key', keyId: `sha256:${'b'.repeat(64)}`, keyRevokedNow: true } }),
       gate('legacy', { verification: { status: 'legacy-asserted' } }),
       gate('missing'),
     ]);
@@ -65,7 +65,7 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
     ]);
     expect(detailItems(body, 'direct')).toEqual([
       { label: 'request', text: 'request body' },
-      { label: '승인 상태', text: 'claimed (session-direct) (operator-present)' },
+      { label: '승인 상태', text: 'claimed (session-direct)' },
       { label: 'decision', text: 'approved' },
     ]);
     expect(detailItems(body, 'claimed-missing-kind')?.find((item) => item.label === '승인 상태')).toEqual({
@@ -75,10 +75,10 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
       label: '승인 상태', text: 'claimed',
     });
     expect(detailItems(body, 'verified')?.find((item) => item.label === '승인 상태')).toEqual({
-      label: '승인 상태', text: 'verified',
+      label: '승인 상태', text: 'verified (key)',
     });
     expect(detailItems(body, 'verified-assured')?.find((item) => item.label === '승인 상태')).toEqual({
-      label: '승인 상태', text: 'verified (hardware-backed)',
+      label: '승인 상태', text: 'verified (key) · 키 폐기됨',
     });
     expect(detailItems(body, 'legacy')?.find((item) => item.label === '승인 상태')).toEqual({
       label: '승인 상태', text: 'legacy-asserted',
@@ -86,6 +86,23 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
     expect(detailItems(body, 'missing')?.find((item) => item.label === '승인 상태')).toEqual({
       label: '승인 상태', text: 'unverified',
     });
+  });
+
+  it('A1b: superseded provenance shapes fail closed as explicitly malformed', () => {
+    const malformed = [
+      gate('claimed-with-assurance', { verification: { status: 'claimed', claimKind: 'session-direct', assurance: 'operator-present' } }),
+      gate('verified-without-key-id', { verification: { status: 'verified' } }),
+      gate('verified-hardware-backed', { verification: { status: 'verified', assurance: 'hardware-backed' } }),
+    ];
+    const body = bodyOf(malformed);
+    const nodes = nodesOf(adaptWithReport({ revision: 1, body }).envelope);
+
+    for (const gate of malformed) {
+      expect(detailItems(body, gate.id)?.find((item) => item.label === '승인 상태'), gate.id).toEqual({
+        label: '승인 상태', text: 'unverified',
+      });
+      expect(nodes.find((node) => node.id === gate.id)?.attention, gate.id).toEqual([{ cause: APPROVAL_UNVERIFIED }]);
+    }
   });
 
   it('A2: pending and changes-requested gates have no approval-status item', () => {
@@ -150,12 +167,12 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
     expect(nodesOf(adaptWithReport({ revision: 1, body: raw }).envelope).map((n) => n.id)).toEqual([WORKSPACE_NODE_ID]);
   });
 
-  it('A4b: superseded, unknown-status, and verified decided gates remain dropped without attention', () => {
+  it('A4b: superseded and verified gates drop; unknown status is retained with attention', () => {
     const raw = bodyOf(
       [
         gate('superseded', { superseded: true }),
         gate('unknown', { verification: { status: 'future-status' } }),
-        gate('verified', { verification: { status: 'verified' } }),
+        gate('verified', { verification: { status: 'verified', assurance: 'key', keyId: `sha256:${'c'.repeat(64)}` } }),
       ],
       {
         attention: [
@@ -167,10 +184,10 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
     const result = adaptWithReport({ revision: 1, body: raw });
     const nodes = nodesOf(result.envelope);
 
-    expect(nodes.map((node) => node.id)).toEqual([WORKSPACE_NODE_ID]);
-    expect(nodes.flatMap((node) => node.attention).map((attention) => attention.cause)).not.toContain(APPROVAL_UNVERIFIED);
-    expect(result.report.attentionDropped).toBe(2);
-    expect(detailItems(raw, WORKSPACE_NODE_ID)?.map((item) => item.label)).not.toContain('승인 미확인 결정');
+    expect(nodes.map((node) => node.id)).toEqual([WORKSPACE_NODE_ID, 'unknown']);
+    expect(nodes.find((node) => node.id === 'unknown')?.attention).toEqual([{ cause: APPROVAL_UNVERIFIED }]);
+    expect(result.report.attentionDropped).toBe(1);
+    expect(detailItems(raw, WORKSPACE_NODE_ID)?.at(-1)).toEqual({ label: '승인 미확인 결정', text: '1' });
   });
 
   it('A4c: malformed verification is treated as absent for retention, attention, and root count', () => {

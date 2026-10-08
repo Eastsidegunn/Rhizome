@@ -19,6 +19,13 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- Gate questions use collision-safe `rhz-question-v2` digests while existing
+  v1 questions remain replayable and signable. Gate write APIs no longer accept
+  caller-supplied verified booleans; opaque authority values preserve the
+  narrowing-only trust boundary (FR-RHZ-145, FR-RHZ-153).
+- The Gunnflow adapter recognizes key-verified approval provenance, displays
+  current key revocation, and conservatively retains malformed, legacy,
+  missing, or unknown provenance as `approval_unverified` (FR-RHZ-150).
 - Journal write or sync failures now poison the process-wide writer until
   restart. Write-capable HTTP routes fail with a fixed 503 while read-only
   routes remain available; invalid `serve` flags no longer echo arguments
@@ -35,6 +42,14 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- Journal-owned trust genesis and signed trust-key/decision events, guarded on
+  append and strict replay with Ed25519 and P-256 verification. Workspace
+  projections expose derived `verified` assurance and trust-domain identity
+  without rewriting legacy journals (FR-RHZ-146–150).
+- Optional `-trust-enforce-janus=all` enforcement requires verified allow and
+  deny decisions at relay, dispatch, and submission boundaries. The read-only
+  `rhizome gate verify` command reports anchored or chain-valid gate status
+  directly from a stopped journal (FR-RHZ-151–152).
 - Human-action requests are now durable `request` aggregates with create,
   complete, unable, and local cancel intents. The workspace and Gunnflow
   adapter expose waiting work, structured command detail, and operator

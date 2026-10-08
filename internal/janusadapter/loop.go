@@ -16,6 +16,7 @@ import (
 	"rhizome/internal/events"
 	"rhizome/internal/execution"
 	"rhizome/internal/gaterequest"
+	"rhizome/internal/trust"
 	"rhizome/internal/wake"
 )
 
@@ -109,6 +110,10 @@ type Loop struct {
 	// Broadcast is invoked after a tick that made at least one durable write,
 	// so the existing workspace projection surface reflects loop observations.
 	Broadcast func()
+	// Trust derives decision assurance from the journal. EnforceAll is a
+	// narrowing policy setting; it is not an authority to create decisions.
+	Trust      *trust.Verifier
+	EnforceAll bool
 
 	mu sync.Mutex // one tick at a time: the loop never multiplies writers
 	// stopAcked remembers process-lifetime stop receipts (stop_accepted or
@@ -445,6 +450,10 @@ func (l *Loop) relayApproval(id string, wrote *bool) {
 	}
 	switch a.State {
 	case approval.InputRecorded:
+		if err = l.requireVerified(id); err != nil {
+			l.report("approval", id, err)
+			return
+		}
 		if a, err = l.AS.Dispatch(id, a.ResponseID); err != nil {
 			l.report("approval", id, err)
 			return
@@ -455,9 +464,41 @@ func (l *Loop) relayApproval(id string, wrote *bool) {
 	default:
 		return // Observed is terminal.
 	}
+	if err = l.requireVerified(id); err != nil {
+		l.report("approval", id, err)
+		return
+	}
 	if _, err = l.Client.Submit(a.Key, a.ResponseID, a.HumanDecision, a.Reason); err != nil {
 		l.report("approval", id, err)
 	}
+}
+
+func (l *Loop) requireVerified(id string) error {
+	if !l.EnforceAll {
+		return nil
+	}
+	if l.Trust == nil {
+		return fmt.Errorf("verified decision required")
+	}
+	log := l.AS.Store.List("approval", id)
+	var decisionEvent *events.Event
+	for i := len(log) - 1; i >= 0; i-- {
+		if log[i].Type == trust.ApprovalInputRecordedType {
+			decisionEvent = &log[i]
+			break
+		}
+	}
+	if decisionEvent == nil {
+		return fmt.Errorf("verified decision required")
+	}
+	status, err := l.Trust.VerifyDecision(l.AS.Store, *decisionEvent)
+	if err != nil {
+		return err
+	}
+	if status == nil || status.Status != "verified" {
+		return fmt.Errorf("verified decision required")
+	}
+	return nil
 }
 
 // Run ticks until ctx is done. Ticks never overlap and a failing tick never

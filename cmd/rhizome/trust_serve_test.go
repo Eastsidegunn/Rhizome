@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -35,14 +36,14 @@ func TestTrustAnchorServeExitClassificationFRRHZ148(t *testing.T) {
 	writeServeAnchor148(t, invalid, `{}`)
 	journalPath := filepath.Join(dir, "invalid.ndjson")
 	var stderr bytes.Buffer
-	if code := serveCtx(context.Background(), []string{"-journal", journalPath, "-trust-anchor", invalid, "-addr", "bad-address"}, io.Discard, &stderr); code != 2 || !strings.Contains(stderr.String(), "invalid trust anchor") {
+	if code := serveCtx(context.Background(), []string{"-journal", journalPath, "-trust-anchor", invalid, "-addr", "bad-address"}, io.Discard, &stderr); code != 2 || stderr.String() != "invalid trust anchor\nformat\n" {
 		t.Fatalf("invalid anchor exit=%d stderr=%q", code, stderr.String())
 	}
 	if _, err := os.Stat(journalPath + ".lock"); !os.IsNotExist(err) {
 		t.Fatalf("invalid anchor reached lock: %v", err)
 	}
 	stderr.Reset()
-	if code := serveCtx(context.Background(), []string{"-journal", journalPath, "-trust-anchor", "", "-addr", "bad-address"}, io.Discard, &stderr); code != 2 {
+	if code := serveCtx(context.Background(), []string{"-journal", journalPath, "-trust-anchor", "", "-addr", "bad-address"}, io.Discard, &stderr); code != 2 || stderr.String() != "invalid trust anchor\nformat\n" {
 		t.Fatalf("empty anchor exit=%d stderr=%q", code, stderr.String())
 	}
 
@@ -74,6 +75,24 @@ func TestTrustAnchorServeExitClassificationFRRHZ148(t *testing.T) {
 	}
 	if !bytes.Equal(after, before) {
 		t.Fatal("mismatched anchor changed journal bytes")
+	}
+}
+
+func TestTrustAnchorFailureReasonCategoriesFRRHZ148(t *testing.T) {
+	for _, tc := range []struct {
+		err  string
+		want string
+	}{
+		{err: "invalid trust anchor: wrong owner", want: "owner"},
+		{err: "invalid trust anchor: owner unavailable", want: "owner"},
+		{err: "invalid trust anchor: insecure permissions", want: "permissions"},
+		{err: "invalid trust anchor: file too large", want: "size"},
+		{err: "invalid trust anchor: invalid fields", want: "format"},
+		{err: "invalid trust anchor: not a regular file", want: "not-regular"},
+	} {
+		if got := trustAnchorFailureReason(errors.New(tc.err)); got != tc.want {
+			t.Errorf("%q: got %q want %q", tc.err, got, tc.want)
+		}
 	}
 }
 

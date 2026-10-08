@@ -378,6 +378,9 @@ func gateHandleTag(source string) string {
 type HTTPServer struct {
 	Store events.Port
 	Trust *trust.Verifier
+	// EnforceJANUS requires signed, Guard-verified inputs for both JANUS allow
+	// and deny decisions. It is composition-root policy, never intent input.
+	EnforceJANUS bool
 	// ExecEvents projects bound JANUS session logs for /v1/execution (FR-RHZ-083,
 	// T25). nil = adapter disabled: the events array stays empty (backward
 	// compatible). Injected by the composition root, never constructed here.
@@ -565,7 +568,7 @@ func (h *HTTPServer) Handler() http.Handler {
 				return
 			}
 			in.Intent.requestUnknownField = requestIntentHasUnknownField(raw, in.Kind)
-			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, trust.Authority{}, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart})
+			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, trust.Authority{}, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart, EnforceJANUS: h.EnforceJANUS})
 			if storePoisoned(h.Store) || errors.Is(e, events.ErrPoisoned) {
 				servePoisoned(w)
 				return
