@@ -381,8 +381,11 @@ func blobStoreFromFlag(dir string) workspace.BlobGetter {
 // assembleServeInspect exposes the assembled workspace wiring to package tests.
 var assembleServeInspect func(*workspace.HTTPServer)
 
-func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, errOut io.Writer) (http.Handler, *janusadapter.Loop) {
+func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, errOut io.Writer, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
 	h := workspace.NewHTTP(store)
+	if len(verifiers) > 0 && verifiers[0] != nil {
+		h.Trust = verifiers[0]
+	}
 	h.Blobs = blobs
 	// RHZ-059 (FR-RHZ-089): both empty = /v1/codeindex disabled; partial
 	// config is rejected in serve() before assembly (D4 관례).
@@ -451,7 +454,7 @@ func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, ind
 			fmt.Fprintf(errOut, "janus loop %s %s: %v\n", scope, id, err)
 		},
 		Broadcast: func() {
-			if p, e := workspace.Snapshot(store); e == nil {
+			if p, e := workspace.Snapshot(store, h.Trust); e == nil {
 				h.Broadcast(p)
 			}
 		},
@@ -503,6 +506,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jInterval := f.Duration("janus-observe-interval", 5*time.Second, "")
 	jIdle := f.Duration("janus-idle-timeout", defaultJanusIdleTimeout, "")
 	jExec := f.String("janus-exec-config", "", "")
+	trustAnchor := f.String("trust-anchor", "", "")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			f.SetOutput(errOut)
@@ -517,7 +521,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		}
 		return 2
 	}
-	journalSet, blobsSet, janusEnvModeSet := false, false, false
+	journalSet, blobsSet, janusEnvModeSet, trustAnchorSet := false, false, false, false
 	f.Visit(func(v *flag.Flag) {
 		switch v.Name {
 		case "journal":
@@ -526,6 +530,8 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			blobsSet = true
 		case "janus-env-mode":
 			janusEnvModeSet = true
+		case "trust-anchor":
+			trustAnchorSet = true
 		}
 	})
 	// Preserve the original silent usage failure for an explicitly empty
@@ -576,19 +582,42 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "incomplete codeindex configuration: index-repo and index-out are both required")
 		return 2
 	}
+	var anchor trust.Anchor
+	var verifier *trust.Verifier
+	if trustAnchorSet && *trustAnchor == "" {
+		fmt.Fprintln(errOut, "invalid trust anchor")
+		return 2
+	}
+	if *trustAnchor != "" {
+		anchor, e = trust.LoadAnchor(*trustAnchor)
+		if e != nil {
+			fmt.Fprintln(errOut, "invalid trust anchor")
+			return 2
+		}
+		verifier = trust.NewAnchored(anchor)
+	} else {
+		fmt.Fprintln(errOut, "rhizome: trust anchor absent; gate decisions cannot be verified")
+		verifier = trust.NewAnchorless()
+	}
 	unlock, e := acquireJournalLock(*jp, errOut)
 	if e != nil {
 		return 1
 	}
 	defer unlock()
-	j, e := journal.OpenGuarded(*jp, trust.NewAnchorless())
+	j, e := journal.OpenGuarded(*jp, verifier)
 	if e != nil {
 		fmt.Fprintln(errOut, e)
 		return 1
 	}
 	j.OnPoison = journalPoisonLogger(errOut)
 	defer j.Close()
-	handler, loop := assembleServe(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, errOut)
+	if *trustAnchor != "" {
+		if e := trust.EnsureGenesis(j, anchor); e != nil {
+			fmt.Fprintln(errOut, e)
+			return 1
+		}
+	}
+	handler, loop := assembleServe(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, errOut, verifier)
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
 	}

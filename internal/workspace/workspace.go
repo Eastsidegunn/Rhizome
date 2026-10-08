@@ -66,7 +66,11 @@ type Gate struct {
 	DecidedAt    string
 	Verification *GateVerification
 }
-type GateVerification struct{ Status, ClaimKind string }
+type GateVerification struct {
+	Status, ClaimKind, Assurance, KeyID string
+	KeyRevokedNow                       bool
+}
+type TrustSummary struct{ JournalID, GenesisKeyID string }
 type AttentionItem struct{ Kind, RefID, Cause, SourceRef, IncidentRef string }
 
 // Request is the replayed human-action request projected to /v1/workspace.
@@ -99,6 +103,7 @@ type GateCapabilities struct{ Approve, Reject, RequestChanges string }
 type RequestCapabilities struct{ Complete, Unable string }
 type Projection struct {
 	Revision     uint64
+	Trust        *TrustSummary
 	Missions     []Mission
 	Tasks        []Task
 	Gates        []Gate
@@ -123,12 +128,21 @@ type Projection struct {
 	deliverableSeq map[string]uint64
 }
 
-func Snapshot(s events.Port) (Projection, error) {
+func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 	var p Projection
 	if s == nil {
 		return p, fmt.Errorf("nil store")
 	}
 	p.Capabilities, p.GateCapabilities = map[string]TaskCapabilities{}, map[string]GateCapabilities{}
+	verifier := trust.NewAnchorless()
+	if len(verifiers) > 0 && verifiers[0] != nil {
+		verifier = verifiers[0]
+	}
+	if summary, err := verifier.TrustSummary(s); err != nil {
+		return p, err
+	} else if summary != nil {
+		p.Trust = &TrustSummary{JournalID: summary.JournalID, GenesisKeyID: summary.GenesisKeyID}
+	}
 	all := s.All()
 	p.handles = buildHandleIndex(all)
 	goals, mids, gids, qids, dids, eids, reqs, rids := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -222,7 +236,11 @@ func Snapshot(s events.Port) (Projection, error) {
 			}
 		}
 		sup, _ := (approval.Service{Store: s}).IsSuperseded(id)
-		g := Gate{ID: a.ID, Source: "janus", State: st, HumanDecision: string(a.HumanDecision), JanusDecision: string(a.JanusDecision), Superseded: sup, Name: a.GateName, RequestDigest: a.RequestDigest, Verification: approvalVerification(a)}
+		verification, er := approvalVerification(s, verifier, a)
+		if er != nil {
+			return p, er
+		}
+		g := Gate{ID: a.ID, Source: "janus", State: st, HumanDecision: string(a.HumanDecision), JanusDecision: string(a.JanusDecision), Superseded: sup, Name: a.GateName, RequestDigest: a.RequestDigest, Verification: verification}
 		if (st == "approved" || st == "rejected") && a.HumanDecision != "" {
 			g.DecidedAt = latestEventCreatedAt(s.List("approval", id), "approval.input_recorded")
 		}
@@ -268,7 +286,11 @@ func Snapshot(s events.Port) (Projection, error) {
 			return p, x
 		}
 		st := questionState(q)
-		g := Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: claimedVerification(q.Verification)}
+		verification, er := questionVerification(s, verifier, q)
+		if er != nil {
+			return p, er
+		}
+		g := Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: verification}
 		if st == "approved" || st == "rejected" {
 			g.DecidedAt = latestEventCreatedAt(s.List("question", id), "question.answered")
 		}
@@ -389,20 +411,51 @@ func latestEventCreatedAt(log []events.Event, eventType string) string {
 }
 
 func claimedVerification(claim *question.Verification) *GateVerification {
-	if claim == nil {
+	if claim == nil || claim.Signature != nil {
 		return nil
 	}
 	return &GateVerification{Status: "claimed", ClaimKind: claim.ClaimKind}
 }
 
-func approvalVerification(a approval.Ref) *GateVerification {
+func storedDecision(log []events.Event, eventType string) (events.Event, bool) {
+	for i := len(log) - 1; i >= 0; i-- {
+		if log[i].Type == eventType {
+			return log[i], true
+		}
+	}
+	return events.Event{}, false
+}
+
+func signedVerification(s events.Port, verifier *trust.Verifier, log []events.Event, eventType string) (*GateVerification, error) {
+	event, ok := storedDecision(log, eventType)
+	if !ok {
+		return nil, nil
+	}
+	derived, err := verifier.VerifyDecision(s, event)
+	if err != nil || derived == nil {
+		return nil, err
+	}
+	return &GateVerification{Status: derived.Status, Assurance: derived.Assurance, KeyID: derived.KeyID, KeyRevokedNow: derived.KeyRevokedNow}, nil
+}
+
+func questionVerification(s events.Port, verifier *trust.Verifier, q question.Ref) (*GateVerification, error) {
+	if q.Verification != nil && q.Verification.Signature != nil {
+		return signedVerification(s, verifier, s.List("question", q.ID), trust.QuestionAnsweredType)
+	}
+	return claimedVerification(q.Verification), nil
+}
+
+func approvalVerification(s events.Port, verifier *trust.Verifier, a approval.Ref) (*GateVerification, error) {
 	if a.Verification != nil {
-		return claimedVerification(a.Verification)
+		if a.Verification.Signature != nil {
+			return signedVerification(s, verifier, s.List("approval", a.ID), trust.ApprovalInputRecordedType)
+		}
+		return claimedVerification(a.Verification), nil
 	}
 	if a.ActorVerified {
-		return &GateVerification{Status: "legacy-asserted"}
+		return &GateVerification{Status: "legacy-asserted"}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // questionState maps an internal gate (question) to the cockpit state
@@ -554,6 +607,8 @@ type Intent struct {
 	// Verification is decoded strictly by RelayIntentHooks only for gate
 	// decisions. RawMessage preserves exact key casing for the V7 check.
 	Verification json.RawMessage `json:"verification,omitempty"`
+	// Trust is the exact lowerCamel payload for trust.key.add/revoke only.
+	Trust json.RawMessage `json:"trust,omitempty"`
 	// RHZ-118 (FR-RHZ-155/156): human-action request fields.
 	RequestID string   `json:"requestId"`
 	Why       string   `json:"why"`
@@ -573,6 +628,80 @@ type BudgetOverride struct {
 	Tokens   *int64 `json:"tokens"`
 	TimeMs   *int64 `json:"timeMs"`
 	MaxDepth *int64 `json:"maxDepth"`
+}
+
+type trustIntentSignature struct {
+	KeyID    string `json:"keyId"`
+	SignedAt string `json:"signedAt"`
+	Nonce    string `json:"nonce"`
+	Sig      string `json:"sig"`
+}
+
+type trustAddIntent struct {
+	KeyID     string               `json:"keyId"`
+	Algorithm string               `json:"algorithm"`
+	PublicKey string               `json:"publicKey"`
+	Principal string               `json:"principal"`
+	Assurance string               `json:"assurance"`
+	Signature trustIntentSignature `json:"signature"`
+}
+
+type trustRevokeIntent struct {
+	KeyID     string               `json:"keyId"`
+	Reason    string               `json:"reason"`
+	Signature trustIntentSignature `json:"signature"`
+}
+
+func exactIntentObject(raw json.RawMessage, keys ...string) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil || object == nil || len(object) != len(keys) {
+		return nil, fmt.Errorf("invalid trust")
+	}
+	for _, key := range keys {
+		if _, ok := object[key]; !ok {
+			return nil, fmt.Errorf("invalid trust")
+		}
+	}
+	return object, nil
+}
+
+func trustIntentPayload(kind string, raw json.RawMessage) ([]byte, error) {
+	var keys []string
+	switch kind {
+	case "trust.key.add":
+		keys = []string{"keyId", "algorithm", "publicKey", "principal", "assurance", "signature"}
+	case "trust.key.revoke":
+		keys = []string{"keyId", "reason", "signature"}
+	default:
+		return nil, fmt.Errorf("invalid trust")
+	}
+	object, err := exactIntentObject(raw, keys...)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := exactIntentObject(object["signature"], "keyId", "signedAt", "nonce", "sig"); err != nil {
+		return nil, err
+	}
+	if kind == "trust.key.add" {
+		var wire trustAddIntent
+		if json.Unmarshal(raw, &wire) != nil {
+			return nil, fmt.Errorf("invalid trust")
+		}
+		storedSig := question.Signature{KeyID: wire.Signature.KeyID, SignedAt: wire.Signature.SignedAt, Nonce: wire.Signature.Nonce, Sig: wire.Signature.Sig}
+		return json.Marshal(struct {
+			KeyID, Algorithm, PublicKey, Principal, Assurance string
+			Signature                                         question.Signature
+		}{wire.KeyID, wire.Algorithm, wire.PublicKey, wire.Principal, wire.Assurance, storedSig})
+	}
+	var wire trustRevokeIntent
+	if json.Unmarshal(raw, &wire) != nil {
+		return nil, fmt.Errorf("invalid trust")
+	}
+	storedSig := question.Signature{KeyID: wire.Signature.KeyID, SignedAt: wire.Signature.SignedAt, Nonce: wire.Signature.Nonce, Sig: wire.Signature.Sig}
+	return json.Marshal(struct {
+		KeyID, Reason string
+		Signature     question.Signature
+	}{wire.KeyID, wire.Reason, storedSig})
 }
 
 // IntentStep is the wire shape of one procedure.define step (RHZ-065).
@@ -763,6 +892,9 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		}
 	}()
 	var verification *question.Verification
+	if len(in.Trust) != 0 && in.Kind != "trust.key.add" && in.Kind != "trust.key.revoke" {
+		return RelayResult{Reason: "invalid trust"}, nil
+	}
 	if len(in.Verification) != 0 {
 		switch in.Kind {
 		case "gate.approve", "gate.reject", "gate.requestChanges":
@@ -783,6 +915,22 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 	in = resolveHandles(s, in)
 	m := mission.Service{Store: s}
 	switch in.Kind {
+	case "trust.key.add", "trust.key.revoke":
+		if len(in.Trust) == 0 {
+			return RelayResult{Reason: "invalid trust"}, nil
+		}
+		payload, e := trustIntentPayload(in.Kind, in.Trust)
+		if e != nil {
+			return RelayResult{Reason: "invalid trust"}, nil
+		}
+		eventType := trust.TrustAddedType
+		if in.Kind == "trust.key.revoke" {
+			eventType = trust.TrustRevokedType
+		}
+		if e := trust.RecordKeyChange(s, eventType, payload); e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
 	case "request.create":
 		_, e := (requestagg.Service{Store: s}).CreateRequest(requestagg.Create{
 			Name: in.Name, MissionID: in.MissionID, GoalID: in.GoalID, Why: in.Why,

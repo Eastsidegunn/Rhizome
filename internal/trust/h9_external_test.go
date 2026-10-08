@@ -138,9 +138,10 @@ func TestTrustExportedAPIAllowlistFRRHZ153(t *testing.T) {
 	want := []string{
 		"AddMessage", "AlgorithmECDSAP256", "AlgorithmEd25519", "Anchor", "AnchorFormat",
 		"ApprovalInputRecordedType", "AssuranceKey", "Authority", "CheckAppend", "CheckReplay",
-		"DecisionMessage", "DecisionMessageTag", "ErrInvalidAnchor", "KeyID", "LoadAnchor",
+		"DecisionMessage", "DecisionMessageTag", "DecisionStatus", "EnsureGenesis", "ErrInvalidAnchor", "KeyID", "LoadAnchor",
 		"NewAnchored", "NewAnchorless", "NewUnanchored", "ParseAnchor", "QuestionAnsweredType",
-		"RevokeMessage", "TrustKeyMessageTag", "Verifier", "VerifySignature",
+		"RecordKeyChange", "RevokeMessage", "Summary", "TrustAddedType", "TrustAggregateID", "TrustAggregateType", "TrustGenesisType",
+		"TrustKeyMessageTag", "TrustRevokedType", "TrustSummary", "Verifier", "VerifyDecision", "VerifySignature",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("exported trust API\n got: %v\nwant: %v", got, want)

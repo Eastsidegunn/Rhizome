@@ -105,3 +105,18 @@ func TestTrustKeyMessagesAndWireConstantsFRRHZ146(t *testing.T) {
 		t.Fatalf("approval event type = %q", got)
 	}
 }
+
+func TestApprovalV8VerifiedPlusVerificationZeroWritesFRRHZ149(t *testing.T) {
+	store := &events.Store{}
+	key := approval.RequestKey{TraceID: "2123456789abcdef0123456789abcdef", SpanID: "2123456789abcdef", RequestID: "v8-write"}
+	claim := &question.Verification{ClaimKind: "relayed", OriginClaim: "H", RelayChain: []string{"ops"}}
+	auth := trust.AuthorityForTest()
+	before := len(store.All())
+	if _, err := (approval.Service{Store: store}).RecordInput(key, approval.Allow, "", "response", "digest", "ops", "", "", auth, claim); err == nil || len(store.All()) != before {
+		t.Fatalf("V8 claim write err=%v events=%d", err, len(store.All()))
+	}
+	signed := &question.Verification{Signature: &question.Signature{KeyID: "sha256:06e3fd8fda29bb60ab59557de61edb0aecdb231134be30e75b455f8e1b792fa9", SignedAt: "2026-10-08T00:00:00Z", Nonce: "000102030405060708090a0b0c0d0e0f", Sig: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="}}
+	if _, err := (approval.Service{Store: store}).RecordInput(key, approval.Allow, "", "response", "digest", "ops", "", "", auth, signed); err == nil || len(store.All()) != before {
+		t.Fatalf("V8 signed write err=%v events=%d", err, len(store.All()))
+	}
+}

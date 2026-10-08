@@ -24,6 +24,7 @@ import (
 	"rhizome/internal/retrieval"
 	"rhizome/internal/surface"
 	"rhizome/internal/trace"
+	"rhizome/internal/trust"
 )
 
 // allRelationTypes: FollowRelations 전 타입(결정론 고정 순서).
@@ -198,7 +199,7 @@ func (h *HTTPServer) serveContext(w http.ResponseWriter, r *http.Request) {
 	bundle.Task.CurrentAction, bundle.Task.Progress, bundle.Task.HasProgress = sv.CurrentAction, sv.Progress, sv.HasProgress
 	// RHZ-068 (FR-RHZ-097): read-only projection — a cycle or an unresolved
 	// dependency is a 500, never silently dropped (same tone as trace failures).
-	if bundle.Steps, err = assembleSteps(h.Store, es, taskID); err != nil {
+	if bundle.Steps, err = assembleSteps(h.Store, h.Trust, es, taskID); err != nil {
 		http.Error(w, "context assembly failed", http.StatusInternalServerError)
 		return
 	}
@@ -374,7 +375,7 @@ func (h *HTTPServer) serveNotesContext(w http.ResponseWriter, r *http.Request, k
 // spawned with, so write and read share one rule; a cycle or a dependency on
 // a mission outside the spawn set surfaces as an error. A mission that
 // spawned nothing yields an empty (non-nil) slice.
-func assembleSteps(store events.Port, es edge.Service, taskID string) ([]contextStepDTO, error) {
+func assembleSteps(store events.Port, verifier *trust.Verifier, es edge.Service, taskID string) ([]contextStepDTO, error) {
 	out := []contextStepDTO{}
 	outgoing, err := es.ByNode("mission", taskID)
 	if err != nil {
@@ -406,8 +407,10 @@ func assembleSteps(store events.Port, es edge.Service, taskID string) ([]context
 		}
 		if stepSet[q.MissionID] {
 			var verification *verificationDTO
-			if derived := claimedVerification(q.Verification); derived != nil {
-				verification = &verificationDTO{Status: derived.Status, ClaimKind: derived.ClaimKind}
+			if derived, err := questionVerification(store, verifier, q); err != nil {
+				return nil, err
+			} else if derived != nil {
+				verification = &verificationDTO{Status: derived.Status, ClaimKind: derived.ClaimKind, Assurance: derived.Assurance, KeyID: derived.KeyID, KeyRevokedNow: derived.KeyRevokedNow}
 			}
 			state := questionState(q)
 			decidedAt := ""

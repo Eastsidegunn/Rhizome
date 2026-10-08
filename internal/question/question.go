@@ -2,11 +2,13 @@ package question
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
 	"rhizome/internal/projector"
@@ -61,27 +63,33 @@ type answered struct {
 	Verification                       *Verification `json:",omitempty"`
 }
 
-// Verification is an unverified provenance claim attached to a decision.
+// Verification is either a provenance claim or a signed decision envelope.
 // Display status is deliberately not stored; projections derive it on read.
 type Verification struct {
-	ClaimKind     string
-	OriginClaim   string
-	OriginChannel string   `json:",omitempty"`
-	RelayChain    []string `json:",omitempty"`
-	SessionRef    string   `json:",omitempty"`
-	ObservedAt    string   `json:",omitempty"`
+	ClaimKind     string     `json:",omitempty"`
+	OriginClaim   string     `json:",omitempty"`
+	OriginChannel string     `json:",omitempty"`
+	RelayChain    []string   `json:",omitempty"`
+	SessionRef    string     `json:",omitempty"`
+	ObservedAt    string     `json:",omitempty"`
+	Signature     *Signature `json:",omitempty"`
 }
+
+// Signature is the stored Go-name-key envelope for a signed gate decision.
+type Signature struct{ KeyID, SignedAt, Nonce, Sig string }
 
 var errInvalidVerification = errors.New("invalid verification")
 
 var payloadVerificationKeys = map[string]bool{
 	"ClaimKind": true, "OriginClaim": true, "OriginChannel": true,
 	"RelayChain": true, "SessionRef": true, "ObservedAt": true,
+	"Signature": true,
 }
 
 var intentVerificationKeys = map[string]bool{
 	"claimKind": true, "originClaim": true, "originChannel": true,
 	"relayChain": true, "sessionRef": true, "observedAt": true,
+	"signature": true,
 }
 
 type intentVerification struct {
@@ -91,6 +99,12 @@ type intentVerification struct {
 	RelayChain    []string `json:"relayChain"`
 	SessionRef    string   `json:"sessionRef"`
 	ObservedAt    string   `json:"observedAt"`
+	Signature     *struct {
+		KeyID    string `json:"keyId"`
+		SignedAt string `json:"signedAt"`
+		Nonce    string `json:"nonce"`
+		Sig      string `json:"sig"`
+	} `json:"signature"`
 }
 
 // DecodeIntentVerification performs the exact-case, pre-decode key check for
@@ -109,7 +123,25 @@ func DecodeIntentVerification(raw json.RawMessage, actor string) (*Verification,
 		OriginChannel: wire.OriginChannel, RelayChain: wire.RelayChain,
 		SessionRef: wire.SessionRef, ObservedAt: wire.ObservedAt,
 	}
+	if wire.Signature != nil {
+		var object map[string]json.RawMessage
+		if json.Unmarshal(keysRaw(raw, "signature"), &object) != nil || len(object) != 4 {
+			return nil, errInvalidVerification
+		}
+		for _, key := range []string{"keyId", "signedAt", "nonce", "sig"} {
+			if _, ok := object[key]; !ok {
+				return nil, errInvalidVerification
+			}
+		}
+		v.Signature = &Signature{KeyID: wire.Signature.KeyID, SignedAt: wire.Signature.SignedAt, Nonce: wire.Signature.Nonce, Sig: wire.Signature.Sig}
+	}
 	return validateVerification(v, actor, keys, false)
+}
+
+func keysRaw(raw json.RawMessage, key string) json.RawMessage {
+	var object map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &object)
+	return object[key]
 }
 
 // DecodePayloadVerification performs the exact-case pre-decode check for the
@@ -122,6 +154,17 @@ func DecodePayloadVerification(raw json.RawMessage, actor string) (*Verification
 	var v Verification
 	if json.Unmarshal(raw, &v) != nil {
 		return nil, errInvalidVerification
+	}
+	if v.Signature != nil {
+		var object map[string]json.RawMessage
+		if json.Unmarshal(keysRaw(raw, "Signature"), &object) != nil || len(object) != 4 {
+			return nil, errInvalidVerification
+		}
+		for _, key := range []string{"KeyID", "SignedAt", "Nonce", "Sig"} {
+			if _, ok := object[key]; !ok {
+				return nil, errInvalidVerification
+			}
+		}
 	}
 	return validateVerification(&v, actor, keys, true)
 }
@@ -160,6 +203,9 @@ func ValidateVerification(v *Verification, actor string) (*Verification, error) 
 	if v.ObservedAt != "" {
 		keys["ObservedAt"] = true
 	}
+	if v.Signature != nil {
+		keys["Signature"] = true
+	}
 	return validateVerification(v, actor, keys, true)
 }
 
@@ -170,7 +216,7 @@ func validateVerification(v *Verification, actor string, keys map[string]bool, p
 		}
 		return keys[intent]
 	}
-	if v == nil || (v.ClaimKind != "relayed" && v.ClaimKind != "session-direct") || v.OriginClaim != "H" {
+	if v == nil {
 		return nil, errInvalidVerification
 	}
 	actor, err := normalizeActor(actor)
@@ -179,6 +225,17 @@ func validateVerification(v *Verification, actor string, keys map[string]bool, p
 	}
 	out := *v
 	out.RelayChain = append([]string(nil), v.RelayChain...)
+	if v.Signature != nil {
+		if len(keys) != 1 || !key("Signature", "signature") || !validSignature(v.Signature) {
+			return nil, errInvalidVerification
+		}
+		sig := *v.Signature
+		out.Signature = &sig
+		return &out, nil
+	}
+	if (v.ClaimKind != "relayed" && v.ClaimKind != "session-direct") || v.OriginClaim != "H" {
+		return nil, errInvalidVerification
+	}
 	if key("ObservedAt", "observedAt") {
 		if _, err := time.Parse(time.RFC3339, v.ObservedAt); err != nil {
 			return nil, errInvalidVerification
@@ -210,6 +267,21 @@ func validateVerification(v *Verification, actor string, keys map[string]bool, p
 		}
 	}
 	return &out, nil
+}
+
+var signatureKeyID = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var signatureNonce = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func validSignature(sig *Signature) bool {
+	if sig == nil || !signatureKeyID.MatchString(sig.KeyID) || !signatureNonce.MatchString(sig.Nonce) {
+		return false
+	}
+	t, err := time.Parse("2006-01-02T15:04:05Z", sig.SignedAt)
+	if err != nil || t.UTC().Format("2006-01-02T15:04:05Z") != sig.SignedAt {
+		return false
+	}
+	_, err = base64.StdEncoding.Strict().DecodeString(sig.Sig)
+	return err == nil
 }
 
 func Digest(title, body, recommendation string) string {

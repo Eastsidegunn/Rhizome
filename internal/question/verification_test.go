@@ -55,6 +55,18 @@ func TestVerificationPayloadRoundTripBothClaimKindsFRRHZ129(t *testing.T) {
 	}
 }
 
+func TestValidP1ClaimBytesUnchangedFRRHZ149(t *testing.T) {
+	v := question.Verification{ClaimKind: "session-direct", OriginClaim: "H", OriginChannel: "dev-session", SessionRef: "session:example"}
+	got, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"ClaimKind":"session-direct","OriginClaim":"H","OriginChannel":"dev-session","SessionRef":"session:example"}`
+	if string(got) != want {
+		t.Fatalf("P1 claim bytes changed\n got: %s\nwant: %s", got, want)
+	}
+}
+
 func TestVerificationReplayRejectsEachRuleViolationFRRHZ129(t *testing.T) {
 	s := &events.Store{}
 	q, err := (question.Service{Store: s}).Ask("title", "body", "recommend", "", "", "operator", "")

@@ -70,9 +70,16 @@ type gateDTO struct {
 	Verification *verificationDTO `json:"verification,omitempty"`
 }
 type verificationDTO struct {
-	Status    string `json:"status"`
-	ClaimKind string `json:"claimKind,omitempty"`
-	Assurance string `json:"assurance,omitempty"`
+	Status        string `json:"status"`
+	ClaimKind     string `json:"claimKind,omitempty"`
+	Assurance     string `json:"assurance,omitempty"`
+	KeyID         string `json:"keyId,omitempty"`
+	KeyRevokedNow bool   `json:"keyRevokedNow,omitempty"`
+}
+
+type trustDTO struct {
+	JournalID    string `json:"journalId"`
+	GenesisKeyID string `json:"genesisKeyId"`
 }
 type attentionDTO struct {
 	Kind        string `json:"kind"`
@@ -120,6 +127,7 @@ type dto struct {
 	// They precede the long-pinned final capability fields.
 	Requests            []requestDTO                    `json:"requests,omitempty"`
 	RequestCapabilities map[string]requestCapabilityDTO `json:"requestCapabilities,omitempty"`
+	Trust               *trustDTO                       `json:"trust,omitempty"`
 	// RHZ-070 (FR-RHZ-099, additive): always present ({} when empty), keyed
 	// by task id / internal gate id. These MUST stay the last two fields so
 	// the pre-RHZ-070 prefix of the body is provably unchanged (A1 pins it).
@@ -193,6 +201,9 @@ func requestIntentHasUnknownField(raw json.RawMessage, kind string) bool {
 
 func toDTO(p Projection) dto {
 	d := dto{Missions: []missionDTO{}, Tasks: []taskDTO{}, Gates: []gateDTO{}, Deliverables: []deliverableDTO{}, Edges: []edgeDTO{}, Attention: []attentionDTO{}, Capabilities: map[string]taskCapabilityDTO{}, GateCapabilities: map[string]gateCapabilityDTO{}}
+	if p.Trust != nil {
+		d.Trust = &trustDTO{JournalID: p.Trust.JournalID, GenesisKeyID: p.Trust.GenesisKeyID}
+	}
 	// RHZ-070 (FR-RHZ-099): map keys are emitted in sorted order by
 	// encoding/json, so the wire is deterministic for a given journal.
 	for id, c := range p.Capabilities {
@@ -210,7 +221,7 @@ func toDTO(p Projection) dto {
 	for _, g := range p.Gates {
 		var verification *verificationDTO
 		if g.Verification != nil {
-			verification = &verificationDTO{Status: g.Verification.Status, ClaimKind: g.Verification.ClaimKind}
+			verification = &verificationDTO{Status: g.Verification.Status, ClaimKind: g.Verification.ClaimKind, Assurance: g.Verification.Assurance, KeyID: g.Verification.KeyID, KeyRevokedNow: g.Verification.KeyRevokedNow}
 		}
 		d.Gates = append(d.Gates, gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, DecidedAt: g.DecidedAt, Handle: p.handles.of(gateHandleTag(g.Source), g.ID), Verification: verification})
 	}
@@ -366,6 +377,7 @@ func gateHandleTag(source string) string {
 
 type HTTPServer struct {
 	Store events.Port
+	Trust *trust.Verifier
 	// ExecEvents projects bound JANUS session logs for /v1/execution (FR-RHZ-083,
 	// T25). nil = adapter disabled: the events array stays empty (backward
 	// compatible). Injected by the composition root, never constructed here.
@@ -402,7 +414,7 @@ type HTTPServer struct {
 }
 
 func NewHTTP(store events.Port) *HTTPServer {
-	return &HTTPServer{Store: store, subs: map[chan Projection]bool{}, execSubs: map[chan struct{}]bool{}}
+	return &HTTPServer{Store: store, Trust: trust.NewAnchorless(), subs: map[chan Projection]bool{}, execSubs: map[chan struct{}]bool{}}
 }
 
 // Broadcast notifies workspace subscribers with the given projection and
@@ -440,7 +452,7 @@ func (h *HTTPServer) Handler() http.Handler {
 				http.Error(w, e.Error(), 400)
 				return
 			}
-			p, e := Snapshot(h.Store)
+			p, e := Snapshot(h.Store, h.Trust)
 			if e != nil {
 				http.Error(w, e.Error(), 500)
 				return
@@ -453,7 +465,7 @@ func (h *HTTPServer) Handler() http.Handler {
 		}
 		if r.URL.Path == "/v1/workspace/stream" && r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/event-stream")
-			p, e := Snapshot(h.Store)
+			p, e := Snapshot(h.Store, h.Trust)
 			if e != nil {
 				http.Error(w, e.Error(), 500)
 				return
@@ -567,7 +579,7 @@ func (h *HTTPServer) Handler() http.Handler {
 			if res.Accepted {
 				// FR-RHZ-080: note changes reuse workspace "projection" push as
 				// a GET /v1/knowledge requery signal, not a knowledge payload.
-				if p, x := Snapshot(h.Store); x == nil {
+				if p, x := Snapshot(h.Store, h.Trust); x == nil {
 					h.Broadcast(p)
 				}
 			}
