@@ -473,11 +473,18 @@ func serve(args []string, out, errOut io.Writer) int {
 	return serveCtx(ctx, args, out, errOut)
 }
 
+func journalPoisonLogger(errOut io.Writer) func(error) {
+	var once sync.Once
+	return func(error) {
+		once.Do(func() { fmt.Fprintln(errOut, events.ErrPoisoned) })
+	}
+}
+
 // serveCtx is serve with the lifetime supplied by the caller (tests cancel it
 // in-process). Cancellation is a clean exit (0), not an error.
 func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	f := flag.NewFlagSet("serve", flag.ContinueOnError)
-	f.SetOutput(errOut)
+	f.SetOutput(io.Discard)
 	jp := f.String("journal", "", "")
 	bp := f.String("blobs", "", "")
 	dataDir := f.String("data-dir", "", "")
@@ -495,7 +502,18 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jInterval := f.Duration("janus-observe-interval", 5*time.Second, "")
 	jIdle := f.Duration("janus-idle-timeout", defaultJanusIdleTimeout, "")
 	jExec := f.String("janus-exec-config", "", "")
-	if f.Parse(args) != nil {
+	if err := f.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			f.SetOutput(errOut)
+			if f.Usage != nil {
+				f.Usage()
+			} else {
+				fmt.Fprintf(errOut, "Usage of %s:\n", f.Name())
+				f.PrintDefaults()
+			}
+		} else {
+			fmt.Fprintln(errOut, "serve: usage")
+		}
 		return 2
 	}
 	journalSet, blobsSet, janusEnvModeSet := false, false, false
@@ -567,6 +585,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, e)
 		return 1
 	}
+	j.OnPoison = journalPoisonLogger(errOut)
 	defer j.Close()
 	handler, loop := assembleServe(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, errOut)
 	if serveHandlerWrap != nil {

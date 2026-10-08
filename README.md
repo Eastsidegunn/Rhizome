@@ -135,6 +135,10 @@ config file. Everything else is a command-line flag.
 
 ### `rhizome serve` flags
 
+Invalid `serve` flag syntax exits with status 2 and prints only
+`serve: usage`; argument values are not echoed. `serve -h` and `serve -help`
+still print the full static flag list and exit with status 2.
+
 | Flag | Default | Meaning |
 |---|---|---|
 | `-data-dir <dir>` | OS/user default | Data directory used when `-journal` is omitted. |

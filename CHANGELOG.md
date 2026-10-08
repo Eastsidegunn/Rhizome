@@ -10,6 +10,10 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- Journal write or sync failures now poison the process-wide writer until
+  restart. Write-capable HTTP routes fail with a fixed 503 while read-only
+  routes remain available; invalid `serve` flags no longer echo arguments
+  (FR-RHZ-144).
 - The adapter installs `@gunnflow/contract` 0.3.1 from npm instead of a
   vendored tarball (the wire is unchanged; 0.3.1 only widens the package's
   vitest peer range). `@gunnflow/upstream-port` stays vendored until it is

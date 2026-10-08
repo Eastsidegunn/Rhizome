@@ -6,6 +6,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,6 +44,10 @@ func (h *HTTPServer) serveCodeIndex(w http.ResponseWriter, r *http.Request) {
 	if h.IndexRepo == "" || h.IndexOut == "" {
 		// 미배선 = 비활성 (ExecEvents·Blobs nil 관례).
 		http.NotFound(w, r)
+		return
+	}
+	if storePoisoned(h.Store) {
+		servePoisoned(w)
 		return
 	}
 	sha, err := codeindex.ResolveMain(h.IndexRepo)
@@ -84,6 +89,10 @@ func (h *HTTPServer) serveCodeIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	h.indexMu.Unlock()
 	if err != nil {
+		if storePoisoned(h.Store) || errors.Is(err, events.ErrPoisoned) {
+			servePoisoned(w)
+			return
+		}
 		http.Error(w, "code index record failed", http.StatusInternalServerError)
 		return
 	}

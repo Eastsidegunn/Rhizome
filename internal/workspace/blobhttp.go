@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"rhizome/internal/events"
 	"rhizome/internal/source"
 )
 
@@ -159,6 +160,10 @@ func (h *HTTPServer) serveBlobUpload(w http.ResponseWriter, r *http.Request) {
 	// the lock.
 	h.uploadMu.Lock()
 	defer h.uploadMu.Unlock()
+	if storePoisoned(h.Store) {
+		servePoisoned(w)
+		return
+	}
 	id, err := putter.Put(body)
 	if err != nil {
 		http.Error(w, "blob store failed", http.StatusInternalServerError)
@@ -173,6 +178,10 @@ func (h *HTTPServer) serveBlobUpload(w http.ResponseWriter, r *http.Request) {
 	svc := source.Service{Store: h.Store}
 	ref, err := svc.Register(body, rawCT, BlobUploadSourceURI)
 	if err != nil {
+		if storePoisoned(h.Store) || errors.Is(err, events.ErrPoisoned) {
+			servePoisoned(w)
+			return
+		}
 		// Belt and braces: if a concurrent writer registered the same digest
 		// between Register's List and Append, the stream now exists and the
 		// outcome is identical to a re-upload.

@@ -9,6 +9,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -148,6 +149,10 @@ func (h *HTTPServer) serveContext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "task parameter required", http.StatusBadRequest)
 		return
 	}
+	if storePoisoned(h.Store) {
+		servePoisoned(w)
+		return
+	}
 	// RHZ-073 (FR-RHZ-103): task may be a handle; resolved once here, the
 	// bundle (incl. task.id and the trace) is then identical to a by-ID query.
 	if handleShape(taskID) {
@@ -258,6 +263,10 @@ func (h *HTTPServer) serveContext(w http.ResponseWriter, r *http.Request) {
 		}
 		h.contextMu.Unlock()
 		if err != nil {
+			if storePoisoned(h.Store) || errors.Is(err, events.ErrPoisoned) {
+				servePoisoned(w)
+				return
+			}
 			http.Error(w, "context trace record failed", http.StatusInternalServerError)
 			return
 		}

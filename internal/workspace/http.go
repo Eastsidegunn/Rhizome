@@ -460,6 +460,10 @@ func (h *HTTPServer) Handler() http.Handler {
 			return
 		}
 		if r.URL.Path == "/v1/intent" && r.Method == http.MethodPost {
+			if storePoisoned(h.Store) {
+				servePoisoned(w)
+				return
+			}
 			var in struct {
 				Intent
 				Actor    string `json:"actor"`
@@ -470,6 +474,10 @@ func (h *HTTPServer) Handler() http.Handler {
 				return
 			}
 			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, false, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart})
+			if storePoisoned(h.Store) || errors.Is(e, events.ErrPoisoned) {
+				servePoisoned(w)
+				return
+			}
 			if e != nil {
 				http.Error(w, e.Error(), 500)
 				return

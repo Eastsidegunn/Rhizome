@@ -3,6 +3,7 @@ package journal
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,28 @@ import (
 )
 
 var jFixedTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+type faultFile struct {
+	journalFile
+	writeErr error
+	syncErr  error
+	writes   int
+}
+
+func (f *faultFile) Write(p []byte) (int, error) {
+	f.writes++
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	return f.journalFile.Write(p)
+}
+
+func (f *faultFile) Sync() error {
+	if f.syncErr != nil {
+		return f.syncErr
+	}
+	return f.journalFile.Sync()
+}
 
 // writeJournalLines serializes events as the on-disk ndjson format for replay
 // tests. Test-local temp files only; not a contract fixture.
@@ -79,6 +102,101 @@ func TestRejectsCorruptOrGap(t *testing.T) {
 		if _, err := Open(p); err == nil {
 			t.Fatal("accepted corrupt journal")
 		}
+	}
+}
+
+// FR-RHZ-144: an ambiguous write or fsync failure latches poison exactly
+// once; later writers touch neither the file nor the readable memory state.
+func TestJournalFailStopPoisonFRRHZ144(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		writeFail bool
+	}{
+		{name: "write", writeFail: true},
+		{name: "fsync"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "journal.ndjson")
+			j, err := Open(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer j.Close()
+			if err := j.Append(0, events.Event{AggregateType: "goal", AggregateID: "g", Revision: 1, Type: "goal.created", Payload: json.RawMessage(`{"id":"g"}`)}); err != nil {
+				t.Fatal(err)
+			}
+			beforeAll := j.All()
+			cause := errors.New(tc.name + " failed")
+			ff := &faultFile{journalFile: j.file}
+			if tc.writeFail {
+				ff.writeErr = cause
+			} else {
+				ff.syncErr = cause
+			}
+			j.file = ff
+			var causes []error
+			j.OnPoison = func(err error) { causes = append(causes, err) }
+
+			err = j.Append(1, events.Event{AggregateType: "goal", AggregateID: "g", Revision: 2, Type: "goal.updated"})
+			if err != events.ErrPoisoned || !errors.Is(err, events.ErrPoisoned) || err.Error() != "journal poisoned: restart required" {
+				t.Fatalf("first failure = %v, identical=%v", err, err == events.ErrPoisoned)
+			}
+			if !j.Poisoned() || len(causes) != 1 || causes[0] != cause {
+				t.Fatalf("poisoned=%v causes=%v", j.Poisoned(), causes)
+			}
+			afterFailure, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writes := ff.writes
+
+			// A different writer path/aggregate cannot reuse the stale global
+			// sequence after the ambiguous append.
+			err = j.Append(0, events.Event{AggregateType: "mission", AggregateID: "m", Revision: 1, Type: "mission.created"})
+			if err != events.ErrPoisoned || !errors.Is(err, events.ErrPoisoned) {
+				t.Fatalf("later append = %v", err)
+			}
+			afterLater, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(afterLater, afterFailure) || ff.writes != writes {
+				t.Fatalf("later append wrote bytes: writes %d -> %d", writes, ff.writes)
+			}
+			if !reflect.DeepEqual(j.All(), beforeAll) || !reflect.DeepEqual(j.List("goal", "g"), beforeAll) {
+				t.Fatal("readable memory state changed after poison")
+			}
+			if len(causes) != 1 {
+				t.Fatalf("OnPoison calls = %d, want 1", len(causes))
+			}
+		})
+	}
+}
+
+// FR-RHZ-144: failures before the file write boundary remain ordinary errors
+// and leave the journal available for a later valid append.
+func TestJournalPreWriteFailuresDoNotPoisonFRRHZ144(t *testing.T) {
+	j, err := Open(filepath.Join(t.TempDir(), "journal.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	calls := 0
+	j.OnPoison = func(error) { calls++ }
+
+	err = j.Append(1, events.Event{AggregateType: "goal", AggregateID: "g", Revision: 2, Type: "goal.updated"})
+	if !errors.Is(err, events.ErrRevisionConflict) || j.Poisoned() {
+		t.Fatalf("revision conflict = %v, poisoned=%v", err, j.Poisoned())
+	}
+	err = j.Append(0, events.Event{AggregateType: "goal", AggregateID: "g", Revision: 1, Type: "goal.created", Payload: json.RawMessage(`{`)})
+	if err == nil || errors.Is(err, events.ErrPoisoned) || j.Poisoned() {
+		t.Fatalf("marshal failure = %v, poisoned=%v", err, j.Poisoned())
+	}
+	if err := j.Append(0, events.Event{AggregateType: "goal", AggregateID: "g", Revision: 1, Type: "goal.created"}); err != nil {
+		t.Fatalf("valid append after pre-write failures: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("OnPoison calls = %d, want 0", calls)
 	}
 }
 

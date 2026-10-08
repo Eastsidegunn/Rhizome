@@ -690,11 +690,20 @@ func RelayIntentWith(s events.Port, in Intent, actor string, verified bool, inje
 
 // RelayIntentHooks relays one intent with every composition-root seam
 // (FR-RHZ-119 inject, FR-RHZ-123 start).
-func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hooks RelayHooks) (RelayResult, error) {
+func RelayIntentHooks(s events.Port, in Intent, actor string, verified bool, hooks RelayHooks) (result RelayResult, err error) {
 	inject := hooks.Inject
 	if s == nil {
 		return RelayResult{}, fmt.Errorf("nil store")
 	}
+	if storePoisoned(s) {
+		return RelayResult{}, events.ErrPoisoned
+	}
+	defer func() {
+		if storePoisoned(s) {
+			result = RelayResult{}
+			err = events.ErrPoisoned
+		}
+	}()
 	var verification *question.Verification
 	if len(in.Verification) != 0 {
 		switch in.Kind {

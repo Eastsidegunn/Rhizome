@@ -20,7 +20,16 @@ type Event struct {
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
-var ErrRevisionConflict = errors.New("aggregate revision conflict")
+var (
+	ErrRevisionConflict = errors.New("aggregate revision conflict")
+	ErrPoisoned         = errors.New("journal poisoned: restart required")
+)
+
+// PoisonLatch is optionally implemented by a durable Port. In-memory stores
+// do not implement it and are therefore treated as never poisoned.
+type PoisonLatch interface {
+	Poisoned() bool
+}
 
 // Port is the minimal append-only event boundary consumed by domain services.
 type Port interface {
