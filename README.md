@@ -38,8 +38,9 @@ multi-user production use. The first release, 0.1.0, is described in
 ## 30-second start
 
 You need macOS or Linux and Go 1.23 or newer, and nothing else: the Go module
-has no third-party dependencies, and the board needs no other repository or
-service. (Node.js 22.12+ is only needed for the optional
+depends only on `golang.org/x/sys` and `golang.org/x/term` for peer credentials
+and terminal I/O, and the board needs no other repository or service. (Node.js
+22.12+ is only needed for the optional
 [Gunnflow adapter](#gunnflow-adapter-optional).) Windows is not supported yet:
 the journal's single-writer lock uses `flock(2)`.
 

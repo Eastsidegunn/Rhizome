@@ -14,6 +14,7 @@ import (
 // package must pick its layer to get past CI.
 var Layers = map[string]string{
 	"events": "substrate", "journal": "substrate", "blob": "substrate", "policy": "substrate",
+	"peercred": "substrate", "termio": "substrate",
 	// codeindex reads git objects and the events port only (RHZ-058/059) —
 	// substrate keeps that minimality enforced via R2.
 	"codeindex": "substrate",

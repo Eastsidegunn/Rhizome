@@ -31,6 +31,8 @@ CI runs both on every pull request. Run `gofmt -w .` before you commit.
 - **No imports of sibling systems.** JANUS and Gunnflow are reached only through
   CLI, NDJSON and HTTP adapters.
 - **No new dependencies** in Go or the adapter without approval in an issue.
+  The only approved Go modules are `golang.org/x/sys` (peer credentials) and
+  `golang.org/x/term` (terminal I/O).
 - **Contract changes** — the integration contracts (JANUS CLI/NDJSON protocol,
   Gunnflow wire contract packages in `gunnflow-adapter/vendor`) and their
   fixtures need recorded project approval first. Open an issue.
