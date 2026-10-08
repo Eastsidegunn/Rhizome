@@ -12,9 +12,10 @@ unchanged. A structured `권고` replaces the legacy `recommendation` item.
 
 ## Requirements and install
 
-Node.js 22 or newer is required. The Gunnflow contract packages are installed
-from vendored tarballs in `vendor/`; they come from the Gunnflow project
-under MIT (license notice: `vendor/LICENSE-gunnflow`).
+Node.js 22.12 or newer is required. The Gunnflow contract package
+`@gunnflow/contract` is installed from npm (MIT). `@gunnflow/upstream-port` is
+not published yet and is still installed from the vendored tarball in
+`vendor/` (license notice: `vendor/LICENSE-gunnflow`).
 
 ```sh
 npm ci
