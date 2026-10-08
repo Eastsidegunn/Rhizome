@@ -33,7 +33,7 @@ func fixture061(t *testing.T) *events.Store {
 
 func relay061(t *testing.T, s *events.Store, kind, goalID string) RelayResult {
 	t.Helper()
-	res, err := RelayIntent(s, Intent{Kind: kind, GoalID: goalID}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: kind, GoalID: goalID}, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestGoalResolveAppendsOneDecisionEventFRRHZ090(t *testing.T) {
 	if err := json.Unmarshal(e.Payload, &p); err != nil || p.To != "achieved" || p.DecisionID != "decision-goal.resolve-goal-g" {
 		t.Fatalf("payload %s err=%v", e.Payload, err)
 	}
-	if e.CorrelationID != "relay:tester" {
+	if e.CorrelationID != "relay:unverified-local-operator:tester" {
 		t.Fatalf("correlation %q", e.CorrelationID)
 	}
 	g, err := projector.ReplayGoal(s.List("goal", "goal-g"))
@@ -116,7 +116,7 @@ func TestGoalResolveAppendsOneDecisionEventFRRHZ090(t *testing.T) {
 // W2 보강: 미검증 actor는 correlation에 기존 프리픽스 규약 적용 후 기록.
 func TestGoalResolveUnverifiedActorCorrelationFRRHZ090(t *testing.T) {
 	s := fixture061(t)
-	res, err := RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-g"}, "op", false)
+	res, err := RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-g"}, "op", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -250,7 +250,7 @@ func TestGoalIntentUnknownTargetRejectedFRRHZ090(t *testing.T) {
 		{Kind: "goal.resolve"},
 		{Kind: "goal.cancel"},
 	} {
-		res, err := RelayIntent(s, in, "tester", true)
+		res, err := RelayIntent(s, in, "tester", noAuthority())
 		if err != nil || res.Accepted {
 			t.Fatalf("%+v: res=%+v err=%v", in, res, err)
 		}
@@ -316,7 +316,7 @@ func TestCancelledGoalStillReferencableFRRHZ090(t *testing.T) {
 	if res := relay061(t, s, "goal.cancel", "goal-g"); !res.Accepted {
 		t.Fatal(res)
 	}
-	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "postmortem on goal-g", MemoryKind: "observation", GoalID: "goal-g"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "note.create", Content: "postmortem on goal-g", MemoryKind: "observation", GoalID: "goal-g"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}

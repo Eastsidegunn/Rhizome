@@ -16,7 +16,6 @@ import (
 
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/projector"
 	"rhizome/internal/question"
@@ -73,7 +72,7 @@ func TestMissionCreateWithGoalIDSkipsGoalPairFRRHZ100(t *testing.T) {
 	}
 	goalsBefore, missionsBefore := countAgg071(s, "goal"), countAgg071(s, "mission")
 	snapBefore := decode071(t, getWorkspace071(t, s))
-	res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "child", Prompt: "do it", GoalID: "goal-shared"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "child", Prompt: "do it", GoalID: "goal-shared"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("mission.create with goalId: %v %+v", err, res)
 	}
@@ -123,7 +122,7 @@ func TestMissionCreateWithoutGoalIDKeepsPairFRRHZ100(t *testing.T) {
 	want := getWorkspace071(t, golden)
 
 	s := &events.Store{}
-	res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "n", Prompt: "success"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "n", Prompt: "success"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("mission.create: %v %+v", err, res)
 	}
@@ -153,21 +152,21 @@ func TestMissionCreateGoalValidationFRRHZ100(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "x", Prompt: "p", GoalID: "goal-missing"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "x", Prompt: "p", GoalID: "goal-missing"}, "tester", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "goal not found" {
 		t.Fatalf("unknown goal: %v %+v", err, res)
 	}
 	if len(s.All()) != before {
 		t.Fatal("journal changed on unknown goal")
 	}
-	res, err = RelayIntent(s, Intent{Kind: "mission.create", Name: "x", Prompt: "p", GoalID: "goal-done"}, "tester", true)
+	res, err = RelayIntent(s, Intent{Kind: "mission.create", Name: "x", Prompt: "p", GoalID: "goal-done"}, "tester", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "goal is terminal" {
 		t.Fatalf("terminal goal: %v %+v", err, res)
 	}
 	if len(s.All()) != before {
 		t.Fatal("journal changed on terminal goal")
 	}
-	res, err = RelayIntent(s, Intent{Kind: "mission.create", Name: "x", Prompt: "p", GoalID: "goal-gone"}, "tester", true)
+	res, err = RelayIntent(s, Intent{Kind: "mission.create", Name: "x", Prompt: "p", GoalID: "goal-gone"}, "tester", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "goal is terminal" {
 		t.Fatalf("cancelled goal: %v %+v", err, res)
 	}
@@ -184,11 +183,11 @@ func TestMissionCreateDuplicateNameWithGoalIDFRRHZ100(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := Intent{Kind: "mission.create", Name: "dup", Prompt: "p", GoalID: "goal-g"}
-	if res, err := RelayIntent(s, in, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, in, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("first: %v %+v", err, res)
 	}
 	before := len(s.All())
-	res, err := RelayIntent(s, in, "tester", true)
+	res, err := RelayIntent(s, in, "tester", noAuthority())
 	if err != nil || res.Accepted || res.Reason == "" {
 		t.Fatalf("second must be rejected with Create's error: %v %+v", err, res)
 	}
@@ -204,14 +203,14 @@ func TestQuestionAskRequiresMissionIDFRRHZ100(t *testing.T) {
 	s := &events.Store{}
 	missionIn062(t, s, "mission-q1", domain.MissionReady, domain.MissionRunning)
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r"}, "tester", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "missionId or goalId required" { // RHZ-075 (FR-RHZ-108): goalId is the alternative; reason string widened.
 		t.Fatalf("empty missionId: %v %+v", err, res)
 	}
 	if len(s.All()) != before {
 		t.Fatal("journal changed on empty missionId")
 	}
-	res, err = RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-nope"}, "tester", true)
+	res, err = RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-nope"}, "tester", noAuthority())
 	if err != nil || res.Accepted || res.Reason != "mission not found" {
 		t.Fatalf("unknown mission: %v %+v", err, res)
 	}
@@ -222,18 +221,18 @@ func TestQuestionAskRequiresMissionIDFRRHZ100(t *testing.T) {
 	// "mission is terminal") rejects — pinned as current behaviour
 	// (커널 무변경, 사후 결정은 goal 또는 살아있는 mission에).
 	missionIn062(t, s, "mission-done", domain.MissionReady, domain.MissionRunning)
-	if r, e := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-done"}, "tester", true); e != nil || !r.Accepted {
+	if r, e := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-done"}, "tester", noAuthority()); e != nil || !r.Accepted {
 		t.Fatalf("complete fixture: %v %+v", e, r)
 	}
 	before = len(s.All())
-	res, err = RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-done"}, "tester", true)
+	res, err = RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-done"}, "tester", noAuthority())
 	if err != nil || res.Accepted || !strings.Contains(res.Reason, "mission is terminal") {
 		t.Fatalf("terminal mission: %v %+v", err, res)
 	}
 	if len(s.All()) != before {
 		t.Fatal("journal changed on terminal mission")
 	}
-	res, err = RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-q1"}, "tester", true)
+	res, err = RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-q1"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("existing mission: %v %+v", err, res)
 	}
@@ -268,17 +267,17 @@ func TestLegacyQuestionWithoutMissionIDReplaysFRRHZ100(t *testing.T) {
 // projection, and no goal pair leaks into the file.
 func TestJournalRoundTripGoalIDAndMissionIDFRRHZ100(t *testing.T) {
 	path := t.TempDir() + "/events.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := (mission.Service{Store: j}).CreateGoal("goal-r", "r", "ok", ""); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := RelayIntent(j, Intent{Kind: "mission.create", Name: "r1", Prompt: "p", GoalID: "goal-r"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(j, Intent{Kind: "mission.create", Name: "r1", Prompt: "p", GoalID: "goal-r"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("mission.create: %v %+v", err, res)
 	}
-	if res, err := RelayIntent(j, Intent{Kind: "question.ask", Name: "q", Body: "b", Recommendation: "r", MissionID: "mission-r1"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(j, Intent{Kind: "question.ask", Name: "q", Body: "b", Recommendation: "r", MissionID: "mission-r1"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("question.ask: %v %+v", err, res)
 	}
 	wantEvents := len(j.All())
@@ -286,7 +285,7 @@ func TestJournalRoundTripGoalIDAndMissionIDFRRHZ100(t *testing.T) {
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

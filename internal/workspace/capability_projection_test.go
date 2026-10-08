@@ -59,7 +59,7 @@ func ask070(t *testing.T, s *events.Store, name, missionID string) string {
 			t.Fatalf("ask %s: %v", name, err)
 		}
 	} else {
-		res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: name, Body: "body " + name, Recommendation: "approve", MissionID: missionID}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: name, Body: "body " + name, Recommendation: "approve", MissionID: missionID}, "tester", noAuthority())
 		if err != nil || !res.Accepted {
 			t.Fatalf("ask %s: %v %+v", name, err, res)
 		}
@@ -106,7 +106,7 @@ func TestGateCapabilitiesPendingAndDecidedFRRHZ099(t *testing.T) {
 	}
 
 	// requestChanges on an unbound internal gate is rejected by the relay — hidden is honest.
-	if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: noMission, Instruction: "please fix"}, "tester", true); err != nil || res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: noMission, Instruction: "please fix"}, "tester", noAuthority()); err != nil || res.Accepted {
 		t.Fatalf("gate.requestChanges on an unbound question must be rejected: %v %+v", err, res)
 	}
 	// approve the bound one with the digest the human saw
@@ -116,7 +116,7 @@ func TestGateCapabilitiesPendingAndDecidedFRRHZ099(t *testing.T) {
 			digest, _ = g["requestDigest"].(string)
 		}
 	}
-	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: withMission, Digest: digest}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: withMission, Digest: digest}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("approve: %v %+v", err, res)
 	}
@@ -189,7 +189,7 @@ func TestTaskCapabilitiesMatchRelayFRRHZ099(t *testing.T) {
 		// relay agreement: fresh store per intent so one does not affect the other
 		for _, kind := range []string{"task.pause", "task.resume"} {
 			fs, fid := build(t, state, c)
-			res, err := RelayIntent(fs, Intent{Kind: kind, TaskID: fid}, "tester", true)
+			res, err := RelayIntent(fs, Intent{Kind: kind, TaskID: fid}, "tester", noAuthority())
 			if err != nil {
 				t.Fatal(err)
 			}

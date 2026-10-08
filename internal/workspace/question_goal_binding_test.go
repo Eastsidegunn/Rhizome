@@ -16,7 +16,6 @@ import (
 
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/question"
 )
@@ -48,11 +47,11 @@ func TestQuestionAskGoalIDProjectsGoalGateFRRHZ108(t *testing.T) {
 	if _, err := (mission.Service{Store: s}).CreateGoal("goal-q1", "q1", "done", ""); err != nil {
 		t.Fatal(err)
 	}
-	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", GoalID: "goal-q1"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", GoalID: "goal-q1"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("question.ask goalId: %v %+v", err, res)
 	}
-	qid := question.IDFor("t", "b", "r")
+	qid := mustQuestionID("t", "b", "r")
 	raw := getWorkspace071(t, s)
 	var w struct {
 		Body struct {
@@ -115,7 +114,7 @@ func TestQuestionAskExactlyOneBindingFRRHZ108(t *testing.T) {
 	for _, tc := range cases {
 		in := tc.in
 		in.Kind, in.Name, in.Body, in.Recommendation = "question.ask", "t", "b", "r"
-		res, err := RelayIntent(s, in, "tester", true)
+		res, err := RelayIntent(s, in, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != tc.reason {
 			t.Fatalf("%s: %v %+v (want reason %q)", tc.name, err, res, tc.reason)
 		}
@@ -136,11 +135,11 @@ func TestQuestionAskGoalIDHandleResolvesFRRHZ108(t *testing.T) {
 	if got := handleOf073(t, getWorkspace071(t, s), "missions", "goal-q3"); got != h {
 		t.Fatalf("goal handle %q want %q", got, h)
 	}
-	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", GoalID: h}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", GoalID: h}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("question.ask by handle: %v %+v", err, res)
 	}
-	q, err := (question.Service{Store: s}).Get(question.IDFor("t", "b", "r"))
+	q, err := (question.Service{Store: s}).Get(mustQuestionID("t", "b", "r"))
 	if err != nil || q.GoalID != "goal-q3" {
 		t.Fatalf("resolved binding: %+v %v", q, err)
 	}
@@ -162,7 +161,7 @@ func TestQuestionAskMissionIDPathUnchangedFRRHZ108(t *testing.T) {
 
 	s := &events.Store{}
 	missionIn062(t, s, "mission-q4", domain.MissionReady, domain.MissionRunning)
-	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-q4", CorrelationID: "corr-q4"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "t", Body: "b", Recommendation: "r", MissionID: "mission-q4", CorrelationID: "corr-q4"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("question.ask missionId: %v %+v", err, res)
 	}
@@ -171,7 +170,7 @@ func TestQuestionAskMissionIDPathUnchangedFRRHZ108(t *testing.T) {
 		t.Fatalf("/v1/workspace differs from golden:\n got %s\nwant %s", got, want)
 	}
 	w := decode071(t, got)
-	g := gateByID075(t, w.Body.Gates, question.IDFor("t", "b", "r"))
+	g := gateByID075(t, w.Body.Gates, mustQuestionID("t", "b", "r"))
 	if g["missionId"] != "mission-q4" {
 		t.Fatalf("gate: %v", g)
 	}
@@ -186,7 +185,7 @@ func TestQuestionAskMissionIDPathUnchangedFRRHZ108(t *testing.T) {
 // /v1/workspace; the legacy gate carries neither goalId nor missionId.
 func TestJournalRoundTripGoalBoundAndLegacyQuestionFRRHZ108(t *testing.T) {
 	path := t.TempDir() + "/events.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,15 +196,15 @@ func TestJournalRoundTripGoalBoundAndLegacyQuestionFRRHZ108(t *testing.T) {
 	if _, err := ms.Create("mission-r", "goal-r", "m", "ok"); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := RelayIntent(j, Intent{Kind: "question.ask", Name: "qg", Body: "b", Recommendation: "r", GoalID: "goal-r"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(j, Intent{Kind: "question.ask", Name: "qg", Body: "b", Recommendation: "r", GoalID: "goal-r"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("goal-bound ask: %v %+v", err, res)
 	}
-	if res, err := RelayIntent(j, Intent{Kind: "question.ask", Name: "qm", Body: "b", Recommendation: "r", MissionID: "mission-r"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(j, Intent{Kind: "question.ask", Name: "qm", Body: "b", Recommendation: "r", MissionID: "mission-r"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("mission-bound ask: %v %+v", err, res)
 	}
 	// Legacy question.asked exactly as a pre-RHZ-075 kernel wrote it: no GoalID key.
 	d := question.Digest("ql", "b", "r")
-	legacyID := question.IDForDigest(d)
+	legacyID := mustQuestionIDForDigest(d)
 	legacy, _ := json.Marshal(map[string]string{
 		"Title": "ql", "Body": "b", "Recommendation": "r", "MissionID": "",
 		"RequestedBy": "unverified-local-operator:legacy", "CorrelationID": "", "Digest": d,
@@ -222,7 +221,7 @@ func TestJournalRoundTripGoalBoundAndLegacyQuestionFRRHZ108(t *testing.T) {
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,11 +245,11 @@ func TestJournalRoundTripGoalBoundAndLegacyQuestionFRRHZ108(t *testing.T) {
 	if len(w.Body.Gates) != 3 {
 		t.Fatalf("gates: %v", w.Body.Gates)
 	}
-	gg := gateByID075(t, w.Body.Gates, question.IDFor("qg", "b", "r"))
+	gg := gateByID075(t, w.Body.Gates, mustQuestionID("qg", "b", "r"))
 	if gg["goalId"] != "goal-r" || gg["missionId"] != nil {
 		t.Fatalf("goal-bound gate: %v", gg)
 	}
-	gm := gateByID075(t, w.Body.Gates, question.IDFor("qm", "b", "r"))
+	gm := gateByID075(t, w.Body.Gates, mustQuestionID("qm", "b", "r"))
 	if gm["missionId"] != "mission-r" || gm["goalId"] != nil {
 		t.Fatalf("mission-bound gate: %v", gm)
 	}

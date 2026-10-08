@@ -107,7 +107,7 @@ func TestMissionCompleteRunningFRRHZ098(t *testing.T) {
 		s := &events.Store{}
 		missionIn062(t, s, id, path...)
 		n := len(s.All())
-		res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: id, Reason: "done by reviewer"}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: id, Reason: "done by reviewer"}, "tester", noAuthority())
 		if err != nil || !res.Accepted {
 			t.Fatalf("%s: %+v err=%v", id, res, err)
 		}
@@ -121,7 +121,7 @@ func TestMissionCompleteRunningFRRHZ098(t *testing.T) {
 		if p.To != "succeeded" || p.DecisionID != "decision-mission.complete-"+id || p.Reason != "done by reviewer" {
 			t.Fatalf("%s: payload %s", id, last.Payload)
 		}
-		if last.CorrelationID != "relay:tester" {
+		if last.CorrelationID != "relay:unverified-local-operator:tester" {
 			t.Fatalf("%s: correlation %q", id, last.CorrelationID)
 		}
 		m := replay069(t, s, id)
@@ -135,7 +135,7 @@ func TestMissionCompleteRunningFRRHZ098(t *testing.T) {
 	// 변형 1: reason 없음 → payload Reason "" (Succeeded에 reason은 선택).
 	s := &events.Store{}
 	missionIn062(t, s, "mission-noreason", domain.MissionReady, domain.MissionRunning)
-	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-noreason"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-noreason"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	if _, p := lastPayload069(t, s); p.To != "succeeded" || p.Reason != "" {
@@ -144,7 +144,7 @@ func TestMissionCompleteRunningFRRHZ098(t *testing.T) {
 	// 변형 2: 미검증 actor → correlation 프리픽스 규약(goal_lifecycle_test W2 규칙).
 	s = &events.Store{}
 	missionIn062(t, s, "mission-unverified", domain.MissionReady, domain.MissionRunning)
-	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-unverified"}, "op", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-unverified"}, "op", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	if last, _ := lastPayload069(t, s); last.CorrelationID != "relay:unverified-local-operator:op" {
@@ -169,7 +169,7 @@ func TestMissionCompleteQueuedRejectedFRRHZ098(t *testing.T) {
 		s := &events.Store{}
 		missionIn062(t, s, c.id, c.path...)
 		before := journalBytes069(t, s)
-		res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: c.id}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: c.id}, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != c.state+"에서 종결 불가: task.resume 먼저" {
 			t.Fatalf("%s: %+v err=%v", c.id, res, err)
 		}
@@ -177,14 +177,14 @@ func TestMissionCompleteQueuedRejectedFRRHZ098(t *testing.T) {
 			t.Fatalf("%s: rejected complete changed journal", c.id)
 		}
 		n := len(s.All())
-		if res, err = RelayIntent(s, Intent{Kind: "task.resume", TaskID: c.id}, "tester", true); err != nil || !res.Accepted {
+		if res, err = RelayIntent(s, Intent{Kind: "task.resume", TaskID: c.id}, "tester", noAuthority()); err != nil || !res.Accepted {
 			t.Fatalf("%s resume: %+v err=%v", c.id, res, err)
 		}
 		if got := len(s.All()) - n; got != c.resumeGrow {
 			t.Fatalf("%s: resume grew %d, want %d", c.id, got, c.resumeGrow)
 		}
 		n = len(s.All())
-		if res, err = RelayIntent(s, Intent{Kind: "mission.complete", MissionID: c.id}, "tester", true); err != nil || !res.Accepted {
+		if res, err = RelayIntent(s, Intent{Kind: "mission.complete", MissionID: c.id}, "tester", noAuthority()); err != nil || !res.Accepted {
 			t.Fatalf("%s complete after resume: %+v err=%v", c.id, res, err)
 		}
 		if got := len(s.All()) - n; got != 1 {
@@ -212,7 +212,7 @@ func TestMissionCompleteFromPausedHumanBlockedRejectedFRRHZ098(t *testing.T) {
 		missionIn062(t, s, id, c.path...)
 		before := journalBytes069(t, s)
 		for _, kind := range []string{"mission.complete", "mission.fail"} {
-			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", true)
+			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", noAuthority())
 			if err != nil || res.Accepted || res.Reason != c.state+"에서 종결 불가: task.resume 먼저" {
 				t.Fatalf("%s %s: %+v err=%v", id, kind, res, err)
 			}
@@ -220,7 +220,7 @@ func TestMissionCompleteFromPausedHumanBlockedRejectedFRRHZ098(t *testing.T) {
 		if journalBytes069(t, s) != before {
 			t.Fatalf("%s: rejected terminal changed journal", id)
 		}
-		res, err := RelayIntent(s, Intent{Kind: "task.resume", TaskID: id}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "task.resume", TaskID: id}, "tester", noAuthority())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,7 +228,7 @@ func TestMissionCompleteFromPausedHumanBlockedRejectedFRRHZ098(t *testing.T) {
 			if !res.Accepted {
 				t.Fatalf("%s resume: %+v", id, res)
 			}
-			if res, err = RelayIntent(s, Intent{Kind: "mission.complete", MissionID: id}, "tester", true); err != nil || !res.Accepted {
+			if res, err = RelayIntent(s, Intent{Kind: "mission.complete", MissionID: id}, "tester", noAuthority()); err != nil || !res.Accepted {
 				t.Fatalf("%s complete after resume: %+v err=%v", id, res, err)
 			}
 			if m := replay069(t, s, id); m.State != domain.MissionSucceeded {
@@ -247,7 +247,7 @@ func TestMissionFailReasonRequiredFRRHZ098(t *testing.T) {
 	missionIn062(t, s, "mission-f", domain.MissionReady, domain.MissionRunning)
 	before := journalBytes069(t, s)
 	for _, reason := range []string{"", "  "} {
-		res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-f", Reason: reason}, "tester", true)
+		res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-f", Reason: reason}, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != "reason required" {
 			t.Fatalf("reason %q: %+v err=%v", reason, res, err)
 		}
@@ -255,7 +255,7 @@ func TestMissionFailReasonRequiredFRRHZ098(t *testing.T) {
 	if journalBytes069(t, s) != before {
 		t.Fatal("rejected fail changed journal")
 	}
-	res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-f", Reason: "flaky"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.fail", MissionID: "mission-f", Reason: "flaky"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
@@ -286,7 +286,7 @@ func TestMissionTerminalRejectedNoPoisonFRRHZ098(t *testing.T) {
 		setup(t, s, id)
 		before := journalBytes069(t, s)
 		for _, kind := range []string{"mission.complete", "mission.fail"} {
-			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", true)
+			res, err := RelayIntent(s, Intent{Kind: kind, MissionID: id, Reason: "x"}, "tester", noAuthority())
 			if err != nil || res.Accepted || res.Reason != domain.ErrInvalidState.Error() {
 				t.Fatalf("%s on %s: %+v err=%v", kind, state, res, err)
 			}
@@ -304,11 +304,11 @@ func TestMissionTerminalRejectedNoPoisonFRRHZ098(t *testing.T) {
 	// 재제출: complete 후 complete — 멱등 수용 없음(mission.cancel과 동일 의미론).
 	s := &events.Store{}
 	missionIn062(t, s, "mission-x", domain.MissionReady, domain.MissionRunning)
-	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-x"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-x"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatal(res, err)
 	}
 	before := journalBytes069(t, s)
-	res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-x"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-x"}, "tester", noAuthority())
 	if err != nil || res.Accepted || res.Reason != domain.ErrInvalidState.Error() {
 		t.Fatalf("re-complete: %+v err=%v", res, err)
 	}
@@ -334,7 +334,7 @@ func TestMissionCompleteUnknownTargetRejectedFRRHZ098(t *testing.T) {
 		{Intent{Kind: "mission.complete", MissionID: "mission-ghost"}, "mission event stream is empty"},
 		{Intent{Kind: "mission.fail", MissionID: "mission-ghost", Reason: "x"}, "mission event stream is empty"},
 	} {
-		res, err := RelayIntent(s, c.in, "tester", true)
+		res, err := RelayIntent(s, c.in, "tester", noAuthority())
 		if err != nil || res.Accepted || res.Reason != c.want {
 			t.Fatalf("%+v: %+v err=%v", c.in, res, err)
 		}
@@ -368,7 +368,7 @@ func fixture069Journal(t *testing.T, j *journal.Journal) []string {
 		{Intent{Kind: "mission.fail", MissionID: "mission-c3", Reason: "gave up"}, true},
 	}
 	for _, st := range steps {
-		res, err := RelayIntent(j, st.in, "tester", true)
+		res, err := RelayIntent(j, st.in, "tester", noAuthority())
 		if err != nil || res.Accepted != st.want {
 			t.Fatalf("%+v: %+v err=%v", st.in, res, err)
 		}
@@ -380,7 +380,7 @@ func fixture069Journal(t *testing.T, j *journal.Journal) []string {
 // TerminalDecisionID와 /v1/workspace 바이트가 동일.
 func TestMissionCompleteJournalRoundTripFRRHZ098(t *testing.T) {
 	path := t.TempDir() + "/j.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestMissionCompleteJournalRoundTripFRRHZ098(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestMissionCompleteJournalRoundTripFRRHZ098(t *testing.T) {
 // 신규 이벤트 타입 0(mission.transitioned만), succeeded/failed To는 전부
 // DecisionID 보유(projector "terminal decision missing" 정합).
 func TestMissionCompleteWriterBoundaryFRRHZ098(t *testing.T) {
-	j, err := journal.Open(t.TempDir() + "/j.ndjson")
+	j, err := openTestJournal(t.TempDir() + "/j.ndjson")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +453,7 @@ func TestMissionCompleteWriterBoundaryFRRHZ098(t *testing.T) {
 			if p.DecisionID == "" || !strings.HasPrefix(p.DecisionID, "decision-mission.") {
 				t.Fatalf("terminal without decision id: %+v %s", e, e.Payload)
 			}
-			if e.CorrelationID != "relay:tester" {
+			if e.CorrelationID != "relay:unverified-local-operator:tester" {
 				t.Fatalf("terminal correlation %q", e.CorrelationID)
 			}
 		}
@@ -469,7 +469,7 @@ func TestMissionCompleteWriterBoundaryFRRHZ098(t *testing.T) {
 func TestMissionCompleteExplicitCorrelationFRRHZ098(t *testing.T) {
 	s := &events.Store{}
 	missionIn062(t, s, "mission-corr", domain.MissionReady, domain.MissionRunning)
-	res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-corr", CorrelationID: "corr-x"}, "tester", true)
+	res, err := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "mission-corr", CorrelationID: "corr-x"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("complete: %+v %v", res, err)
 	}
@@ -477,7 +477,7 @@ func TestMissionCompleteExplicitCorrelationFRRHZ098(t *testing.T) {
 	if last.CorrelationID != "corr-x" {
 		t.Fatalf("mission correlation=%q want corr-x", last.CorrelationID)
 	}
-	res, err = RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-mission-corr", CorrelationID: "corr-y"}, "tester", true)
+	res, err = RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-mission-corr", CorrelationID: "corr-y"}, "tester", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("goal.resolve: %+v %v", res, err)
 	}

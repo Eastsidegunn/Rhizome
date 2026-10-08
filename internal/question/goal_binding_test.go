@@ -107,7 +107,7 @@ func TestLegacyAskedPayloadWithoutGoalIDReplaysFRRHZ108(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			title, body, rec := "legacy "+tc.name, "old body", "r"
 			d := question.Digest(title, body, rec)
-			id := question.IDForDigest(d)
+			id := mustQuestionIDForDigest(d)
 			payload, _ := json.Marshal(map[string]string{
 				"Title": title, "Body": body, "Recommendation": rec, "MissionID": tc.missionID,
 				"RequestedBy": actor, "CorrelationID": "corr-old", "Digest": d,

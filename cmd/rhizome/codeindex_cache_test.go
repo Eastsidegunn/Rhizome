@@ -18,7 +18,6 @@ import (
 
 	"rhizome/internal/codeindex"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 )
 
 func runGit058(t *testing.T, dir string, args ...string) string {
@@ -78,7 +77,7 @@ func runIndex(t *testing.T, repo, outDir string) (code int, stdout string) {
 // graph CLI가 읽을 기록을 만드는 픽스처 — serve 경로 테스트는 workspace 쪽).
 func seedMainAdvanced(t *testing.T, jp, sha string) {
 	t.Helper()
-	j, err := journal.Open(jp)
+	j, err := openTestJournal(jp)
 	if err != nil {
 		t.Fatal(err)
 	}

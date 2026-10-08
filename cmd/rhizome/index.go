@@ -15,6 +15,7 @@ import (
 
 	"rhizome/internal/codeindex"
 	"rhizome/internal/journal"
+	"rhizome/internal/trust"
 )
 
 func indexCmd(args []string, out, errOut io.Writer) int {
@@ -95,7 +96,7 @@ func graphCmd(args []string, out, errOut io.Writer) int {
 		return 1
 	}
 	defer unlock()
-	j, err := journal.Open(*jp)
+	j, err := journal.OpenGuarded(*jp, trust.NewAnchorless())
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1

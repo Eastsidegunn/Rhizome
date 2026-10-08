@@ -2,6 +2,7 @@ package question
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,7 +14,10 @@ import (
 	"time"
 )
 
-const digestPrefix = "rhz-question-v1:"
+const (
+	digestPrefixV1 = "rhz-question-v1:"
+	digestPrefixV2 = "rhz-question-v2:"
+)
 
 var ErrDigestMismatch = errors.New("question digest mismatch")
 
@@ -209,17 +213,49 @@ func validateVerification(v *Verification, actor string, keys map[string]bool, p
 }
 
 func Digest(title, body, recommendation string) string {
+	return digestV2(title, body, recommendation)
+}
+
+func digestV1(title, body, recommendation string) string {
 	h := sha256.Sum256([]byte(title + "\x00" + body + "\x00" + recommendation))
-	return digestPrefix + hex.EncodeToString(h[:])
+	return digestPrefixV1 + hex.EncodeToString(h[:])
+}
+
+func digestV2(title, body, recommendation string) string {
+	h := sha256.New()
+	for _, field := range []string{"rhz-question-v2", title, body, recommendation} {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(field)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write([]byte(field))
+	}
+	return digestPrefixV2 + hex.EncodeToString(h.Sum(nil))
 }
 func VerifyDigest(got, expected string) error {
-	if !strings.HasPrefix(got, digestPrefix) || !strings.HasPrefix(expected, digestPrefix) || got != expected {
+	known := func(d string) bool {
+		return strings.HasPrefix(d, digestPrefixV1) || strings.HasPrefix(d, digestPrefixV2)
+	}
+	if !known(got) || !known(expected) || got != expected {
 		return ErrDigestMismatch
 	}
 	return nil
 }
-func IDForDigest(d string) string { return "q-" + strings.TrimPrefix(d, digestPrefix)[:24] }
-func IDFor(title, body, recommendation string) string {
+func IDForDigest(d string) (string, error) {
+	var hexDigest string
+	switch {
+	case strings.HasPrefix(d, digestPrefixV1):
+		hexDigest = strings.TrimPrefix(d, digestPrefixV1)
+	case strings.HasPrefix(d, digestPrefixV2):
+		hexDigest = strings.TrimPrefix(d, digestPrefixV2)
+	default:
+		return "", ErrDigestMismatch
+	}
+	if len(hexDigest) < 24 {
+		return "", ErrDigestMismatch
+	}
+	return "q-" + hexDigest[:24], nil
+}
+func IDFor(title, body, recommendation string) (string, error) {
 	return IDForDigest(Digest(title, body, recommendation))
 }
 
@@ -265,7 +301,10 @@ func (s Service) Ask(title, body, recommendation, missionID, goalID, requestedBy
 		return Ref{}, err
 	}
 	d := Digest(title, body, recommendation)
-	id := IDForDigest(d)
+	id, err := IDForDigest(d)
+	if err != nil {
+		return Ref{}, err
+	}
 	if log := s.Store.List("question", id); len(log) > 0 {
 		return Replay(log)
 	}
@@ -375,10 +414,20 @@ func Replay(log []events.Event) (Ref, error) {
 			if validateActor(p.RequestedBy) != nil {
 				return Ref{}, fmt.Errorf("requested by required")
 			}
-			if p.Digest != Digest(p.Title, p.Body, p.Recommendation) {
+			var recomputed string
+			switch {
+			case strings.HasPrefix(p.Digest, digestPrefixV1):
+				recomputed = digestV1(p.Title, p.Body, p.Recommendation)
+			case strings.HasPrefix(p.Digest, digestPrefixV2):
+				recomputed = digestV2(p.Title, p.Body, p.Recommendation)
+			default:
 				return Ref{}, ErrDigestMismatch
 			}
-			if IDForDigest(p.Digest) != e.AggregateID {
+			if p.Digest != recomputed {
+				return Ref{}, ErrDigestMismatch
+			}
+			id, err := IDForDigest(p.Digest)
+			if err != nil || id != e.AggregateID {
 				return Ref{}, ErrDigestMismatch
 			}
 			r = Ref{ID: e.AggregateID, Title: p.Title, Body: p.Body, Recommendation: p.Recommendation, MissionID: p.MissionID, GoalID: p.GoalID, RequestedBy: p.RequestedBy, CorrelationID: p.CorrelationID, Digest: p.Digest, Revision: 1}

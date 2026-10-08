@@ -24,6 +24,7 @@ import (
 	"rhizome/internal/journal"
 	"rhizome/internal/memory"
 	"rhizome/internal/source"
+	"rhizome/internal/trust"
 	"rhizome/internal/workspace"
 )
 
@@ -150,7 +151,7 @@ func ingest(args []string, out, errOut io.Writer) int {
 		return 1
 	}
 	defer unlock()
-	j, e := journal.Open(*jpath)
+	j, e := journal.OpenGuarded(*jpath, trust.NewAnchorless())
 	if e != nil {
 		fmt.Fprintln(errOut, e)
 		return 1
@@ -226,7 +227,7 @@ func memories(args []string, out, errOut io.Writer) int {
 		return 1
 	}
 	defer unlock()
-	j, e := journal.Open(*jpath)
+	j, e := journal.OpenGuarded(*jpath, trust.NewAnchorless())
 	if e != nil {
 		fmt.Fprintln(errOut, e)
 		return 1
@@ -580,7 +581,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 1
 	}
 	defer unlock()
-	j, e := journal.Open(*jp)
+	j, e := journal.OpenGuarded(*jp, trust.NewAnchorless())
 	if e != nil {
 		fmt.Fprintln(errOut, e)
 		return 1

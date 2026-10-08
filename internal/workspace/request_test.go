@@ -66,7 +66,7 @@ data: {"revision":0,"body":{"missions":[],"tasks":[],"gates":[],"deliverables":[
 
 func TestRequestKeyOrderFRRHZ158(t *testing.T) {
 	s := requestWorkspaceFixture(t)
-	if res, err := RelayIntent(s, createRequestIntent(), "creator", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, createRequestIntent(), "creator", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("create: %#v %v", res, err)
 	}
 	b := workspaceBody118(t, s, "/v1/workspace")
@@ -101,7 +101,7 @@ func TestRequestKeyOrderFRRHZ158(t *testing.T) {
 
 func TestRequestFilterPassThroughFRRHZ158(t *testing.T) {
 	s := requestWorkspaceFixture(t)
-	if res, _ := RelayIntent(s, createRequestIntent(), "creator", false); !res.Accepted {
+	if res, _ := RelayIntent(s, createRequestIntent(), "creator", noAuthority()); !res.Accepted {
 		t.Fatal(res.Reason)
 	}
 	base := workspaceBody118(t, s, "/v1/workspace")
@@ -191,7 +191,7 @@ func TestRequestIntentExactKeysAndReplayDeterminismFRRHZ155(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "request name required") || len(s.All()) != 2 {
 		t.Fatalf("Q ordering response=%s writes=%d", rr.Body.String(), len(s.All()))
 	}
-	if res, _ := RelayIntent(s, createRequestIntent(), "creator", false); !res.Accepted {
+	if res, _ := RelayIntent(s, createRequestIntent(), "creator", noAuthority()); !res.Accepted {
 		t.Fatal(res.Reason)
 	}
 	p1, err := Snapshot(s)
@@ -215,7 +215,7 @@ func TestRequestIntentExactKeysAndReplayDeterminismFRRHZ155(t *testing.T) {
 
 func TestRequestCloseIntentRelayFRRHZ156(t *testing.T) {
 	s := requestWorkspaceFixture(t)
-	if res, _ := RelayIntent(s, createRequestIntent(), "creator", false); !res.Accepted {
+	if res, _ := RelayIntent(s, createRequestIntent(), "creator", noAuthority()); !res.Accepted {
 		t.Fatal(res.Reason)
 	}
 	p, err := Snapshot(s)
@@ -225,10 +225,10 @@ func TestRequestCloseIntentRelayFRRHZ156(t *testing.T) {
 	r := p.Requests[0]
 	handle := toDTO(p).Requests[0].Handle
 	before := len(s.All())
-	if res, _ := RelayIntent(s, Intent{Kind: "request.unable", RequestID: handle}, "closer", false); res.Accepted || res.Reason != "reason required" || len(s.All()) != before {
+	if res, _ := RelayIntent(s, Intent{Kind: "request.unable", RequestID: handle}, "closer", noAuthority()); res.Accepted || res.Reason != "reason required" || len(s.All()) != before {
 		t.Fatalf("unable=%#v writes=%d", res, len(s.All())-before)
 	}
-	if res, _ := RelayIntent(s, Intent{Kind: "request.complete", RequestID: handle, Memo: "finished"}, "closer", false); !res.Accepted {
+	if res, _ := RelayIntent(s, Intent{Kind: "request.complete", RequestID: handle, Memo: "finished"}, "closer", noAuthority()); !res.Accepted {
 		t.Fatal(res.Reason)
 	}
 	log := s.List("request", r.ID)
@@ -242,7 +242,7 @@ func TestRequestCloseIntentRelayFRRHZ156(t *testing.T) {
 
 	in := createRequestIntent()
 	in.Name = "Turn the spare key"
-	if res, _ := RelayIntent(s, in, "creator", false); !res.Accepted {
+	if res, _ := RelayIntent(s, in, "creator", noAuthority()); !res.Accepted {
 		t.Fatal(res.Reason)
 	}
 	p, _ = Snapshot(s)
@@ -252,7 +252,7 @@ func TestRequestCloseIntentRelayFRRHZ156(t *testing.T) {
 			open = candidate
 		}
 	}
-	if res, _ := RelayIntent(s, Intent{Kind: "request.cancel", RequestID: open.ID, Reason: "ops withdrew it", CorrelationID: "cancel-corr"}, "unrelated-operator", false); !res.Accepted {
+	if res, _ := RelayIntent(s, Intent{Kind: "request.cancel", RequestID: open.ID, Reason: "ops withdrew it", CorrelationID: "cancel-corr"}, "unrelated-operator", noAuthority()); !res.Accepted {
 		t.Fatal(res.Reason)
 	}
 	cancelLog := s.List("request", open.ID)

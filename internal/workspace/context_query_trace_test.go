@@ -61,7 +61,7 @@ func fixture064(t *testing.T) *events.Store {
 		if id == "e-about-g" {
 			from = "mem-b"
 		}
-		if _, err := es.Create(edge.Edge{ID: id, From: edge.Endpoint{Type: "memory", ID: from}, To: target, Kind: edge.About, Actor: "tester", Correlation: "test", Verified: true}); err != nil {
+		if _, err := es.Create(edge.Spec{ID: id, From: edge.Endpoint{Type: "memory", ID: from}, To: target, Kind: edge.About, Actor: "tester", Correlation: "test"}, noAuthority()); err != nil {
 			t.Fatal(err)
 		}
 	}

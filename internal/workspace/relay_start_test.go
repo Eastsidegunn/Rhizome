@@ -18,7 +18,6 @@ import (
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
 	"rhizome/internal/execution"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/policy"
 	"rhizome/internal/projector"
@@ -66,7 +65,7 @@ func (f *fakeStarter) Start(r ExecStartRequest) (string, string, error) {
 
 func startRelay(t *testing.T, s events.Port, in Intent, st ExecStarter) RelayResult {
 	t.Helper()
-	r, e := RelayIntentHooks(s, in, "op", false, RelayHooks{Start: st})
+	r, e := RelayIntentHooks(s, in, "op", noAuthority(), RelayHooks{Start: st})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -201,7 +200,7 @@ func TestRelayStartRejectionsZeroWritesFRRHZ123(t *testing.T) {
 		t.Fatal("Start reached on rejection")
 	}
 	// Terminal mission: ErrInvalidState before the hook (hook nil is fine).
-	if r, e := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "m"}, "op", true); e != nil || !r.Accepted {
+	if r, e := RelayIntent(s, Intent{Kind: "mission.complete", MissionID: "m"}, "op", noAuthority()); e != nil || !r.Accepted {
 		t.Fatal(r, e)
 	}
 	before = len(s.All())
@@ -300,7 +299,7 @@ func TestRelayStartConcurrentIdenticalFRRHZ123(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			res[i], errs[i] = RelayIntentHooks(s, Intent{Kind: "mission.start", MissionID: "m"}, "op", false, RelayHooks{Start: f})
+			res[i], errs[i] = RelayIntentHooks(s, Intent{Kind: "mission.start", MissionID: "m"}, "op", noAuthority(), RelayHooks{Start: f})
 		}(i)
 	}
 	wg.Wait()
@@ -432,7 +431,7 @@ func TestRelayStartHTTPFRRHZ123(t *testing.T) {
 // types in the file.
 func TestRelayStartJournalRoundTripFRRHZ123(t *testing.T) {
 	path := t.TempDir() + "/j.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +452,7 @@ func TestRelayStartJournalRoundTripFRRHZ123(t *testing.T) {
 	}
 	wsBefore, _ := Snapshot(j)
 	j.Close()
-	j2, err := journal.Open(path)
+	j2, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

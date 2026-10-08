@@ -10,6 +10,7 @@ import (
 	"rhizome/internal/decision"
 	"rhizome/internal/events"
 	"rhizome/internal/question"
+	"rhizome/internal/trust"
 	"sort"
 	"strings"
 	"time"
@@ -147,7 +148,7 @@ func validGate(g GateFields) error {
 	return nil
 }
 
-func (s Service) RecordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, verification ...*question.Verification) (Ref, error) {
+func (s Service) RecordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, auth trust.Authority, verification ...*question.Verification) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -160,6 +161,7 @@ func (s Service) RecordInput(k RequestKey, d Decision, reason, response, digest,
 	if strings.TrimSpace(actor) == "" {
 		return Ref{}, fmt.Errorf("actor required")
 	}
+	verified := auth != (trust.Authority{})
 	if !verified && !strings.HasPrefix(actor, "unverified-local-operator:") {
 		actor = "unverified-local-operator:" + actor
 	}
@@ -172,9 +174,9 @@ func (s Service) RecordInput(k RequestKey, d Decision, reason, response, digest,
 			return Ref{}, fmt.Errorf("invalid wait_human decision")
 		}
 	}
-	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, GateFields{}, verification...)
+	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, auth, GateFields{}, verification...)
 }
-func (s Service) recordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields, verification ...*question.Verification) (Ref, error) {
+func (s Service) recordInput(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, auth trust.Authority, g GateFields, verification ...*question.Verification) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -184,6 +186,7 @@ func (s Service) recordInput(k RequestKey, d Decision, reason, response, digest,
 	if !validDec(d) || digest == "" || response == "" || (d == Deny && reason == "") || strings.TrimSpace(actor) == "" {
 		return Ref{}, fmt.Errorf("invalid input")
 	}
+	verified := auth != (trust.Authority{})
 	if !verified && !strings.HasPrefix(actor, "unverified-local-operator:") {
 		actor = "unverified-local-operator:" + actor
 	}
@@ -216,8 +219,8 @@ func (s Service) recordInput(k RequestKey, d Decision, reason, response, digest,
 	p, _ := json.Marshal(input{RequestKey: k, Decision: d, Reason: reason, ResponseID: response, RequestDigest: digest, ActorRef: actor, ActorVerified: verified, CorrelationID: correlation, DecisionID: decisionID, GateFields: g, Verification: claim})
 	return s.append(id(k), "approval.input_recorded", p, 0)
 }
-func (s Service) RecordInputWithGate(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields, verification ...*question.Verification) (Ref, error) {
-	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, g, verification...)
+func (s Service) RecordInputWithGate(k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, auth trust.Authority, g GateFields, verification ...*question.Verification) (Ref, error) {
+	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, auth, g, verification...)
 }
 
 func (s Service) append(a, t string, p []byte, rev uint64) (Ref, error) {
@@ -351,7 +354,7 @@ func (s Service) ByTrace(t string) ([]Ref, error) {
 	return out, nil
 }
 
-func (s Service) Supersede(old string, k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, verified bool, g GateFields, verification ...*question.Verification) (Ref, error) {
+func (s Service) Supersede(old string, k RequestKey, d Decision, reason, response, digest, actor, correlation, decisionID string, auth trust.Authority, g GateFields, verification ...*question.Verification) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -362,7 +365,7 @@ func (s Service) Supersede(old string, k RequestKey, d Decision, reason, respons
 		return Ref{}, fmt.Errorf("self supersede")
 	}
 	g.Supersedes = old
-	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, verified, g, verification...)
+	return s.recordInput(k, d, reason, response, digest, actor, correlation, decisionID, auth, g, verification...)
 }
 func (s Service) IsSuperseded(aggregateID string) (bool, error) {
 	if s.Store == nil {

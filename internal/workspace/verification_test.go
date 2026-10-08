@@ -3,6 +3,8 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -37,39 +39,37 @@ func TestRelayVerificationRuleTableZeroWriteFRRHZ130(t *testing.T) {
 	}
 	validRelayed := `{"claimKind":"relayed","originClaim":"H","originChannel":"board","relayChain":["ops"]}`
 	cases := []struct {
-		name     string
-		kind     string
-		verified bool
-		raw      string
+		name string
+		kind string
+		raw  string
 	}{
-		{"V1 claimKind missing", "gate.approve", false, `{"originClaim":"H","relayChain":["ops"]}`},
-		{"V1 claimKind unknown", "gate.approve", false, `{"claimKind":"signed","originClaim":"H","relayChain":["ops"]}`},
-		{"V2 originClaim missing", "gate.approve", false, `{"claimKind":"relayed","relayChain":["ops"]}`},
-		{"V2 originClaim blank", "gate.approve", false, `{"claimKind":"relayed","originClaim":"","relayChain":["ops"]}`},
-		{"V2 originClaim not H", "gate.approve", false, `{"claimKind":"relayed","originClaim":"human","relayChain":["ops"]}`},
-		{"V3 relayChain empty", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","relayChain":[]}`},
-		{"V3 relayChain last mismatch", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","relayChain":["other"]}`},
-		{"V4 sessionRef missing", "gate.approve", false, `{"claimKind":"session-direct","originClaim":"H"}`},
-		{"V4 sessionRef blank", "gate.approve", false, `{"claimKind":"session-direct","originClaim":"H","sessionRef":"  "}`},
-		{"V5 originChannel unknown", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","originChannel":"chat","relayChain":["ops"]}`},
-		{"V5 relayed dev channel", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","originChannel":"dev-session","relayChain":["ops"]}`},
-		{"V5 direct ops channel", "gate.approve", false, `{"claimKind":"session-direct","originClaim":"H","originChannel":"ops-session","sessionRef":"session:x"}`},
-		{"V6 observedAt malformed", "gate.approve", false, `{"claimKind":"session-direct","originClaim":"H","sessionRef":"session:x","observedAt":"2026-10-08"}`},
-		{"V7 status", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"status":"verified"}`},
-		{"V7 assurance", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"assurance":"key"}`},
-		{"V7 verified", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"verified":true}`},
-		{"V7 principal", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"principal":"H"}`},
-		{"V7 wrong casing", "gate.approve", false, `{"ClaimKind":"relayed","originClaim":"H","relayChain":["ops"]}`},
-		{"V7 direct cross relayChain", "gate.approve", false, `{"claimKind":"session-direct","originClaim":"H","sessionRef":"session:x","relayChain":[]}`},
-		{"V7 relayed cross sessionRef", "gate.approve", false, `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"sessionRef":"session:x"}`},
-		{"V8 disallowed intent kind", "question.ask", false, validRelayed},
-		{"V8 bare verified conflict", "gate.approve", true, validRelayed},
+		{"V1 claimKind missing", "gate.approve", `{"originClaim":"H","relayChain":["ops"]}`},
+		{"V1 claimKind unknown", "gate.approve", `{"claimKind":"signed","originClaim":"H","relayChain":["ops"]}`},
+		{"V2 originClaim missing", "gate.approve", `{"claimKind":"relayed","relayChain":["ops"]}`},
+		{"V2 originClaim blank", "gate.approve", `{"claimKind":"relayed","originClaim":"","relayChain":["ops"]}`},
+		{"V2 originClaim not H", "gate.approve", `{"claimKind":"relayed","originClaim":"human","relayChain":["ops"]}`},
+		{"V3 relayChain empty", "gate.approve", `{"claimKind":"relayed","originClaim":"H","relayChain":[]}`},
+		{"V3 relayChain last mismatch", "gate.approve", `{"claimKind":"relayed","originClaim":"H","relayChain":["other"]}`},
+		{"V4 sessionRef missing", "gate.approve", `{"claimKind":"session-direct","originClaim":"H"}`},
+		{"V4 sessionRef blank", "gate.approve", `{"claimKind":"session-direct","originClaim":"H","sessionRef":"  "}`},
+		{"V5 originChannel unknown", "gate.approve", `{"claimKind":"relayed","originClaim":"H","originChannel":"chat","relayChain":["ops"]}`},
+		{"V5 relayed dev channel", "gate.approve", `{"claimKind":"relayed","originClaim":"H","originChannel":"dev-session","relayChain":["ops"]}`},
+		{"V5 direct ops channel", "gate.approve", `{"claimKind":"session-direct","originClaim":"H","originChannel":"ops-session","sessionRef":"session:x"}`},
+		{"V6 observedAt malformed", "gate.approve", `{"claimKind":"session-direct","originClaim":"H","sessionRef":"session:x","observedAt":"2026-10-08"}`},
+		{"V7 status", "gate.approve", `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"status":"verified"}`},
+		{"V7 assurance", "gate.approve", `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"assurance":"key"}`},
+		{"V7 verified", "gate.approve", `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"verified":true}`},
+		{"V7 principal", "gate.approve", `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"principal":"H"}`},
+		{"V7 wrong casing", "gate.approve", `{"ClaimKind":"relayed","originClaim":"H","relayChain":["ops"]}`},
+		{"V7 direct cross relayChain", "gate.approve", `{"claimKind":"session-direct","originClaim":"H","sessionRef":"session:x","relayChain":[]}`},
+		{"V7 relayed cross sessionRef", "gate.approve", `{"claimKind":"relayed","originClaim":"H","relayChain":["ops"],"sessionRef":"session:x"}`},
+		{"V8 disallowed intent kind", "question.ask", validRelayed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			before := journalImage105(t, s)
 			in := Intent{Kind: tc.kind, GateID: q.ID, Digest: q.Digest, Verification: rawVerification(tc.raw)}
-			res, err := RelayIntent(s, in, "ops", tc.verified)
+			res, err := RelayIntent(s, in, "ops", noAuthority())
 			if err != nil || res.Accepted || res.Reason != "invalid verification" {
 				t.Fatalf("accepted or echoing/noncanonical rejection: %+v err=%v", res, err)
 			}
@@ -93,7 +93,7 @@ func TestRelayVerificationRelayedAndSessionDirectRecordedFRRHZ130(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: q.ID, Digest: q.Digest, Verification: rawVerification(tc.raw)}, tc.actor, false)
+		res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: q.ID, Digest: q.Digest, Verification: rawVerification(tc.raw)}, tc.actor, noAuthority())
 		if err != nil || !res.Accepted {
 			t.Fatalf("%s rejected: %+v %v", tc.name, res, err)
 		}
@@ -150,7 +150,7 @@ func TestGateVerificationDerivationTableFRRHZ131(t *testing.T) {
 	if g, _ := gateByID(t, s, gr.ID); g.Verification != nil {
 		t.Fatalf("request-only JANUS gate has verification: %+v", g)
 	}
-	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest, Verification: rawVerification(`{"claimKind":"relayed","originClaim":"H","originChannel":"board","relayChain":["ops"]}`)}, "ops", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: gr.ID, Digest: gwDigest, Verification: rawVerification(`{"claimKind":"relayed","originClaim":"H","originChannel":"board","relayChain":["ops"]}`)}, "ops", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("JANUS claim rejected: %+v %v", res, err)
 	}
@@ -183,15 +183,15 @@ func mustSnapshot105(t *testing.T, s events.Port) Projection {
 func TestContextGateVerificationClaimedFRRHZ131(t *testing.T) {
 	s := fixture068(t)
 	defineProc(t, s, "proc-verification", procedure.Step{ID: "a", Action: "act-a", NeedsGate: true})
-	if res, err := RelayIntent(s, Intent{Kind: "procedure.run", ID: "proc-verification", Name: "verification", GoalID: "goal-dev"}, "op", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "procedure.run", ID: "proc-verification", Name: "verification", GoalID: "goal-dev"}, "op", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("procedure.run: %+v %v", res, err)
 	}
-	qID := question.IDFor("verification · a 게이트", "act-a", "")
+	qID := mustQuestionID("verification · a 게이트", "act-a", "")
 	q, err := (question.Service{Store: s}).Get(qID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: q.ID, Digest: q.Digest, Reason: "fix", Verification: rawVerification(`{"claimKind":"session-direct","originClaim":"H","sessionRef":"session:ctx"}`)}, "dev", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: q.ID, Digest: q.Digest, Reason: "fix", Verification: rawVerification(`{"claimKind":"session-direct","originClaim":"H","sessionRef":"session:ctx"}`)}, "dev", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("requestChanges: %+v %v", res, err)
 	}
@@ -232,7 +232,7 @@ func TestWorkspaceGoldenLiteralUnchangedWithoutVerificationFRRHZ131(t *testing.T
 
 func TestPendingOnlyJournalByteIdenticalFRRHZ142(t *testing.T) {
 	s := &events.Store{}
-	if _, err := (question.Service{Store: s}).Ask("pending-only-142", "body", "recommend", "", "", "asker", ""); err != nil {
+	if err := appendV1QuestionFRRHZ145(s, "pending-only-142", "body", "recommend", "", "", "asker", ""); err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
@@ -252,40 +252,40 @@ func goldenJournalWithoutVerificationFRRHZ131(t *testing.T) *events.Store {
 		procedure.Step{ID: "a", Action: "act-a", NeedsGate: true},
 		procedure.Step{ID: "b", Action: "act-b", After: []string{"a"}, NeedsGate: true},
 	)
-	if res, err := RelayIntent(source, Intent{Kind: "procedure.run", ID: "proc-bc", Name: "bc", GoalID: "goal-dev"}, "op", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(source, Intent{Kind: "procedure.run", ID: "proc-bc", Name: "bc", GoalID: "goal-dev"}, "op", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("procedure.run: %+v %v", res, err)
 	}
-	qa, err := (question.Service{Store: source}).Get(question.IDFor("bc · a 게이트", "act-a", ""))
+	qa, err := (question.Service{Store: source}).Get(mustQuestionID("bc · a 게이트", "act-a", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res, err := RelayIntent(source, Intent{Kind: "gate.requestChanges", GateID: qa.ID, Digest: qa.Digest, Reason: "fix it"}, "dev", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(source, Intent{Kind: "gate.requestChanges", GateID: qa.ID, Digest: qa.Digest, Reason: "fix it"}, "dev", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("request changes: %+v %v", res, err)
 	}
 	approved, err := (question.Service{Store: source}).Ask("approve-me", "b", "r", "mission-x", "", "asker", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res, err := RelayIntent(source, Intent{Kind: "gate.approve", GateID: approved.ID, Digest: approved.Digest}, "ops", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(source, Intent{Kind: "gate.approve", GateID: approved.ID, Digest: approved.Digest}, "ops", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("approve: %+v %v", res, err)
 	}
 	rejected, err := (question.Service{Store: source}).Ask("reject-me", "b", "r", "", "goal-dev", "asker", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res, err := RelayIntent(source, Intent{Kind: "gate.reject", GateID: rejected.ID, Digest: rejected.Digest, Reason: "no"}, "ops", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(source, Intent{Kind: "gate.reject", GateID: rejected.ID, Digest: rejected.Digest, Reason: "no"}, "ops", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("reject: %+v %v", res, err)
 	}
 	if _, err := (question.Service{Store: source}).Ask("pending", "b", "r", "", "", "asker", ""); err != nil {
 		t.Fatal(err)
 	}
 	janusApproved := pendingGate(t, source, "bc-1", gwDigest)
-	if res, err := RelayIntent(source, Intent{Kind: "gate.approve", GateID: janusApproved.ID, Digest: gwDigest}, "ops", false); err != nil || !res.Accepted {
+	if res, err := RelayIntent(source, Intent{Kind: "gate.approve", GateID: janusApproved.ID, Digest: gwDigest}, "ops", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("JANUS approve: %+v %v", res, err)
 	}
 	pendingGate(t, source, "bc-2", gwDigest)
 	key := approval.RequestKey{TraceID: "abcdef0123456789abcdef0123456789", SpanID: "abcdef0123456789", RequestID: "bc-3"}
-	if _, err := (approval.Service{Store: source}).RecordInput(key, approval.Deny, "nah", "resp", "digest", "operator", "", "", false); err != nil {
+	if _, err := (approval.Service{Store: source}).RecordInput(key, approval.Deny, "nah", "resp", "digest", "operator", "", "", noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -293,9 +293,39 @@ func goldenJournalWithoutVerificationFRRHZ131(t *testing.T) *events.Store {
 	// event and embedded request timestamps so the fixture is deterministic.
 	stable := &events.Store{}
 	base := time.Date(2026, 10, 8, 3, 35, 32, 0, time.UTC)
+	idMap := map[string]string{}
+	digestMap := map[string]string{}
 	for i, event := range source.All() {
 		event.ID = ""
 		event.CreatedAt = base.Add(time.Duration(i) * time.Second)
+		if event.Type == "question.asked" {
+			var payload struct {
+				Title, Body, Recommendation, MissionID, RequestedBy, CorrelationID, Digest string
+				GoalID                                                                     string `json:",omitempty"`
+			}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			oldID := event.AggregateID
+			payload.Digest = digestV1ForTest(payload.Title, payload.Body, payload.Recommendation)
+			event.AggregateID = "q-" + strings.TrimPrefix(payload.Digest, "rhz-question-v1:")[:24]
+			idMap[oldID] = event.AggregateID
+			digestMap[oldID] = payload.Digest
+			event.Payload, _ = json.Marshal(payload)
+		} else if event.AggregateType == "question" {
+			oldID := event.AggregateID
+			var payload map[string]any
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if id := idMap[event.AggregateID]; id != "" {
+				event.AggregateID = id
+			}
+			if digestMap[oldID] != "" {
+				payload["Digest"] = digestMap[oldID]
+			}
+			event.Payload, _ = json.Marshal(payload)
+		}
 		if event.Type == "approval.input_recorded" {
 			var payload map[string]any
 			if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -311,6 +341,24 @@ func goldenJournalWithoutVerificationFRRHZ131(t *testing.T) *events.Store {
 		}
 	}
 	return stable
+}
+
+func digestV1ForTest(title, body, recommendation string) string {
+	sum := sha256.Sum256([]byte(title + "\x00" + body + "\x00" + recommendation))
+	return "rhz-question-v1:" + hex.EncodeToString(sum[:])
+}
+
+func appendV1QuestionFRRHZ145(store events.Port, title, body, recommendation, missionID, goalID, requestedBy, correlationID string) error {
+	if !strings.HasPrefix(requestedBy, "unverified-local-operator:") {
+		requestedBy = "unverified-local-operator:" + requestedBy
+	}
+	digest := digestV1ForTest(title, body, recommendation)
+	id := "q-" + strings.TrimPrefix(digest, "rhz-question-v1:")[:24]
+	payload, _ := json.Marshal(struct {
+		Title, Body, Recommendation, MissionID, RequestedBy, CorrelationID, Digest string
+		GoalID                                                                     string `json:",omitempty"`
+	}{title, body, recommendation, missionID, requestedBy, correlationID, digest, goalID})
+	return store.Append(0, events.Event{AggregateType: "question", AggregateID: id, Revision: 1, Type: "question.asked", Payload: payload})
 }
 
 func firstWorkspaceSnapshotFrameFRRHZ131(t *testing.T, h http.Handler) []byte {
@@ -369,7 +417,7 @@ func TestBareActorVerifiedProjectsLegacyAssertedFRRHZ132(t *testing.T) {
 	}
 	_, contextBefore := getContext(t, NewHTTP(s).Handler(), "?task=legacy-m")
 	k := approval.RequestKey{TraceID: "abcdef0123456789abcdef0123456789", SpanID: "abcdef0123456789", RequestID: "legacy"}
-	r, err := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "resp", "digest", "operator", "", "", true)
+	r, err := appendLegacyApprovalInput(s, k, approval.Allow, "", "resp", "digest", "operator", "", "", approval.GateFields{})
 	if err != nil {
 		t.Fatal(err)
 	}

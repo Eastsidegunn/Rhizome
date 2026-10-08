@@ -17,7 +17,6 @@ import (
 
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/projector"
 )
@@ -32,7 +31,7 @@ func goal087(t *testing.T, s events.Port, id, desc, success string) {
 func update087(t *testing.T, s events.Port, in Intent) RelayResult {
 	t.Helper()
 	in.Kind = "goal.update"
-	res, err := RelayIntent(s, in, "tester", true)
+	res, err := RelayIntent(s, in, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,10 +164,10 @@ func TestGoalUpdateRejectedAndIdempotentNoWriteFRRHZ117(t *testing.T) {
 	goal087(t, s, "goal-live", "live", "done")
 	goal087(t, s, "goal-cancelled", "c", "done")
 	goal087(t, s, "goal-achieved", "a", "done")
-	if res, err := RelayIntent(s, Intent{Kind: "goal.cancel", GoalID: "goal-cancelled"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "goal.cancel", GoalID: "goal-cancelled"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("cancel fixture: %+v err=%v", res, err)
 	}
-	if res, err := RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-achieved"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-achieved"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("resolve fixture: %+v err=%v", res, err)
 	}
 	before := journalBytes069(t, s)
@@ -279,7 +278,7 @@ func TestGoalUpdateHTTPWireFRRHZ117(t *testing.T) {
 // /v1/workspace byte-identical across the restart.
 func TestGoalUpdateJournalRoundTripFRRHZ117(t *testing.T) {
 	path := t.TempDir() + "/j.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +297,7 @@ func TestGoalUpdateJournalRoundTripFRRHZ117(t *testing.T) {
 		{Intent{Kind: "goal.update", GoalID: "goal-legacy", Description: " "}, false},
 	}
 	for _, st := range steps {
-		res, e := RelayIntent(j, st.in, "tester", true)
+		res, e := RelayIntent(j, st.in, "tester", noAuthority())
 		if e != nil || res.Accepted != st.want {
 			t.Fatalf("%+v: %+v err=%v", st.in, res, e)
 		}
@@ -330,7 +329,7 @@ func TestGoalUpdateJournalRoundTripFRRHZ117(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

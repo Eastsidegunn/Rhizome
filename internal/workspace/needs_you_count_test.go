@@ -25,7 +25,7 @@ func TestNeedsYouCountsPendingQuestionFRRHZ115(t *testing.T) {
 		if ny, _, _ := workspaceCounts079(t, s); ny != 1 {
 			t.Fatalf("%s: needsYou=%d with pending question, want 1", kind, ny)
 		}
-		res, err := RelayIntent(s, Intent{Kind: kind, GateID: id, Digest: digest, Reason: "decided"}, "alice", true)
+		res, err := RelayIntent(s, Intent{Kind: kind, GateID: id, Digest: digest, Reason: "decided"}, "alice", noAuthority())
 		if err != nil || !res.Accepted {
 			t.Fatalf("%s: %v %+v", kind, err, res)
 		}
@@ -43,7 +43,7 @@ func TestNeedsYouExcludesChangesRequestedFRRHZ115(t *testing.T) {
 	if ny, _, _ := workspaceCounts079(t, s); ny != 1 {
 		t.Fatalf("needsYou=%d pending, want 1", ny)
 	}
-	if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id, Digest: digest, Reason: "shorter"}, "alice", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: id, Digest: digest, Reason: "shorter"}, "alice", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("requestChanges: %v %+v", err, res)
 	}
 	w := decode078(t, s)
@@ -53,7 +53,7 @@ func TestNeedsYouExcludesChangesRequestedFRRHZ115(t *testing.T) {
 	if ny, _, _ := workspaceCounts079(t, s); ny != 0 {
 		t.Fatalf("needsYou=%d after changes_requested, want 0", ny)
 	}
-	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: id, Digest: digest}, "alice", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: id, Digest: digest}, "alice", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("approve: %v %+v", err, res)
 	}
 	if ny, _, _ := workspaceCounts079(t, s); ny != 0 {

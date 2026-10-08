@@ -31,15 +31,15 @@ func rhz057Store(t *testing.T) *events.Store {
 	return s
 }
 
-func mkEdge(id, fromT, fromID, toT, toID string, k Kind) Edge {
-	return Edge{ID: id, From: Endpoint{fromT, fromID}, To: Endpoint{toT, toID}, Kind: k, Actor: "tester", Correlation: "test", Verified: true}
+func mkEdge(id, fromT, fromID, toT, toID string, k Kind) Spec {
+	return Spec{ID: id, From: Endpoint{fromT, fromID}, To: Endpoint{toT, toID}, Kind: k, Actor: "tester", Correlation: "test"}
 }
 
 // T1: contains(goal→goal) 발행 — 저널 실재(이벤트 수 증가)와 재생 일치.
 func TestContainsEdgeDeclaredFRRHZ087(t *testing.T) {
 	s := rhz057Store(t)
 	n := len(s.All())
-	got, err := (Service{Store: s}).Create(mkEdge("e-contains-1", "goal", "g1", "goal", "g2", Contains))
+	got, err := (Service{Store: s}).Create(mkEdge("e-contains-1", "goal", "g1", "goal", "g2", Contains), noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,10 +62,10 @@ func TestAboutEdgeDeclaredFRRHZ087(t *testing.T) {
 	s := rhz057Store(t)
 	n := len(s.All())
 	svc := Service{Store: s}
-	if _, err := svc.Create(mkEdge("e-about-goal", "memory", "note-m1", "goal", "g1", About)); err != nil {
+	if _, err := svc.Create(mkEdge("e-about-goal", "memory", "note-m1", "goal", "g1", About), noAuthority()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Create(mkEdge("e-about-mission", "memory", "note-m1", "mission", "ms1", About)); err != nil {
+	if _, err := svc.Create(mkEdge("e-about-mission", "memory", "note-m1", "mission", "ms1", About), noAuthority()); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.All()) != n+2 {
@@ -78,7 +78,7 @@ func TestShapeWhitelistRejectionsFRRHZ087(t *testing.T) {
 	s := rhz057Store(t)
 	svc := Service{Store: s}
 	n := len(s.All())
-	bad := []Edge{
+	bad := []Spec{
 		mkEdge("b1", "goal", "g1", "mission", "ms1", Contains),
 		mkEdge("b2", "memory", "note-m1", "goal", "g1", Contains),
 		mkEdge("b3", "goal", "g1", "memory", "note-m1", About),
@@ -88,7 +88,7 @@ func TestShapeWhitelistRejectionsFRRHZ087(t *testing.T) {
 		mkEdge("b7", "goal", "g1", "goal", "g2", Kind("unknown")),
 	}
 	for _, x := range bad {
-		if _, err := svc.Create(x); err == nil {
+		if _, err := svc.Create(x, noAuthority()); err == nil {
 			t.Fatalf("%s (%s %s→%s) accepted, want rejection", x.ID, x.Kind, x.From.Type, x.To.Type)
 		}
 	}
@@ -96,7 +96,7 @@ func TestShapeWhitelistRejectionsFRRHZ087(t *testing.T) {
 		t.Fatal("journal changed by rejected edges")
 	}
 	// 기존 Kind 회귀: dependency(goal→mission)는 여전히 성립.
-	if _, err := svc.Create(mkEdge("ok-dep", "goal", "g1", "mission", "ms1", Dependency)); err != nil {
+	if _, err := svc.Create(mkEdge("ok-dep", "goal", "g1", "mission", "ms1", Dependency), noAuthority()); err != nil {
 		t.Fatalf("legacy dependency edge regressed: %v", err)
 	}
 }
@@ -106,10 +106,10 @@ func TestAboutEndpointExistenceFRRHZ087(t *testing.T) {
 	s := rhz057Store(t)
 	svc := Service{Store: s}
 	n := len(s.All())
-	if _, err := svc.Create(mkEdge("x1", "memory", "note-ghost", "mission", "ms1", About)); err == nil {
+	if _, err := svc.Create(mkEdge("x1", "memory", "note-ghost", "mission", "ms1", About), noAuthority()); err == nil {
 		t.Fatal("nonexistent memory endpoint accepted")
 	}
-	if _, err := svc.Create(mkEdge("x2", "memory", "note-m1", "goal", "goal-ghost", About)); err == nil {
+	if _, err := svc.Create(mkEdge("x2", "memory", "note-m1", "goal", "goal-ghost", About), noAuthority()); err == nil {
 		t.Fatal("nonexistent goal endpoint accepted")
 	}
 	if len(s.All()) != n {

@@ -13,7 +13,6 @@ import (
 
 	"rhizome/internal/edge"
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/projector"
 )
@@ -38,7 +37,7 @@ func decode077(t *testing.T, s events.Port) wire077 {
 func relay077(t *testing.T, s events.Port, in Intent) RelayResult {
 	t.Helper()
 	in.Kind = "goal.create"
-	res, err := RelayIntent(s, in, "tester", true)
+	res, err := RelayIntent(s, in, "tester", noAuthority())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +58,7 @@ func countType077(s events.Port, typ string) int {
 // a /v1/workspace mission with its success criterion, tasks unchanged.
 func TestGoalCreateGoalOnlyFRRHZ105(t *testing.T) {
 	s := &events.Store{}
-	if res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "existing", Prompt: "p"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "existing", Prompt: "p"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("seed: %v %+v", err, res)
 	}
 	before := decode077(t, s)
@@ -122,7 +121,7 @@ func TestGoalCreateWithParentDeclaresContainsFRRHZ105(t *testing.T) {
 	// "relay", goal.create uses relayCorrelation ("relay:<actor>") like the
 	// newer operator intents (goal.resolve, mission.complete) so the journal
 	// records who registered the outcome — pinned here.
-	want := edge.Edge{ID: "edge-contains-goal-parent-goal-child", From: edge.Endpoint{Type: "goal", ID: "goal-parent"}, To: edge.Endpoint{Type: "goal", ID: "goal-child"}, Kind: edge.Contains, Actor: "tester", Correlation: "relay:tester", Verified: true, Revision: 1}
+	want := edge.Edge{ID: "edge-contains-goal-parent-goal-child", From: edge.Endpoint{Type: "goal", ID: "goal-parent"}, To: edge.Endpoint{Type: "goal", ID: "goal-child"}, Kind: edge.Contains, Actor: "unverified-local-operator:tester", Correlation: "relay:unverified-local-operator:tester", Verified: false, Revision: 1}
 	got, err := (edge.Service{Store: s}).Get(want.ID)
 	if err != nil || got != want {
 		t.Fatalf("edge: got %+v want %+v err=%v", got, want, err)
@@ -169,7 +168,7 @@ func TestGoalCreateWithParentDeclaresContainsFRRHZ105(t *testing.T) {
 // partial write — the parent is validated before CreateGoal).
 func TestGoalCreateRejectionsJournalUnchangedFRRHZ105(t *testing.T) {
 	s := goals066(t, "goal-live", "goal-dup", "goal-done")
-	if res, err := RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-done"}, "tester", true); err != nil || !res.Accepted {
+	if res, err := RelayIntent(s, Intent{Kind: "goal.resolve", GoalID: "goal-done"}, "tester", noAuthority()); err != nil || !res.Accepted {
 		t.Fatalf("goal.resolve: %v %+v", err, res)
 	}
 	cases := []struct {
@@ -205,7 +204,7 @@ func TestGoalCreateRejectionsJournalUnchangedFRRHZ105(t *testing.T) {
 // byte-identical projection.
 func TestGoalCreateJournalRoundTripFRRHZ105(t *testing.T) {
 	path := t.TempDir() + "/events.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +219,7 @@ func TestGoalCreateJournalRoundTripFRRHZ105(t *testing.T) {
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

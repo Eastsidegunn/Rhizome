@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/question"
 )
 
@@ -126,7 +125,7 @@ func TestRHZ050QuestionHTTPRoundTripSSEAndDecisionFRRHZ081(t *testing.T) {
 // TestRHZ050QuestionJournalRestartFRRHZ081 verifies durable question replay.
 func TestRHZ050QuestionJournalRestartFRRHZ081(t *testing.T) {
 	path := t.TempDir() + "/events.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +141,7 @@ func TestRHZ050QuestionJournalRestartFRRHZ081(t *testing.T) {
 	if err = j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +222,7 @@ func TestRHZ050QuestionPendingAndAnsweredProjectionFRRHZ081(t *testing.T) {
 		t.Fatalf("pending gate: %+v", g)
 	}
 	before := len(s.All())
-	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: q.ID, Digest: q.Digest}, "operator", false)
+	res, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: q.ID, Digest: q.Digest}, "operator", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("approve: %+v %v", res, err)
 	}
@@ -244,10 +243,10 @@ func TestRHZ050QuestionRelayValidationFRRHZ081(t *testing.T) {
 	// validation is only reached with a real mission — pin the Reason so this
 	// test keeps covering the kernel's title/body rule, not the missionId gate.
 	missionIn062(t, s, "mission-v", domain.MissionReady, domain.MissionRunning)
-	if r, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "", Body: "body", MissionID: "mission-v"}, "operator", false); err != nil || r.Accepted || r.Reason != "title and body required" {
+	if r, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "", Body: "body", MissionID: "mission-v"}, "operator", noAuthority()); err != nil || r.Accepted || r.Reason != "title and body required" {
 		t.Fatalf("missing title: %+v %v", r, err)
 	}
-	if r, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "title", Body: "", MissionID: "mission-v"}, "operator", false); err != nil || r.Accepted || r.Reason != "title and body required" {
+	if r, err := RelayIntent(s, Intent{Kind: "question.ask", Name: "title", Body: "", MissionID: "mission-v"}, "operator", noAuthority()); err != nil || r.Accepted || r.Reason != "title and body required" {
 		t.Fatalf("missing body: %+v %v", r, err)
 	}
 	q, err := (question.Service{Store: s}).Ask("title", "body", "recommend", "", "", "operator", "")
@@ -255,10 +254,10 @@ func TestRHZ050QuestionRelayValidationFRRHZ081(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(s.All())
-	if r, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: q.ID, Digest: ""}, "operator", false); err != nil || r.Accepted || len(s.All()) != before {
+	if r, err := RelayIntent(s, Intent{Kind: "gate.approve", GateID: q.ID, Digest: ""}, "operator", noAuthority()); err != nil || r.Accepted || len(s.All()) != before {
 		t.Fatalf("missing digest accepted: %+v %v", r, err)
 	}
-	if r, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: q.ID, Digest: q.Digest}, "operator", false); err != nil || r.Accepted || r.Reason != "reason required" {
+	if r, err := RelayIntent(s, Intent{Kind: "gate.reject", GateID: q.ID, Digest: q.Digest}, "operator", noAuthority()); err != nil || r.Accepted || r.Reason != "reason required" {
 		t.Fatalf("missing reject reason: %+v %v", r, err)
 	}
 }

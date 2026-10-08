@@ -63,7 +63,7 @@ func recordingInjector(t *testing.T, s *events.Store, calls *[]injectCall, seq i
 
 func instruct(t *testing.T, s *events.Store, inject ExecInjector) RelayResult {
 	t.Helper()
-	r, e := RelayIntentWith(s, Intent{Kind: "task.instruct", TaskID: "m", Instruction: "do it"}, "op", false, inject)
+	r, e := RelayIntentWith(s, Intent{Kind: "task.instruct", TaskID: "m", Instruction: "do it"}, "op", noAuthority(), inject)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -144,7 +144,7 @@ func TestRelayInstructNilInjectUnchangedFRRHZ119(t *testing.T) {
 	s := ws(t)
 	boundExecution(t, s, "k1", injectTrace, execution.Observing)
 	before := len(s.All())
-	r, e := RelayIntent(s, Intent{Kind: "task.instruct", TaskID: "m", Instruction: "do it"}, "op", false)
+	r, e := RelayIntent(s, Intent{Kind: "task.instruct", TaskID: "m", Instruction: "do it"}, "op", noAuthority())
 	if e != nil || !r.Accepted || r.Reason != "" || len(s.All()) != before+1 {
 		t.Fatalf("%+v %v", r, e)
 	}

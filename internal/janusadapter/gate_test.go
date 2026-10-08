@@ -220,7 +220,7 @@ func TestTickSurfaceSkipsResolvedRequestsFRRHZ078(t *testing.T) {
 			id := approval.IDFor(gateKey("r1"))
 			queries := 0
 			if tc.preInput {
-				if _, err := (approval.Service{Store: s}).RecordInput(gateKey("r1"), approval.Allow, "", "resp", gateDigest, "test-operator", "", "", true); err != nil {
+				if _, err := (approval.Service{Store: s}).RecordInput(gateKey("r1"), approval.Allow, "", "resp", gateDigest, "test-operator", "", "", noAuthority()); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -306,7 +306,7 @@ func TestGateApproveExpiredFinalityViaObservationFRRHZ078(t *testing.T) {
 		return strings.NewReader(stream), nil
 	}, dial)
 	l.Tick() // surface with expires_at already in the past
-	res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: id, Digest: gateDigest}, "alice", false)
+	res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: id, Digest: gateDigest}, "alice", noAuthority())
 	if err != nil || !res.Accepted {
 		t.Fatalf("late approve refused — expiry was pre-judged: %+v %v", res, err)
 	}
@@ -444,10 +444,10 @@ func TestSmokeCoexistenceFirstDurableWinsFRRHZ078(t *testing.T) {
 	}
 	t.Run("smoke_first", func(t *testing.T) {
 		s, id := surface(t)
-		if _, err := (approval.Service{Store: s}).RecordInputWithGate(gateKey("r1"), approval.Allow, "", "resp-manual", gateDigest, "test-operator", "smoke", "", true, approval.GateFields{}); err != nil {
+		if _, err := (approval.Service{Store: s}).RecordInputWithGate(gateKey("r1"), approval.Allow, "", "resp-manual", gateDigest, "test-operator", "smoke", "", noAuthority(), approval.GateFields{}); err != nil {
 			t.Fatal(err)
 		}
-		res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: id, Digest: gateDigest}, "alice", false)
+		res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: id, Digest: gateDigest}, "alice", noAuthority())
 		if err != nil || res.Accepted || res.Reason != "gate already has input" {
 			t.Fatal(res, err)
 		}
@@ -457,11 +457,11 @@ func TestSmokeCoexistenceFirstDurableWinsFRRHZ078(t *testing.T) {
 	})
 	t.Run("ui_first", func(t *testing.T) {
 		s, id := surface(t)
-		res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: id, Digest: gateDigest}, "alice", false)
+		res, err := workspace.RelayIntent(s, workspace.Intent{Kind: "gate.approve", GateID: id, Digest: gateDigest}, "alice", noAuthority())
 		if err != nil || !res.Accepted {
 			t.Fatal(res, err)
 		}
-		if _, err = (approval.Service{Store: s}).RecordInputWithGate(gateKey("r1"), approval.Allow, "", "resp-manual", gateDigest, "test-operator", "smoke", "", true, approval.GateFields{}); err == nil {
+		if _, err = (approval.Service{Store: s}).RecordInputWithGate(gateKey("r1"), approval.Allow, "", "resp-manual", gateDigest, "test-operator", "smoke", "", noAuthority(), approval.GateFields{}); err == nil {
 			t.Fatal("second durable input accepted")
 		}
 		if n := countType(s, "approval.input_recorded"); n != 1 {

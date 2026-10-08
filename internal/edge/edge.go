@@ -8,6 +8,7 @@ import (
 	"rhizome/internal/events"
 	"rhizome/internal/memory"
 	"rhizome/internal/projector"
+	"rhizome/internal/trust"
 	"sort"
 	"strings"
 )
@@ -34,6 +35,13 @@ type Edge struct {
 	Verified           bool
 	Supersedes         string
 	Revision           uint64
+}
+type Spec struct {
+	ID                 string
+	From, To           Endpoint
+	Kind               Kind
+	Actor, Correlation string
+	Supersedes         string
 }
 type Service struct{ Store events.Port }
 type payload struct {
@@ -105,14 +113,15 @@ func (s Service) exists(e Endpoint) error {
 	}
 	return fmt.Errorf("invalid endpoint")
 }
-func (s Service) Create(x Edge) (Edge, error) {
+func (s Service) Create(x Spec, auth trust.Authority) (Edge, error) {
 	if s.Store == nil {
 		return Edge{}, fmt.Errorf("nil store")
 	}
-	if !x.Verified && !strings.HasPrefix(x.Actor, "unverified-local-operator:") {
+	verified := auth != (trust.Authority{})
+	if !verified && !strings.HasPrefix(x.Actor, "unverified-local-operator:") {
 		x.Actor = "unverified-local-operator:" + x.Actor
 	}
-	p := payload{x.ID, x.From, x.To, x.Kind, x.Actor, x.Correlation, x.Verified, x.Supersedes}
+	p := payload{x.ID, x.From, x.To, x.Kind, x.Actor, x.Correlation, verified, x.Supersedes}
 	if e := valid(p, x.ID); e != nil {
 		return Edge{}, e
 	}
@@ -137,7 +146,7 @@ func (s Service) Create(x Edge) (Edge, error) {
 	}
 	return Replay(s.Store.List("edge", x.ID))
 }
-func (s Service) Rewire(old string, x Edge) (Edge, error) {
+func (s Service) Rewire(old string, x Spec, auth trust.Authority) (Edge, error) {
 	if s.Store == nil {
 		return Edge{}, fmt.Errorf("nil store")
 	}
@@ -148,7 +157,7 @@ func (s Service) Rewire(old string, x Edge) (Edge, error) {
 		return Edge{}, fmt.Errorf("self supersede")
 	}
 	x.Supersedes = old
-	return s.Create(x)
+	return s.Create(x, auth)
 }
 func Replay(log []events.Event) (Edge, error) {
 	if len(log) != 1 {

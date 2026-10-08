@@ -58,7 +58,7 @@ func writeJournalLines(t *testing.T, path string, evs []events.Event) {
 
 func TestRestartAndStrictValidation(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "events.ndjson")
-	j, err := Open(p)
+	j, err := openTestJournal(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestRestartAndStrictValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.Close()
-	j, err = Open(p)
+	j, err = openTestJournal(p)
 	if err != nil || len(j.All()) != 1 {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestRestartAndStrictValidation(t *testing.T) {
 }
 
 func TestConcurrentAppendSerializes(t *testing.T) {
-	j, err := Open(filepath.Join(t.TempDir(), "j"))
+	j, err := openTestJournal(filepath.Join(t.TempDir(), "j"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRejectsCorruptOrGap(t *testing.T) {
 		if err := os.WriteFile(p, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Open(p); err == nil {
+		if _, err := openTestJournal(p); err == nil {
 			t.Fatal("accepted corrupt journal")
 		}
 	}
@@ -117,7 +117,7 @@ func TestJournalFailStopPoisonFRRHZ144(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "journal.ndjson")
-			j, err := Open(p)
+			j, err := openTestJournal(p)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,7 +176,7 @@ func TestJournalFailStopPoisonFRRHZ144(t *testing.T) {
 // FR-RHZ-144: failures before the file write boundary remain ordinary errors
 // and leave the journal available for a later valid append.
 func TestJournalPreWriteFailuresDoNotPoisonFRRHZ144(t *testing.T) {
-	j, err := Open(filepath.Join(t.TempDir(), "journal.ndjson"))
+	j, err := openTestJournal(filepath.Join(t.TempDir(), "journal.ndjson"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestJournalPreWriteFailuresDoNotPoisonFRRHZ144(t *testing.T) {
 // the write path (not the j.file==nil guard) is exercised.
 func TestWriteFailureLeavesStateUnchanged(t *testing.T) { // FR-RHZ-084 (I5)
 	p := filepath.Join(t.TempDir(), "j")
-	j, err := Open(p)
+	j, err := openTestJournal(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestWriteFailureLeavesStateUnchanged(t *testing.T) { // FR-RHZ-084 (I5)
 		t.Fatal("List changed after failed write")
 	}
 	// I5-2: the failed event must not be on disk either.
-	j2, err := Open(p)
+	j2, err := openTestJournal(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestWriteFailureLeavesStateUnchanged(t *testing.T) { // FR-RHZ-084 (I5)
 // the index across the service and replay paths).
 func TestReplayReproducesState(t *testing.T) { // FR-RHZ-084 (I6)
 	p := filepath.Join(t.TempDir(), "j")
-	j, err := Open(p)
+	j, err := openTestJournal(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestReplayReproducesState(t *testing.T) { // FR-RHZ-084 (I6)
 	beforeGoalG := j.List("goal", "g")
 	j.Close()
 
-	j2, err := Open(p)
+	j2, err := openTestJournal(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestReplayRejectsRevisionGap(t *testing.T) { // FR-RHZ-084 (I1/I4)
 		{Sequence: 1, AggregateType: "goal", AggregateID: "g", Revision: 1, Type: "goal.created", CreatedAt: jFixedTime},
 		{Sequence: 2, AggregateType: "goal", AggregateID: "g", Revision: 3, Type: "goal.updated", CreatedAt: jFixedTime}, // skips rev 2
 	})
-	if _, err := Open(p); err == nil {
+	if _, err := openTestJournal(p); err == nil {
 		t.Fatal("accepted revision gap on replay")
 	}
 }
@@ -303,7 +303,7 @@ func TestReplayRejectsTruncatedLine(t *testing.T) { // FR-RHZ-084 (I4)
 	if err := os.WriteFile(p, []byte(`{"sequence":1,"aggregate_type":"goal","aggregate_id":"g","revision":1,"type":"goal.created"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(p); err == nil {
+	if _, err := openTestJournal(p); err == nil {
 		t.Fatal("accepted truncated final line")
 	}
 }
@@ -311,7 +311,7 @@ func TestReplayRejectsTruncatedLine(t *testing.T) { // FR-RHZ-084 (I4)
 // --- RHZ-054 benchmarks (reviewer measures; no in-test assertions) ---
 
 func buildJournal(b *testing.B, path string, n int) {
-	j, err := Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func BenchmarkJournalOpen(b *testing.B) {
 			buildJournal(b, path, n)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				j, err := Open(path)
+				j, err := openTestJournal(path)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -355,7 +355,7 @@ func BenchmarkJournalAppend(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			path := filepath.Join(b.TempDir(), "j")
 			buildJournal(b, path, n)
-			j, err := Open(path)
+			j, err := openTestJournal(path)
 			if err != nil {
 				b.Fatal(err)
 			}

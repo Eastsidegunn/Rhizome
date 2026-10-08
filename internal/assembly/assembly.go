@@ -16,6 +16,7 @@ import (
 	"rhizome/internal/procedure"
 	"rhizome/internal/projector"
 	"rhizome/internal/question"
+	"rhizome/internal/trust"
 )
 
 type RunSpec struct {
@@ -24,7 +25,7 @@ type RunSpec struct {
 	RunID       string
 	Params      map[string]string
 	Actor       string
-	Verified    bool
+	Authority   trust.Authority
 	Correlation string
 }
 
@@ -107,7 +108,10 @@ func Run(store events.Port, spec RunSpec) (RunResult, error) {
 			return RunResult{}, fmt.Errorf("actor required: step %q needs a gate question", step.ID)
 		}
 		stepMissionID := runMissionID + "-" + step.ID
-		qid := question.IDFor(GateTitle(spec.RunID, step.ID), step.Action, step.Recommendation)
+		qid, err := question.IDFor(GateTitle(spec.RunID, step.ID), step.Action, step.Recommendation)
+		if err != nil {
+			return RunResult{}, err
+		}
 		log := store.List("question", qid)
 		if len(log) == 0 {
 			continue
@@ -140,13 +144,13 @@ func Run(store events.Port, spec RunSpec) (RunResult, error) {
 		if _, err := ms.CreateFromProcedure(stepMissionID, spec.GoalID, step.Action, step.Action, p.ID, p.Revision, spec.Params); err != nil {
 			return result, err
 		}
-		spawn := edge.Edge{ID: "edge-spawn-" + spec.RunID + "-" + step.ID, From: edge.Endpoint{Type: "mission", ID: runMissionID}, To: edge.Endpoint{Type: "mission", ID: stepMissionID}, Kind: edge.Spawn, Actor: spec.Actor, Correlation: corr, Verified: spec.Verified}
-		if _, err := es.Create(spawn); err != nil {
+		spawn := edge.Spec{ID: "edge-spawn-" + spec.RunID + "-" + step.ID, From: edge.Endpoint{Type: "mission", ID: runMissionID}, To: edge.Endpoint{Type: "mission", ID: stepMissionID}, Kind: edge.Spawn, Actor: spec.Actor, Correlation: corr}
+		if _, err := es.Create(spawn, spec.Authority); err != nil {
 			return result, err
 		}
 		for _, after := range step.After {
-			dep := edge.Edge{ID: "edge-dep-" + spec.RunID + "-" + step.ID + "-" + after, From: edge.Endpoint{Type: "mission", ID: stepMissionID}, To: edge.Endpoint{Type: "mission", ID: runMissionID + "-" + after}, Kind: edge.Dependency, Actor: spec.Actor, Correlation: corr, Verified: spec.Verified}
-			if _, err := es.Create(dep); err != nil {
+			dep := edge.Spec{ID: "edge-dep-" + spec.RunID + "-" + step.ID + "-" + after, From: edge.Endpoint{Type: "mission", ID: stepMissionID}, To: edge.Endpoint{Type: "mission", ID: runMissionID + "-" + after}, Kind: edge.Dependency, Actor: spec.Actor, Correlation: corr}
+			if _, err := es.Create(dep, spec.Authority); err != nil {
 				return result, err
 			}
 		}

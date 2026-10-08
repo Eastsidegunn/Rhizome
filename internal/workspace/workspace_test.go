@@ -99,7 +99,7 @@ func TestHiddenProgressFRRHZ070(t *testing.T) {
 func TestGateBeforeAfterObservedFRRHZ070(t *testing.T) {
 	s := ws(t)
 	k := approval.RequestKey{TraceID: "0123456789abcdef0123456789abcdef", SpanID: "0123456789abcdef", RequestID: "g"}
-	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "r", "d", "op", "", "", true)
+	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "r", "d", "op", "", "", noAuthority())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -117,7 +117,7 @@ func TestGateBeforeAfterObservedFRRHZ070(t *testing.T) {
 func TestHumanJanusDecisionSeparationFRRHZ070(t *testing.T) {
 	s := ws(t)
 	k := approval.RequestKey{TraceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SpanID: "bbbbbbbbbbbbbbbb", RequestID: "sep"}
-	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "r", "d", "op", "", "", true)
+	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "r", "d", "op", "", "", noAuthority())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -135,7 +135,7 @@ func TestRelaySessionRejectedFRRHZ071(t *testing.T) {
 	s := ws(t)
 	for _, k := range []string{"session.pause", "session.resume", "session.fork", "session.stdin", "session.kill"} {
 		before := len(s.All())
-		r, e := RelayIntent(s, Intent{Kind: k}, "op", true)
+		r, e := RelayIntent(s, Intent{Kind: k}, "op", noAuthority())
 		if e != nil || r.Accepted || r.Reason != "JANUS T17-19 표면 의존" || len(s.All()) != before {
 			t.Fatal(k, e)
 		}
@@ -143,7 +143,7 @@ func TestRelaySessionRejectedFRRHZ071(t *testing.T) {
 }
 func TestRelayGateRequestChangesNoMissionFRRHZ071(t *testing.T) {
 	s := ws(t)
-	r, e := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: "missing", Instruction: "x"}, "op", true)
+	r, e := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: "missing", Instruction: "x"}, "op", noAuthority())
 	if e != nil || r.Accepted || r.Reason != "gate에 mission 연결 없음" {
 		t.Fatal(e)
 	}
@@ -151,7 +151,7 @@ func TestRelayGateRequestChangesNoMissionFRRHZ071(t *testing.T) {
 
 func TestRelayMissionCreateFRRHZ071(t *testing.T) {
 	s := &events.Store{}
-	r, e := RelayIntent(s, Intent{Kind: "mission.create", Name: "n", Prompt: "success"}, "op", true)
+	r, e := RelayIntent(s, Intent{Kind: "mission.create", Name: "n", Prompt: "success"}, "op", noAuthority())
 	if e != nil || !r.Accepted || len(s.List("goal", "goal-n")) != 1 {
 		t.Fatal(e)
 	}
@@ -161,18 +161,18 @@ func TestRelayTaskPauseResumeFRRHZ071(t *testing.T) {
 	m := mission.Service{Store: s}
 	_, _ = m.Transition("m", 1, domain.MissionReady)
 	_, _ = m.Transition("m", 2, domain.MissionRunning)
-	r, e := RelayIntent(s, Intent{Kind: "task.pause", TaskID: "m"}, "op", true)
+	r, e := RelayIntent(s, Intent{Kind: "task.pause", TaskID: "m"}, "op", noAuthority())
 	if e != nil || !r.Accepted {
 		t.Fatal(e)
 	}
-	r, e = RelayIntent(s, Intent{Kind: "task.resume", TaskID: "m"}, "op", true)
+	r, e = RelayIntent(s, Intent{Kind: "task.resume", TaskID: "m"}, "op", noAuthority())
 	if e != nil || !r.Accepted {
 		t.Fatal(e)
 	}
 }
 func TestRelayTaskInstructAcceptedFRRHZ071(t *testing.T) {
 	s := ws(t)
-	r, e := RelayIntent(s, Intent{Kind: "task.instruct", TaskID: "m", Instruction: "do"}, "op", false)
+	r, e := RelayIntent(s, Intent{Kind: "task.instruct", TaskID: "m", Instruction: "do"}, "op", noAuthority())
 	if e != nil || !r.Accepted {
 		t.Fatal(e)
 	}
@@ -187,11 +187,11 @@ func TestRelayGateRequestChangesAcceptedFRRHZ071(t *testing.T) {
 		t.Fatal(e)
 	}
 	k := approval.RequestKey{TraceID: "0123456789abcdef0123456789abcdef", SpanID: "0123456789abcdef", RequestID: "r"}
-	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "r", "d", "op", "", "dec", true)
+	a, e := (approval.Service{Store: s}).RecordInput(k, approval.Allow, "", "r", "d", "op", "", "dec", noAuthority())
 	if e != nil {
 		t.Fatal(e)
 	}
-	r, e := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: a.ID, Instruction: "change"}, "op", true)
+	r, e := RelayIntent(s, Intent{Kind: "gate.requestChanges", GateID: a.ID, Instruction: "change"}, "op", noAuthority())
 	if e != nil || !r.Accepted || len(s.List("surface", "surface-m")) != 1 {
 		t.Fatal(e, d)
 	}
@@ -200,12 +200,12 @@ func TestRelayEdgeRewireAcceptedFRRHZ071(t *testing.T) {
 	s := ws(t)
 	mm := mission.Service{Store: s}
 	_, _ = mm.Create("m2", "g", "m2", "ok")
-	r, e := (edge.Service{Store: s}).Create(edge.Edge{ID: "e1", From: edge.Endpoint{Type: "mission", ID: "m"}, To: edge.Endpoint{Type: "mission", ID: "m2"}, Kind: edge.Dependency, Actor: "op", Correlation: "c", Verified: true})
+	r, e := (edge.Service{Store: s}).Create(edge.Spec{ID: "e1", From: edge.Endpoint{Type: "mission", ID: "m"}, To: edge.Endpoint{Type: "mission", ID: "m2"}, Kind: edge.Dependency, Actor: "op", Correlation: "c"}, noAuthority())
 	_ = r
 	if e == nil {
 		_ = e
 	}
-	r2, e := RelayIntent(s, Intent{Kind: "edge.rewire", EdgeID: "e1", ID: "e2", From: "mission:m", To: "mission:m2", EdgeKind: "dependency"}, "op", true)
+	r2, e := RelayIntent(s, Intent{Kind: "edge.rewire", EdgeID: "e1", ID: "e2", From: "mission:m", To: "mission:m2", EdgeKind: "dependency"}, "op", noAuthority())
 	if e != nil || !r2.Accepted {
 		t.Fatal(e)
 	}

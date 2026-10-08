@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"rhizome/internal/events"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/procedure"
 )
@@ -114,7 +113,7 @@ func TestProcedureRunGatesProjectedAndApprovableFRRHZ114(t *testing.T) {
 // 수·/v1/context·/v1/workspace 바이트 동일, legacy 페이로드 바이트 불변.
 func TestProcedureRunGatesJournalRoundTripFRRHZ114(t *testing.T) {
 	path := t.TempDir() + "/events.ndjson"
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +154,7 @@ func TestProcedureRunGatesJournalRoundTripFRRHZ114(t *testing.T) {
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j, err = journal.Open(path)
+	j, err = openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

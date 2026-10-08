@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"rhizome/internal/execution"
-	"rhizome/internal/journal"
 	"rhizome/internal/mission"
 	"rhizome/internal/policy"
 )
@@ -195,7 +194,7 @@ func TestStartKeyUnchangedFRRHZ124(t *testing.T) {
 // R1: the provenance survives the NDJSON journal (close + reopen) intact.
 func TestProvenanceJournalRoundTripFRRHZ124(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "j.ndjson")
-	j, err := journal.Open(path)
+	j, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +217,7 @@ func TestProvenanceJournalRoundTripFRRHZ124(t *testing.T) {
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
-	j2, err := journal.Open(path)
+	j2, err := openTestJournal(path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,7 @@ import (
 
 func TestEndToEndReopen(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "j")
-	j, e := Open(p)
+	j, e := openTestJournal(p)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -31,7 +31,7 @@ func TestEndToEndReopen(t *testing.T) {
 	j.Append(2, events.Event{AggregateType: "mission", AggregateID: "m", Revision: 3, Type: "mission.transitioned", Payload: []byte(`{"To":"running"}`)})
 	j.Append(3, events.Event{AggregateType: "mission", AggregateID: "m", Revision: 4, Type: "mission.transitioned", Payload: []byte(`{"To":"succeeded","DecisionID":"d"}`), CorrelationID: "c"})
 	j.Close()
-	j, e = Open(p)
+	j, e = openTestJournal(p)
 	if e != nil {
 		t.Fatal(e)
 	}
