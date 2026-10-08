@@ -23,6 +23,9 @@ configurable with `RHIZOME_UNVERIFIED_DECIDED_MAX`; the root detail counts the
 full uncapped set. A `claimed` status with a missing or unknown claim kind
 displays as `claimed`. A future `verified` status displays as `verified`,
 followed by ` (assurance)` when assurance is present.
+Retained decisions carry the exact `decidedAt` string as attention `since`,
+and any approved or rejected gate with `decidedAt` shows it as a `결정 시각`
+detail item; `decidedAt` is never added to the closed node shape.
 
 ## Requirements and install
 

@@ -127,6 +127,7 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
         : text('request', gate.body)),
       ...(hasStructuredRecommendation ? [] : text('recommendation', gate.recommendation)),
       ...(hasApprovalStatus ? [{ label: '승인 상태', text: verificationText(gate.verification) }] : []),
+      ...(hasApprovalStatus ? text('결정 시각', gate.decidedAt) : []),
       ...(hasDecision ? text('decision', gate.decisionReason) : []),
       ...text('decidedBy', gate.decidedBy),
       ...text('digest', gate.requestDigest),

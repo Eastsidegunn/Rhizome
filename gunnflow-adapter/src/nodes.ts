@@ -195,7 +195,9 @@ export function projectRhizomeNodes(
     attention: [
       ...attentionOf(g.id).filter((a) => a.cause !== APPROVAL_UNVERIFIED),
       ...(g.state === 'waiting' ? [{ cause: NEEDS_HUMAN }] : []),
-      ...(isUnverifiedDecidedGate(g) ? [{ cause: APPROVAL_UNVERIFIED }] : []),
+      ...(isUnverifiedDecidedGate(g)
+        ? [{ cause: APPROVAL_UNVERIFIED, ...(g.decidedAt ? { since: g.decidedAt } : {}) }]
+        : []),
     ],
     artifacts: [],
   }));

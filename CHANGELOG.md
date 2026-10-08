@@ -19,6 +19,9 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- The Gunnflow adapter carries the decision time of retained unverified
+  decisions through attention `since` and a `결정 시각` detail item, without
+  widening the closed node schema (FR-RHZ-143).
 - Decided gates expose their decision-event time as `decidedAt`, and the
   Gunnflow adapter uses it to retain the 10 most recent unverified decisions
   (FR-RHZ-142). The value is RFC3339 UTC with an optional variable-length
