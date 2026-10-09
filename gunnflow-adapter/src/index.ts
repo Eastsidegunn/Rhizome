@@ -20,6 +20,7 @@ export {
   checkSignerStartup,
   DEFAULT_SIGNER_PATH,
   prepareSigner,
+  SIGNER_KEY_SHOW_TIMEOUT_MS,
   SIGNER_REFUSAL,
   SIGNER_STDOUT_MAX_BYTES,
   SIGNER_TIMEOUT_MS,

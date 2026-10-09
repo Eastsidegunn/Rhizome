@@ -120,11 +120,11 @@ export function snapshotGateConsumer(wire: UpstreamProjectionEnvelope, gateId: u
   return gate === undefined ? undefined : gate.source === 'internal' ? 'question' : 'approval';
 }
 
-/** Rhizome records trimmed reason, falling back to trimmed instruction when reason is empty. */
-export function effectiveReason(fields: Record<string, unknown>): string {
-  const reason = typeof fields.reason === 'string' ? fields.reason.trim() : '';
-  if (reason !== '') return reason;
-  return typeof fields.instruction === 'string' ? fields.instruction.trim() : '';
+/** Rhizome falls back to instruction only for requestChanges; stored text itself is not trimmed. */
+export function effectiveReason(kind: string | undefined, fields: Record<string, unknown>): string {
+  const reason = typeof fields.reason === 'string' ? fields.reason : '';
+  if (kind !== 'gate.requestChanges' || reason.trim() !== '') return reason;
+  return typeof fields.instruction === 'string' ? fields.instruction : '';
 }
 
 /** Rhizome names the human's text by intent kind: `name` for missions, `instruction` for directions. */
@@ -455,7 +455,7 @@ export async function createRhizomeUpstream(
           // on the byte-identical unsigned path (and keeps `instruction`).
           if (!(consumer === 'approval' && kind === 'gate.requestChanges')) {
             const gateId = rest.gateId as string;
-            const reason = effectiveReason(fields);
+            const reason = effectiveReason(kind, fields);
             const idempotencyKey = (intent as { idempotencyKey: string }).idempotencyKey;
             const signed = await signer.sign({
               gateId,

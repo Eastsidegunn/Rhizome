@@ -3,6 +3,8 @@ import { PassThrough } from 'node:stream';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_SIGNER_PATH,
+  SIGNER_KEY_SHOW_TIMEOUT_MS,
   SIGNER_REFUSAL,
   SIGNER_STDOUT_MAX_BYTES,
   checkSignerStartup,
@@ -11,14 +13,22 @@ import {
   type SignRequest,
   type SignResponse,
   type SignerStat,
+  type SigningTimers,
   type SpawnedSigner,
   type SpawnSigner,
 } from '../src/signing.js';
-import { createRhizomeUpstream } from '../src/upstream.js';
+import { createUpstream } from '../src/index.js';
+import { startRhizomeDirectServer } from '../src/serveDirect.js';
+import { createRhizomeUpstream, effectiveReason } from '../src/upstream.js';
 
 const DIGEST = `rhz-question-v2:${'a'.repeat(64)}`;
 const KEY_ID = `sha256:${'b'.repeat(64)}`;
 const SIGNER_PATH = '/test/bin/rhizome-signer';
+const MINIMAL_ENV = {
+  PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+  HOME: process.env.HOME,
+  LANG: process.env.LANG ?? 'en_US.UTF-8',
+};
 
 class MockChild extends EventEmitter implements SpawnedSigner {
   pid = 4242;
@@ -30,10 +40,16 @@ class MockChild extends EventEmitter implements SpawnedSigner {
 type SignHandler = (child: MockChild, request: SignRequest) => void;
 
 function spawnMock(handler: SignHandler, keyShowCode = 0) {
-  const calls: Array<{ command: string; args: string[]; detached: boolean }> = [];
+  const calls: Array<{
+    command: string;
+    args: string[];
+    detached: boolean;
+    stdio: ['pipe' | 'ignore', 'pipe' | 'ignore', 'ignore'];
+    env: NodeJS.ProcessEnv;
+  }> = [];
   const signChildren: MockChild[] = [];
   const spawn: SpawnSigner = (command, args, options) => {
-    calls.push({ command, args, detached: options.detached });
+    calls.push({ command, args, detached: options.detached, stdio: options.stdio, env: { ...options.env } });
     const child = new MockChild();
     if (args[0] === 'key') {
       queueMicrotask(() => child.emit('close', keyShowCode, null));
@@ -60,13 +76,19 @@ function stat(kind: 'file' | 'directory', extra: Partial<{ uid: number; mode: nu
 
 const goodLstat = async (path: string) => stat(path === SIGNER_PATH ? 'file' : 'directory');
 
-function response(reason = '', digest = DIGEST): SignResponse {
+function response(
+  reason = '',
+  digest = DIGEST,
+  decision = 'approve',
+  keyId = KEY_ID,
+  signatureKeyId = keyId,
+): SignResponse {
   return {
     digest,
-    decision: 'approve',
+    decision,
     reason,
-    keyId: KEY_ID,
-    signature: { keyId: KEY_ID, signedAt: '2026-10-09T01:02:03Z', nonce: 'ab'.repeat(16), sig: 'c2ln' },
+    keyId,
+    signature: { keyId: signatureKeyId, signedAt: '2026-10-09T01:02:03Z', nonce: 'ab'.repeat(16), sig: 'c2ln' },
   };
 }
 
@@ -108,20 +130,99 @@ describe('RHZ-117 signer startup checks', () => {
   it('required checks the injected absolute path and runs key show', async () => {
     const mock = spawnMock(() => undefined);
     await expect(prepareSigner({ mode: 'required', signerPath: SIGNER_PATH, lstat: goodLstat, spawn: mock.spawn })).resolves.toBeDefined();
-    expect(mock.calls).toEqual([{ command: SIGNER_PATH, args: ['key', 'show'], detached: false }]);
+    expect(mock.calls).toEqual([{
+      command: SIGNER_PATH,
+      args: ['key', 'show'],
+      detached: false,
+      stdio: ['ignore', 'ignore', 'ignore'],
+      env: MINIMAL_ENV,
+    }]);
+    expect(mock.calls[0]?.env).not.toHaveProperty('HTTP_PROXY');
+    expect(mock.calls[0]?.env).not.toHaveProperty('HTTPS_PROXY');
+    expect(mock.calls[0]?.env).not.toHaveProperty('RHIZOME_URL');
+    expect(Object.keys(mock.calls[0]!.env).some((key) => key.startsWith('DYLD_'))).toBe(false);
   });
 
-  it('fails closed for a symlink, non-root executable, writable parent, and key-show failure', async () => {
+  it('fails closed for a symlink, non-file, non-root, or group/other-writable executable', async () => {
     const base = { signerPath: SIGNER_PATH, spawn: spawnMock(() => undefined).spawn };
     await expect(checkSignerStartup({ ...base, lstat: async (path) => stat(path === SIGNER_PATH ? 'file' : 'directory', { symlink: path === SIGNER_PATH }) }))
       .rejects.toThrow('symbolic link');
+    await expect(checkSignerStartup({ ...base, lstat: async () => stat('directory') }))
+      .rejects.toThrow('regular file');
     await expect(checkSignerStartup({ ...base, lstat: async (path) => stat(path === SIGNER_PATH ? 'file' : 'directory', { uid: path === SIGNER_PATH ? 501 : 0 }) }))
       .rejects.toThrow('owned by root');
-    await expect(checkSignerStartup({ ...base, lstat: async (path) => stat(path === SIGNER_PATH ? 'file' : 'directory', { mode: path === '/test/bin' ? 0o775 : 0o755 }) }))
-      .rejects.toThrow('parent must not be group/other writable');
+    await expect(checkSignerStartup({ ...base, lstat: async (path) => stat(path === SIGNER_PATH ? 'file' : 'directory', { mode: path === SIGNER_PATH ? 0o775 : 0o755 }) }))
+      .rejects.toThrow('must not be group/other writable');
+  });
+
+  it('checks the default /usr/local parents and rejects non-root, writable, or symlink parents', async () => {
+    const checked: string[] = [];
+    const good = spawnMock(() => undefined);
+    await checkSignerStartup({
+      lstat: async (path) => {
+        checked.push(path);
+        return stat(path === DEFAULT_SIGNER_PATH ? 'file' : 'directory');
+      },
+      spawn: good.spawn,
+    });
+    expect(checked).toEqual([DEFAULT_SIGNER_PATH, '/usr/local/bin', '/usr/local']);
+
+    const base = { spawn: spawnMock(() => undefined).spawn };
+    await expect(checkSignerStartup({
+      ...base,
+      lstat: async (path) => stat(path === DEFAULT_SIGNER_PATH ? 'file' : 'directory', { uid: path === '/usr/local' ? 501 : 0 }),
+    })).rejects.toThrow('parent must be owned by root (/usr/local)');
+    await expect(checkSignerStartup({
+      ...base,
+      lstat: async (path) => stat(path === DEFAULT_SIGNER_PATH ? 'file' : 'directory', { mode: path === '/usr/local' ? 0o775 : 0o755 }),
+    })).rejects.toThrow('parent must not be group/other writable (/usr/local)');
+    await expect(checkSignerStartup({
+      ...base,
+      lstat: async (path) => stat(path === DEFAULT_SIGNER_PATH ? 'file' : 'directory', { symlink: path === '/usr/local/bin' }),
+    })).rejects.toThrow('parent must be a directory (/usr/local/bin)');
+  });
+
+  it('fails key show on a nonzero exit and kills it after the 10 s startup timeout', async () => {
     const badKey = spawnMock(() => undefined, 5);
     await expect(checkSignerStartup({ signerPath: SIGNER_PATH, lstat: goodLstat, spawn: badKey.spawn }))
       .rejects.toThrow('key show failed (exit 5)');
+
+    const child = new MockChild();
+    let fireTimeout: (() => void) | undefined;
+    const timers: SigningTimers = {
+      setTimeout(fn, ms) {
+        expect(ms).toBe(SIGNER_KEY_SHOW_TIMEOUT_MS);
+        fireTimeout = fn;
+        return 'key-show-timeout';
+      },
+      clearTimeout: vi.fn(),
+    };
+    const spawn: SpawnSigner = () => child;
+    const pending = checkSignerStartup({ signerPath: SIGNER_PATH, lstat: goodLstat, spawn, timers });
+    await vi.waitFor(() => expect(fireTimeout).toBeTypeOf('function'));
+    fireTimeout!();
+    await expect(pending).rejects.toThrow('rhizome signer key show timed out');
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
+  it('rejects an unknown RHIZOME_SIGNING value through both public startup entries', async () => {
+    const previous = process.env.RHIZOME_SIGNING;
+    process.env.RHIZOME_SIGNING = 'unknown';
+    try {
+      await expect(createUpstream({ url: 'http://127.0.0.1:1' })).rejects.toThrow('RHIZOME_SIGNING');
+      await expect(startRhizomeDirectServer({ rhizomeUrl: 'http://127.0.0.1:1', port: 0 })).rejects.toThrow('RHIZOME_SIGNING');
+    } finally {
+      if (previous === undefined) delete process.env.RHIZOME_SIGNING;
+      else process.env.RHIZOME_SIGNING = previous;
+    }
+  });
+
+  it('matches Rhizome effective-reason selection without trimming stored text', () => {
+    expect(effectiveReason('gate.approve', { reason: '  yes  ', instruction: 'ignored' })).toBe('  yes  ');
+    expect(effectiveReason('gate.approve', { instruction: 'ignored' })).toBe('');
+    expect(effectiveReason('gate.reject', { reason: '  no  ', instruction: 'ignored' })).toBe('  no  ');
+    expect(effectiveReason('gate.requestChanges', { reason: '  explicit  ', instruction: 'ignored' })).toBe('  explicit  ');
+    expect(effectiveReason('gate.requestChanges', { reason: '   ', instruction: '  fallback  ' })).toBe('  fallback  ');
   });
 });
 
@@ -153,12 +254,12 @@ describe('RHZ-117 relay signing', () => {
     });
   }
 
-  it('attaches the signature, uses actor signer, and sends only normalized effective reason for signed requestChanges', async () => {
+  it('attaches the signature, uses actor signer, and sends only Rhizome\'s effective reason for signed requestChanges', async () => {
     received.length = 0;
     let request: SignRequest | undefined;
     const mock = spawnMock((child, value) => {
       request = value;
-      succeed(child, response('fix it'));
+      succeed(child, response('  fix it  ', DIGEST, 'requestChanges'));
     });
     const upstream = await upstreamWith(mock);
     try {
@@ -167,19 +268,37 @@ describe('RHZ-117 relay signing', () => {
       }, 'cockpit-actor');
       expect(result).toEqual({ accepted: true });
       expect(request).toEqual({
-        gateId: 'q-internal', kind: 'gate.requestChanges', reason: 'fix it', correlationId: 'cockpit:idem-1',
+        gateId: 'q-internal', kind: 'gate.requestChanges', reason: '  fix it  ', correlationId: 'cockpit:idem-1',
       });
       expect(received).toEqual([{
-        gateId: 'q-internal', digest: DIGEST, reason: 'fix it',
+        gateId: 'q-internal', digest: DIGEST, reason: '  fix it  ',
         verification: { signature: response().signature }, kind: 'gate.requestChanges', actor: 'signer',
       }]);
       expect(received[0]).not.toHaveProperty('instruction');
+      expect(mock.calls).toHaveLength(2);
+      for (const call of mock.calls) {
+        expect(call.env).toEqual(MINIMAL_ENV);
+        expect(call.env).not.toHaveProperty('HTTP_PROXY');
+        expect(call.env).not.toHaveProperty('HTTPS_PROXY');
+        expect(call.env).not.toHaveProperty('RHIZOME_URL');
+        expect(Object.keys(call.env).some((key) => key.startsWith('DYLD_'))).toBe(false);
+      }
     } finally {
       upstream.close();
     }
   });
 
   it('leaves approval requestChanges unsigned and otherwise byte-identical', async () => {
+    received.length = 0;
+    const off = await createRhizomeUpstream(baseUrl, { signing: { mode: 'off' } });
+    try {
+      await off.relayIntent({
+        nodeId: 'q-approval', action: 'gate.requestChanges', idempotencyKey: 'idem-2', decision: { text: 'revise' },
+      }, 'original');
+    } finally {
+      off.close();
+    }
+    const offBody = JSON.stringify(received[0]);
     received.length = 0;
     const mock = spawnMock(() => { throw new Error('must not sign'); });
     const upstream = await upstreamWith(mock);
@@ -188,9 +307,11 @@ describe('RHZ-117 relay signing', () => {
         nodeId: 'q-approval', action: 'gate.requestChanges', idempotencyKey: 'idem-2', decision: { text: 'revise' },
       }, 'original');
       expect(mock.calls).toHaveLength(1); // startup key show only
-      expect(received).toEqual([{
+      const expected = {
         instruction: 'revise', gateId: 'q-approval', digest: DIGEST, kind: 'gate.requestChanges', actor: 'original',
-      }]);
+      };
+      expect(received).toEqual([expected]);
+      expect(JSON.stringify(received[0])).toBe(offBody);
     } finally {
       upstream.close();
     }
@@ -212,6 +333,42 @@ describe('RHZ-117 relay signing', () => {
       expect(received).toEqual([]);
     } finally {
       upstream.close();
+    }
+  });
+
+  it.each([
+    [4, SIGNER_REFUSAL.cancelled],
+    [5, SIGNER_REFUSAL.noKey],
+  ])('lets signer exit %i win over an EPIPE while writing stdin', async (code, reason) => {
+    received.length = 0;
+    const mock = spawnMock((child) => queueMicrotask(() => {
+      child.stdin.emit('error', Object.assign(new Error('broken pipe'), { code: 'EPIPE' }));
+      child.emit('close', code, null);
+    }));
+    const upstream = await upstreamWith(mock);
+    try {
+      await expect(upstream.relayIntent({ nodeId: 'q-internal', action: 'gate.approve', idempotencyKey: `epipe-${code}` }, 'h'))
+        .resolves.toEqual({ accepted: false, reason });
+      expect(received).toEqual([]);
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it('handles signer stdout and non-EPIPE stdin errors without sending', async () => {
+    for (const emitError of [
+      (child: MockChild) => child.stdout.emit('error', new Error('stdout failed')),
+      (child: MockChild) => child.stdin.emit('error', Object.assign(new Error('stdin failed'), { code: 'EIO' })),
+    ]) {
+      received.length = 0;
+      const upstream = await upstreamWith(spawnMock((child) => queueMicrotask(() => emitError(child))));
+      try {
+        await expect(upstream.relayIntent({ nodeId: 'q-internal', action: 'gate.approve', idempotencyKey: 'stream-error' }, 'h'))
+          .resolves.toEqual({ accepted: false, reason: SIGNER_REFUSAL.failed });
+        expect(received).toEqual([]);
+      } finally {
+        upstream.close();
+      }
     }
   });
 
@@ -242,6 +399,42 @@ describe('RHZ-117 relay signing', () => {
         await expect(upstream.relayIntent({ nodeId: 'q-internal', action: 'gate.approve', idempotencyKey: reason }, 'h'))
           .resolves.toEqual({ accepted: false, reason });
         expect(received).toEqual([]);
+      } finally {
+        upstream.close();
+      }
+    }
+  });
+
+  it('refuses signer responses whose decision, reason, or key identity does not match the request', async () => {
+    const otherKey = `sha256:${'c'.repeat(64)}`;
+    const mismatches: SignHandler[] = [
+      (child) => succeed(child, response('', DIGEST, 'reject')),
+      (child) => succeed(child, response('changed by signer')),
+      (child) => succeed(child, response('', DIGEST, 'approve', `sha256:${'B'.repeat(64)}`)),
+      (child) => succeed(child, response('', DIGEST, 'approve', KEY_ID, otherKey)),
+    ];
+    for (const handler of mismatches) {
+      received.length = 0;
+      const upstream = await upstreamWith(spawnMock(handler));
+      try {
+        await expect(upstream.relayIntent({ nodeId: 'q-internal', action: 'gate.approve', idempotencyKey: 'mismatch' }, 'h'))
+          .resolves.toEqual({ accepted: false, reason: SIGNER_REFUSAL.responseMismatch });
+        expect(received).toEqual([]);
+      } finally {
+        upstream.close();
+      }
+    }
+  });
+
+  it('accepts the kind-specific approve/allow and reject/deny decision aliases', async () => {
+    for (const [action, decision] of [['gate.approve', 'allow'], ['gate.reject', 'deny']] as const) {
+      received.length = 0;
+      const upstream = await upstreamWith(spawnMock((child) => succeed(child, response('', DIGEST, decision))));
+      try {
+        await expect(upstream.relayIntent({ nodeId: 'q-internal', action, idempotencyKey: decision }, 'h'))
+          .resolves.toEqual({ accepted: true });
+        expect(received).toHaveLength(1);
+        expect(received[0]).toMatchObject({ kind: action, actor: 'signer' });
       } finally {
         upstream.close();
       }
@@ -279,6 +472,9 @@ describe('RHZ-117 relay signing', () => {
       expect(lstat).not.toHaveBeenCalled();
       expect(spawn).not.toHaveBeenCalled();
       expect(received).toEqual([{ gateId: 'q-internal', digest: DIGEST, kind: 'gate.approve', actor: 'operator' }]);
+      expect(JSON.stringify(received[0])).toBe(JSON.stringify({
+        gateId: 'q-internal', digest: DIGEST, kind: 'gate.approve', actor: 'operator',
+      }));
     } finally {
       upstream.close();
     }

@@ -3,6 +3,7 @@ import { lstat as nodeLstat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export const DEFAULT_SIGNER_PATH = '/usr/local/bin/rhizome-signer';
+export const SIGNER_KEY_SHOW_TIMEOUT_MS = 10_000;
 export const SIGNER_TIMEOUT_MS = 60_000;
 export const SIGNER_STDOUT_MAX_BYTES = 64 * 1024;
 
@@ -18,8 +19,14 @@ export interface SignerStat {
 
 export interface SpawnedSigner {
   pid?: number;
-  stdin: { end(data?: string): void; on?(event: 'error', listener: (error: Error) => void): unknown } | null;
-  stdout: { on(event: 'data', listener: (chunk: Buffer | string) => void): unknown } | null;
+  stdin: {
+    end(data?: string): void;
+    on(event: 'error', listener: (error: Error) => void): unknown;
+  } | null;
+  stdout: {
+    on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
+    on(event: 'error', listener: (error: Error) => void): unknown;
+  } | null;
   once(event: 'error', listener: (error: Error) => void): unknown;
   once(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
   kill(signal?: NodeJS.Signals): boolean;
@@ -28,7 +35,11 @@ export interface SpawnedSigner {
 export type SpawnSigner = (
   command: string,
   args: string[],
-  options: { detached: boolean; stdio: ['pipe' | 'ignore', 'pipe' | 'ignore', 'ignore'] },
+  options: {
+    detached: boolean;
+    stdio: ['pipe' | 'ignore', 'pipe' | 'ignore', 'ignore'];
+    env: NodeJS.ProcessEnv;
+  },
 ) => SpawnedSigner;
 
 export interface SigningTimers {
@@ -56,6 +67,7 @@ export interface SigningOptions {
   spawn?: SpawnSigner;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   timers?: SigningTimers;
+  keyShowTimeoutMs?: number;
   timeoutMs?: number;
   stdoutMaxBytes?: number;
 }
@@ -95,6 +107,7 @@ export const SIGNER_REFUSAL = {
   timeout: 'signer timed out',
   malformedOutput: 'signer returned malformed output',
   outputTooLarge: 'signer output exceeded 64 KiB',
+  responseMismatch: 'signer response does not match request',
   digestMismatch: 'signer digest does not match adapter snapshot',
   failed: 'signer failed',
 } as const;
@@ -119,6 +132,14 @@ const oneLine = (error: unknown): string =>
 const defaultSpawn: SpawnSigner = (command, args, options) =>
   nodeSpawn(command, args, options) as unknown as SpawnedSigner;
 
+function signerEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+    HOME: process.env.HOME,
+    LANG: process.env.LANG ?? 'en_US.UTF-8',
+  };
+}
+
 function resolved(options: SigningOptions) {
   const signerPath = options.signerPath ?? DEFAULT_SIGNER_PATH;
   return {
@@ -128,8 +149,10 @@ function resolved(options: SigningOptions) {
     spawn: options.spawn ?? defaultSpawn,
     kill: options.kill ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal)),
     timers: options.timers ?? REAL_SIGNING_TIMERS,
+    keyShowTimeoutMs: options.keyShowTimeoutMs ?? SIGNER_KEY_SHOW_TIMEOUT_MS,
     timeoutMs: options.timeoutMs ?? SIGNER_TIMEOUT_MS,
     stdoutMaxBytes: options.stdoutMaxBytes ?? SIGNER_STDOUT_MAX_BYTES,
+    env: signerEnvironment(),
   };
 }
 
@@ -165,30 +188,45 @@ export async function checkSignerStartup(options: SigningOptions = {}): Promise<
     if (insecureMode(parent)) throw new Error(`rhizome signer parent must not be group/other writable (${parentPath})`);
   }
 
-  const code = await spawnForExit(runtime.spawn, runtime.signerPath, ['key', 'show']);
+  const code = await spawnForExit(runtime.spawn, runtime.signerPath, ['key', 'show'], runtime.env, runtime.timers, runtime.keyShowTimeoutMs);
   if (code !== 0) throw new Error(`rhizome signer key show failed (exit ${code === null ? 'unknown' : code})`);
 }
 
-function spawnForExit(spawn: SpawnSigner, command: string, args: string[]): Promise<number | null> {
+function spawnForExit(
+  spawn: SpawnSigner,
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  timers: SigningTimers,
+  timeoutMs: number,
+): Promise<number | null> {
   return new Promise((resolve, reject) => {
     let child: SpawnedSigner;
     try {
-      child = spawn(command, args, { detached: false, stdio: ['ignore', 'ignore', 'ignore'] });
+      child = spawn(command, args, { detached: false, stdio: ['ignore', 'ignore', 'ignore'], env });
     } catch (error) {
       reject(new Error(`rhizome signer key show failed: ${oneLine(error)}`));
       return;
     }
     let settled = false;
-    child.once('error', (error) => {
+    let timeout: unknown;
+    const finish = (result: { code: number | null } | { error: Error }) => {
       if (settled) return;
       settled = true;
-      reject(new Error(`rhizome signer key show failed: ${oneLine(error)}`));
+      timers.clearTimeout(timeout);
+      if ('error' in result) reject(result.error);
+      else resolve(result.code);
+    };
+    child.once('error', (error) => {
+      finish({ error: new Error(`rhizome signer key show failed: ${oneLine(error)}`) });
     });
     child.once('close', (code) => {
-      if (settled) return;
-      settled = true;
-      resolve(code);
+      finish({ code });
     });
+    timeout = timers.setTimeout(() => {
+      finish({ error: new Error('rhizome signer key show timed out') });
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }, timeoutMs);
   });
 }
 
@@ -216,8 +254,7 @@ function parseResponse(stdout: string): SignResponse | undefined {
     typeof response.digest !== 'string' || typeof response.decision !== 'string' ||
     typeof response.reason !== 'string' || typeof response.keyId !== 'string' ||
     typeof sig.keyId !== 'string' || typeof sig.signedAt !== 'string' ||
-    typeof sig.nonce !== 'string' || typeof sig.sig !== 'string' ||
-    response.keyId !== sig.keyId
+    typeof sig.nonce !== 'string' || typeof sig.sig !== 'string'
   ) return undefined;
   return {
     digest: response.digest,
@@ -226,6 +263,24 @@ function parseResponse(stdout: string): SignResponse | undefined {
     keyId: response.keyId,
     signature: { keyId: sig.keyId, signedAt: sig.signedAt, nonce: sig.nonce, sig: sig.sig },
   };
+}
+
+const SIGNER_KEY_ID_RE = /^sha256:[0-9a-f]{64}$/;
+const RESPONSE_DECISIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  'gate.approve': new Set(['approve', 'allow']),
+  'gate.reject': new Set(['reject', 'deny']),
+  'gate.requestChanges': new Set(['requestChanges']),
+};
+
+function responseMatchesRequest(response: SignResponse, request: SignRequest): boolean {
+  return RESPONSE_DECISIONS[request.kind]?.has(response.decision) === true &&
+    response.reason === request.reason &&
+    SIGNER_KEY_ID_RE.test(response.keyId) &&
+    response.keyId === response.signature.keyId;
+}
+
+function isEpipe(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as NodeJS.ErrnoException).code === 'EPIPE';
 }
 
 /** One serialized client: a prompt is never concurrent with another cockpit prompt. */
@@ -258,6 +313,7 @@ export class SignerClient {
         child = this.runtime.spawn(this.runtime.signerPath, ['sign-stdin'], {
           detached: true,
           stdio: ['pipe', 'pipe', 'ignore'],
+          env: this.runtime.env,
         });
       } catch {
         resolve({ ok: false, reason: SIGNER_REFUSAL.failed });
@@ -297,6 +353,11 @@ export class SignerClient {
         }
         chunks.push(bytes);
       });
+      child.stdout?.on('error', () => {
+        if (settled) return;
+        killGroup();
+        finish({ ok: false, reason: SIGNER_REFUSAL.failed });
+      });
       child.once('error', () => finish({ ok: false, reason: SIGNER_REFUSAL.failed }));
       child.once('close', (code) => {
         if (settled) return;
@@ -305,12 +366,24 @@ export class SignerClient {
           return;
         }
         const response = parseResponse(Buffer.concat(chunks).toString('utf8'));
-        finish(response ? { ok: true, response } : { ok: false, reason: SIGNER_REFUSAL.malformedOutput });
+        if (!response) {
+          finish({ ok: false, reason: SIGNER_REFUSAL.malformedOutput });
+          return;
+        }
+        finish(responseMatchesRequest(response, request)
+          ? { ok: true, response }
+          : { ok: false, reason: SIGNER_REFUSAL.responseMismatch });
       });
-      child.stdin?.on?.('error', () => finish({ ok: false, reason: SIGNER_REFUSAL.failed }));
+      child.stdin?.on('error', (error) => {
+        if (settled) return;
+        if (isEpipe(error)) return; // the close code carries the useful refusal (notably 4/5)
+        killGroup();
+        finish({ ok: false, reason: SIGNER_REFUSAL.failed });
+      });
       try {
         child.stdin?.end(JSON.stringify(request));
-      } catch {
+      } catch (error) {
+        if (isEpipe(error)) return; // wait for close so its fixed exit-code mapping wins
         killGroup();
         finish({ ok: false, reason: SIGNER_REFUSAL.failed });
       }
