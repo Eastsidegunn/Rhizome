@@ -20,7 +20,7 @@ var Layers = map[string]string{
 	"codeindex": "substrate",
 	"domain":    "exec", "mission": "exec", "projector": "exec", "decision": "exec", "coordinator": "exec",
 	"wake": "exec", "execution": "exec", "approval": "exec", "gaterequest": "exec", "question": "exec", "request": "exec", "attest": "exec",
-	"janusadapter": "exec", "audit": "exec",
+	"janusadapter": "exec", "audit": "exec", "sessionlauncher": "exec",
 	"memory": "knowledge", "source": "knowledge", "knowledge": "knowledge", "relation": "knowledge",
 	"procedure": "knowledge", "retrieval": "knowledge", "evaluation": "knowledge",
 	// edge moved from the handoff's exec to bridge: since RHZ-057 an edge

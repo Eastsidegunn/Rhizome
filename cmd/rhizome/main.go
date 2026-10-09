@@ -24,6 +24,7 @@ import (
 	"rhizome/internal/journal"
 	"rhizome/internal/memory"
 	"rhizome/internal/question"
+	"rhizome/internal/sessionlauncher"
 	"rhizome/internal/source"
 	"rhizome/internal/trust"
 	"rhizome/internal/workspace"
@@ -282,8 +283,8 @@ func trustEnforceJANUS(raw string, set bool) (bool, error) {
 type execStarter struct{ st janusadapter.Starter }
 
 func toStartRequest(r workspace.ExecStartRequest) janusadapter.StartRequest {
-	return janusadapter.StartRequest{MissionID: r.MissionID, Instruction: r.Instruction, SessionMode: r.SessionMode,
-		Budget: janusadapter.BudgetOverride{Tokens: r.Budget.Tokens, TimeMs: r.Budget.TimeMs, MaxDepth: r.Budget.MaxDepth}, Actor: r.Actor}
+	return janusadapter.StartRequest{MissionID: r.MissionID, Instruction: r.Instruction, SessionMode: r.SessionMode, Workdir: r.Workdir,
+		Budget: janusadapter.BudgetOverride{Tokens: r.Budget.Tokens, TimeMs: r.Budget.TimeMs, MaxDepth: r.Budget.MaxDepth, USD: r.Budget.USD}, Actor: r.Actor}
 }
 func (x execStarter) Prepare(r workspace.ExecStartRequest) (workspace.ExecStartPlan, string, error) {
 	p, reason, err := x.st.Prepare(toStartRequest(r))
@@ -291,6 +292,53 @@ func (x execStarter) Prepare(r workspace.ExecStartRequest) (workspace.ExecStartP
 }
 func (x execStarter) Start(r workspace.ExecStartRequest) (string, string, error) {
 	return x.st.Start(toStartRequest(r))
+}
+
+// launcherStarter adapts sessionlauncher.Launcher to the workspace seam
+// (RHZ-124 S1, FR-RHZ-TBD(124-S1)).
+type launcherStarter struct{ l *sessionlauncher.Launcher }
+
+func toLaunchRequest(r workspace.ExecStartRequest) sessionlauncher.StartRequest {
+	return sessionlauncher.StartRequest{MissionID: r.MissionID, Instruction: r.Instruction, SessionMode: r.SessionMode, Workdir: r.Workdir,
+		Budget: sessionlauncher.BudgetOverride{Tokens: r.Budget.Tokens, TimeMs: r.Budget.TimeMs, MaxDepth: r.Budget.MaxDepth, USD: r.Budget.USD}, Actor: r.Actor}
+}
+func (x launcherStarter) Prepare(r workspace.ExecStartRequest) (workspace.ExecStartPlan, string, error) {
+	p, reason, err := x.l.Prepare(toLaunchRequest(r))
+	return workspace.ExecStartPlan{ExecutionID: p.ExecutionID, Existing: p.Existing}, reason, err
+}
+func (x launcherStarter) Start(r workspace.ExecStartRequest) (string, string, error) {
+	return x.l.Start(toLaunchRequest(r))
+}
+
+// sessionLauncherConfig loads -session-launcher-config (RHZ-124 S1). Empty =
+// nil (backend off). It is mutually exclusive with -janus-exec-config: one
+// execution backend per serve. An invalid file fails serve (exit 2).
+func sessionLauncherConfig(path, janusExecPath string) (*sessionlauncher.Config, error) {
+	if path == "" {
+		return nil, nil
+	}
+	if janusExecPath != "" {
+		return nil, fmt.Errorf("session-launcher-config and janus-exec-config are mutually exclusive: pick one execution backend")
+	}
+	c, err := sessionlauncher.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// launcherUsageNote records a finished session's usage as one observation
+// note on its mission through the relay (the launcher is exec-layer and
+// cannot write knowledge itself).
+func launcherUsageNote(store events.Port, o sessionlauncher.Outcome) error {
+	res, err := workspace.RelayIntentHooks(store, workspace.Intent{Kind: "note.create", MemoryKind: string(memory.Observation), MissionID: o.MissionID, Tags: []string{"usage", "session-launcher"}, Content: o.NoteContent()}, sessionlauncher.Actor, trust.Authority{}, workspace.RelayHooks{})
+	if err != nil {
+		return err
+	}
+	if !res.Accepted {
+		return fmt.Errorf("usage note rejected: %s", res.Reason)
+	}
+	return nil
 }
 
 // defaultJanusIdleTimeout is the -janus-idle-timeout default.
@@ -393,6 +441,35 @@ func blobStoreFromFlag(dir string) workspace.BlobGetter {
 var assembleServeInspect func(*workspace.HTTPServer)
 
 func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, errOut io.Writer, enforceAll bool, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
+	return assembleServeWith(store, blobs, indexRepo, indexOut, jc, nil, errOut, enforceAll, verifiers...)
+}
+
+// wireLauncher makes the session launcher the mission.start backend
+// (RHZ-124 S1): it replaces any JANUS starter (the two configs are mutually
+// exclusive at the flag level) and reports usage as a note + broadcast.
+func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlauncher.Launcher, errOut io.Writer) {
+	if sl == nil {
+		return
+	}
+	sl.Store = store
+	if sl.OnError == nil {
+		sl.OnError = func(scope, id string, err error) {
+			fmt.Fprintf(errOut, "session launcher %s %s: %v\n", scope, id, err)
+		}
+	}
+	sl.Report = func(o sessionlauncher.Outcome) {
+		if err := launcherUsageNote(store, o); err != nil {
+			sl.OnError("note", o.ExecutionID, err)
+		}
+		if p, e := workspace.Snapshot(store, h.Trust); e == nil {
+			h.Broadcast(p)
+		}
+	}
+	h.ExecStart = launcherStarter{sl}
+}
+
+// assembleServeWith is assembleServe with an optional session launcher.
+func assembleServeWith(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, sl *sessionlauncher.Launcher, errOut io.Writer, enforceAll bool, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
 	h := workspace.NewHTTP(store)
 	h.EnforceJANUS = enforceAll
 	if len(verifiers) > 0 && verifiers[0] != nil {
@@ -403,6 +480,7 @@ func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, ind
 	// config is rejected in serve() before assembly (D4 관례).
 	h.IndexRepo, h.IndexOut = indexRepo, indexOut
 	if jc == nil {
+		wireLauncher(h, store, sl, errOut)
 		if assembleServeInspect != nil {
 			assembleServeInspect(h)
 		}
@@ -452,6 +530,7 @@ func assembleServe(store events.Port, blobs workspace.BlobGetter, indexRepo, ind
 		runner = janusadapter.RealRunner(jc.HX, os.TempDir())
 	}
 	h.ExecStart = execStarter{janusadapter.Starter{Store: store, Run: runner, Cfg: jc.Cfg, Exec: jc.Exec}}
+	wireLauncher(h, store, sl, errOut)
 	loop := &janusadapter.Loop{
 		ES:     execution.Service{Store: store},
 		AS:     approval.Service{Store: store},
@@ -520,6 +599,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jInterval := f.Duration("janus-observe-interval", 5*time.Second, "")
 	jIdle := f.Duration("janus-idle-timeout", defaultJanusIdleTimeout, "")
 	jExec := f.String("janus-exec-config", "", "")
+	slPath := f.String("session-launcher-config", "", "")
 	trustAnchor := f.String("trust-anchor", "", "")
 	trustEnforce := f.String("trust-enforce-janus", "", "")
 	if err := f.Parse(args); err != nil {
@@ -587,6 +667,11 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, e)
 		return 2
 	}
+	slCfg, e := sessionLauncherConfig(*slPath, *jExec)
+	if e != nil {
+		fmt.Fprintln(errOut, e)
+		return 2
+	}
 	exec, e := janusExecConfig(jc != nil, *jExec)
 	if e != nil {
 		fmt.Fprintln(errOut, e)
@@ -645,7 +730,13 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			return 1
 		}
 	}
-	handler, loop := assembleServe(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, errOut, enforceAll, verifier)
+	var sl *sessionlauncher.Launcher
+	if slCfg != nil {
+		// Executions left accepted by a previous serve are not touched here:
+		// no kill, no re-run (S2/ops). Only children of this process are tracked.
+		sl = &sessionlauncher.Launcher{Cfg: slCfg, BoardURL: sessionlauncher.BoardURLFromAddr(*addr)}
+	}
+	handler, loop := assembleServeWith(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, sl, errOut, enforceAll, verifier)
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
 	}
@@ -682,6 +773,13 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	cancel()
 	<-shutdownDone
 	wg.Wait()
+	if sl != nil {
+		// RHZ-124 S1: stop live sessions and drain their completions (stop
+		// request, outcome, mission step, usage note) before the deferred
+		// journal close — children never outlive serve.
+		sl.Shutdown()
+		sl.Wait()
+	}
 	if e != nil && e != http.ErrServerClosed {
 		fmt.Fprintln(errOut, e)
 		return 1

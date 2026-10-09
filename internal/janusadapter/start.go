@@ -158,13 +158,20 @@ func (c ExecConfig) ceilingPolicy() policy.Policy {
 }
 
 // BudgetOverride is the per-mission budget request; nil axis = ceiling.
-type BudgetOverride struct{ Tokens, TimeMs, MaxDepth *int64 }
+// USD is the session-launcher axis (RHZ-124 S1): carried only so it can be
+// refused, never ignored.
+type BudgetOverride struct {
+	Tokens, TimeMs, MaxDepth *int64
+	USD                      *float64
+}
 
 // StartRequest is one mission.start after the relay resolved the mission
 // (instruction already defaulted to the mission description).
 type StartRequest struct {
 	MissionID, Instruction, SessionMode string
-	Budget                              BudgetOverride
+	// Workdir is a session-launcher field (RHZ-124 S1): refused here.
+	Workdir string
+	Budget  BudgetOverride
 	// Actor is who asked (from the relay); journaled in the intent's
 	// provenance only — never part of the idempotency key (FR-RHZ-124).
 	Actor string
@@ -216,6 +223,14 @@ func (s Starter) spec(req StartRequest) (startSpec, string, error) {
 	}
 	if strings.TrimSpace(req.MissionID) == "" || strings.TrimSpace(req.Instruction) == "" {
 		return startSpec{}, "missionId and instruction required", nil
+	}
+	// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): session-launcher fields are refused,
+	// never silently ignored.
+	if req.Budget.USD != nil {
+		return startSpec{}, "budget.usd not supported by janus backend", nil
+	}
+	if req.Workdir != "" {
+		return startSpec{}, "workdir not supported by janus backend", nil
 	}
 	mode := req.SessionMode
 	if mode == "" {

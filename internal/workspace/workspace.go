@@ -646,6 +646,9 @@ type Intent struct {
 	// instruction reuses Instruction (empty = mission description).
 	Budget      *BudgetOverride `json:"budget"`
 	SessionMode string          `json:"sessionMode"`
+	// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): Workdir names a session-launcher
+	// ledger workdir ("" = the ledger default). The JANUS backend rejects it.
+	Workdir string `json:"workdir"`
 	// Verification is decoded strictly by RelayIntentHooks only for gate
 	// decisions. RawMessage preserves exact key casing for the V7 check.
 	Verification json.RawMessage `json:"verification,omitempty"`
@@ -673,6 +676,9 @@ type BudgetOverride struct {
 	Tokens   *int64 `json:"tokens"`
 	TimeMs   *int64 `json:"timeMs"`
 	MaxDepth *int64 `json:"maxDepth"`
+	// USD is the session-launcher spend axis (RHZ-124 S1,
+	// FR-RHZ-TBD(124-S1)); the JANUS backend rejects it.
+	USD *float64 `json:"usd"`
 }
 
 type trustIntentSignature struct {
@@ -893,7 +899,9 @@ type RelayResult struct {
 // (FR-RHZ-123): Instruction already defaults to the mission description.
 type ExecStartRequest struct {
 	MissionID, Instruction, SessionMode string
-	Budget                              BudgetOverride
+	// Workdir is the mission.start workdir name (RHZ-124 S1); "" = default.
+	Workdir string
+	Budget  BudgetOverride
 	// Actor is the relay's actor, unverified-prefixed like task.progress;
 	// journaled as the intent's provenance actor only (FR-RHZ-124).
 	Actor string
@@ -1542,7 +1550,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		if !authorized && !strings.HasPrefix(who, "unverified-local-operator:") {
 			who = "unverified-local-operator:" + who
 		}
-		req := ExecStartRequest{MissionID: in.MissionID, Instruction: strings.TrimSpace(in.Instruction), SessionMode: in.SessionMode, Actor: who}
+		req := ExecStartRequest{MissionID: in.MissionID, Instruction: strings.TrimSpace(in.Instruction), SessionMode: in.SessionMode, Workdir: in.Workdir, Actor: who}
 		if req.Instruction == "" {
 			req.Instruction = cur.Description
 		}

@@ -384,3 +384,27 @@ func TestRunRequestSessionModeFRRHZ123(t *testing.T) {
 		t.Fatal("invalid session_mode accepted")
 	}
 }
+
+// RHZ-124 S1 (FR-RHZ-TBD(124-S1)) L2: session-launcher fields reach the
+// JANUS backend only to be refused — zero writes, no Runner contact.
+func TestStarterRejectsLauncherFieldsFRRHZ124S1(t *testing.T) {
+	s := startStore(t)
+	r := &echoRunner{}
+	st := starter(s, r)
+	usd := 1.5
+	before := len(s.All())
+	for name, req := range map[string]StartRequest{
+		"usd":     {MissionID: "m", Instruction: "write the thing", Budget: BudgetOverride{USD: &usd}},
+		"workdir": {MissionID: "m", Instruction: "write the thing", Workdir: "rhizome"},
+	} {
+		if _, reason, err := st.Prepare(req); err != nil || !strings.Contains(reason, "not supported by janus backend") {
+			t.Fatalf("%s prepare: %q %v", name, reason, err)
+		}
+		if _, reason, err := st.Start(req); err != nil || !strings.Contains(reason, "not supported by janus backend") {
+			t.Fatalf("%s start: %q %v", name, reason, err)
+		}
+	}
+	if len(s.All()) != before || r.calls != 0 {
+		t.Fatalf("writes=%d calls=%d", len(s.All())-before, r.calls)
+	}
+}
