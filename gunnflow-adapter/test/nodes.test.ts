@@ -98,6 +98,32 @@ describe('Rhizome generic nodes', () => {
     expect(nodesOf(messy.envelope).find((n) => n.id === 'mission-demo')!.attention).toEqual([{ cause: 'k' }]);
   });
 
+  it('pending question and JANUS approval gates require reject and requestChanges input', () => {
+    const gateBody = {
+      ...wireBody,
+      gates: [
+        { id: 'question-1', source: 'internal', state: 'pending', superseded: false },
+        { id: 'approval-1', source: 'janus', state: 'pending', superseded: false },
+        { id: 'decided-1', source: 'janus', state: 'rejected', superseded: false },
+      ],
+      gateCapabilities: {
+        'question-1': { approve: 'enabled', reject: 'enabled', requestChanges: 'enabled' },
+        'approval-1': { approve: 'enabled', reject: 'enabled', requestChanges: 'enabled' },
+        'decided-1': { approve: 'enabled', reject: 'enabled', requestChanges: 'enabled' },
+      },
+    };
+    const gateNodes = nodesOf(adaptWithReport({ revision: 8, body: gateBody }).envelope);
+    const gateById = (id: string) => gateNodes.find((n) => n.id === id)!;
+    const expected = [
+      { action: 'gate.approve', level: 'enabled' },
+      { action: 'gate.reject', level: 'enabled', decision: { input: { required: true } } },
+      { action: 'gate.requestChanges', level: 'enabled', decision: { input: { required: true } } },
+    ];
+    expect(gateById('question-1').capabilities).toEqual(expected);
+    expect(gateById('approval-1').capabilities).toEqual(expected);
+    expect(gateById('decided-1').capabilities).toEqual([]);
+  });
+
   it('gates carry no invented label or actions; missions and deliverables have no state of their own', () => {
     const g = byId('approval-1');
     expect(g.label).toBeUndefined();

@@ -56,13 +56,26 @@ describe('gate decision digest binding FR-RHZ-163', () => {
     expect(received).toEqual([{ kind: 'gate.approve', actor: 'h', gateId: 'q-bound', digest: DIGEST }]);
   });
 
-  it('reject and requestChanges carry the digest too, alongside their own fields', async () => {
+  it('reject maps decision.text to reason and carries the snapshot digest', async () => {
     received.length = 0;
-    const rejected = await upstream.relayIntent({ nodeId: 'q-bound', action: 'gate.reject', idempotencyKey: 'k2' }, 'h');
+    const rejected = await upstream.relayIntent({
+      nodeId: 'q-bound', action: 'gate.reject', idempotencyKey: 'k2', decision: { text: 'x' },
+    }, 'h');
     expect(rejected).toEqual({ accepted: true });
+    expect(received).toEqual([{ gateId: 'q-bound', reason: 'x', digest: DIGEST, kind: 'gate.reject', actor: 'h' }]);
+  });
+
+  it('requestChanges carries the digest alongside its instruction', async () => {
+    received.length = 0;
     await upstream.relayIntent({ nodeId: 'q-bound', action: 'gate.requestChanges', idempotencyKey: 'k3', decision: { text: 'fix' } }, 'h');
-    expect(received.map((r) => [r.kind, r.digest])).toEqual([['gate.reject', DIGEST], ['gate.requestChanges', DIGEST]]);
-    expect(received[1]?.instruction).toBe('fix');
+    expect(received).toEqual([{ gateId: 'q-bound', instruction: 'fix', digest: DIGEST, kind: 'gate.requestChanges', actor: 'h' }]);
+  });
+
+  it('reject without decision.text is refused by the contract boundary and never forwarded', async () => {
+    received.length = 0;
+    const rejected = await upstream.relayIntent({ nodeId: 'q-bound', action: 'gate.reject', idempotencyKey: 'k2-no-text' }, 'h');
+    expect(rejected).toEqual({ accepted: false, reason: 'decision.text required by declared decision.input' });
+    expect(received).toEqual([]);
   });
 
   it('a cockpit-supplied digest is refused at the contract boundary and never forwarded', async () => {

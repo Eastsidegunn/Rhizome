@@ -191,7 +191,7 @@ export function projectRhizomeNodes(
     // Approved/rejected gates are retained only for provenance review and are no longer actionable.
     capabilities: isUnverifiedDecidedGate(g)
       ? []
-      : levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'requestChanges' ? true : undefined),
+      : levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'reject' || k === 'requestChanges' ? true : undefined),
     // A waiting gate pulls the human: it is a pending decision by definition. A
     // changes_requested gate (RHZ-078, FR-RHZ-109) passes through as its own state
     // value; the ball is with the worker, so no needs_human is added for it.

@@ -426,18 +426,39 @@ describe('RHZ-117 relay signing', () => {
     }
   });
 
-  it('accepts the kind-specific approve/allow and reject/deny decision aliases', async () => {
-    for (const [action, decision] of [['gate.approve', 'allow'], ['gate.reject', 'deny']] as const) {
-      received.length = 0;
-      const upstream = await upstreamWith(spawnMock((child) => succeed(child, response('', DIGEST, decision))));
-      try {
-        await expect(upstream.relayIntent({ nodeId: 'q-internal', action, idempotencyKey: decision }, 'h'))
-          .resolves.toEqual({ accepted: true });
-        expect(received).toHaveLength(1);
-        expect(received[0]).toMatchObject({ kind: action, actor: 'signer' });
-      } finally {
-        upstream.close();
-      }
+  it('accepts the kind-specific approve/allow decision alias', async () => {
+    received.length = 0;
+    const upstream = await upstreamWith(spawnMock((child) => succeed(child, response('', DIGEST, 'allow'))));
+    try {
+      await expect(upstream.relayIntent({ nodeId: 'q-internal', action: 'gate.approve', idempotencyKey: 'allow' }, 'h'))
+        .resolves.toEqual({ accepted: true });
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ kind: 'gate.approve', actor: 'signer' });
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it('sends a signed reject reason from decision.text and accepts the reject/deny decision alias', async () => {
+    received.length = 0;
+    let request: SignRequest | undefined;
+    const upstream = await upstreamWith(spawnMock((child, value) => {
+      request = value;
+      succeed(child, response('do not ship', DIGEST, 'deny'));
+    }));
+    try {
+      await expect(upstream.relayIntent({
+        nodeId: 'q-internal', action: 'gate.reject', idempotencyKey: 'deny', decision: { text: 'do not ship' },
+      }, 'h')).resolves.toEqual({ accepted: true });
+      expect(request).toEqual({
+        gateId: 'q-internal', kind: 'gate.reject', reason: 'do not ship', correlationId: 'cockpit:deny',
+      });
+      expect(received).toEqual([{
+        gateId: 'q-internal', digest: DIGEST, reason: 'do not ship',
+        verification: { signature: response().signature }, kind: 'gate.reject', actor: 'signer',
+      }]);
+    } finally {
+      upstream.close();
     }
   });
 

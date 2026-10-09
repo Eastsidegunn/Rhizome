@@ -332,7 +332,7 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
               id: 'gate-pending', kind: 'gate', state: { value: 'waiting' }, relations: [{ type: 'member-of', target: 'goal-1' }],
               capabilities: [
                 { action: 'gate.approve', level: 'enabled' },
-                { action: 'gate.reject', level: 'enabled' },
+                { action: 'gate.reject', level: 'enabled', decision: { input: { required: true } } },
                 { action: 'gate.requestChanges', level: 'enabled', decision: { input: { required: true } } },
               ],
               attention: [{ cause: 'needs_human' }], artifacts: [],

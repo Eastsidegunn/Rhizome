@@ -131,6 +131,7 @@ export function effectiveReason(kind: string | undefined, fields: Record<string,
 const TEXT_FIELD: Record<string, string> = {
   'mission.create': 'name',
   'task.instruct': 'instruction',
+  'gate.reject': 'reason',
   'gate.requestChanges': 'instruction',
   'request.complete': 'memo',
   'request.unable': 'reason',
