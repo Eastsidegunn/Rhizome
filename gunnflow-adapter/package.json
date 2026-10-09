@@ -17,8 +17,8 @@
     "test": "tsc -p tsconfig.json && vitest run"
   },
   "dependencies": {
-    "@gunnflow/contract": "^0.3.2",
-    "@gunnflow/upstream-port": "^0.1.0"
+    "@gunnflow/contract": "^0.4.0",
+    "@gunnflow/upstream-port": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

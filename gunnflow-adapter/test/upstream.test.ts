@@ -111,7 +111,8 @@ describe('Rhizome upstream adapter', () => {
     // RHZ-094 (FR-RHZ-121): re-packed to contract 0.3.0 (execution surface on the wire); 0.2.x is rejected.
     // RHZ-103: contract from npm, 0.3.1 (wire unchanged; peer range only).
     // 0.3.2: credential-bearing live URLs are rejected; wire unchanged.
-    expect(contractVersion).toBe('0.3.2');
+    // RHZ-120: contract 0.4.0 + upstream-port 0.1.1 from npm; wire byte-identical to 0.3.x.
+    expect(contractVersion).toBe('0.4.0');
     expect(u.snapshot().revision).toBeGreaterThanOrEqual(3);
     u.close?.();
   });
