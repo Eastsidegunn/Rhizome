@@ -42,6 +42,12 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- The direct `relation.create` intent creates kernel-validated knowledge
+  relations under deterministic `rel-` IDs, defaults zero confidence to 0.5,
+  and accepts identical retries without another journal write (FR-RHZ-169).
+- `GET /v1/knowledge` now additively projects sorted `items` and `relations`
+  arrays after `notes`, with `itemKind` and shared `tag` filtering and
+  endpoint-closed relation results (FR-RHZ-170).
 - Signed `attest.recorded` manifests provide all-or-nothing post-hoc
   verification for unsigned terminal gate decisions, with `attested`
   workspace/context projection and `rhizome gate verify` reporting
@@ -138,9 +144,10 @@ First public release.
   knowledge evaluation.
 - Note ingest from files into a content-addressed blob store (`rhizome ingest`,
   `rhizome memories`).
-- Knowledge surface: `GET /v1/knowledge` and the `note.create` intent.
-  Authoring intents: `knowledge.create`, `knowledge.promote`,
-  `procedure.define`.
+- Knowledge surface: `GET /v1/knowledge` returns notes, structured items and
+  their relations, with note `kind`, shared `tag`, and item `itemKind` filters.
+  Authoring intents: `note.create`, `knowledge.create`, `knowledge.promote`,
+  `relation.create`, `procedure.define`.
 - First-class edges (`contains`, `about`, `produces`, ...) with reverse lookup,
   plus the `edge.declare` and `edge.rewire` intents.
 - Codebase indexer: a derived cache anchored to `main`, generated when `serve`

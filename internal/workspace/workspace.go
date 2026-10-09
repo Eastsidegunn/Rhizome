@@ -22,6 +22,7 @@ import (
 	"rhizome/internal/procedure"
 	"rhizome/internal/projector"
 	"rhizome/internal/question"
+	"rhizome/internal/relation"
 	requestagg "rhizome/internal/request"
 	"rhizome/internal/source"
 	"rhizome/internal/surface"
@@ -623,6 +624,8 @@ type Intent struct {
 	// Tags, knowledgeId는 ID, reason은 Reason을 재사용한다.
 	SourceMemoryID    string       `json:"sourceMemoryId"`
 	KnowledgeKind     string       `json:"knowledgeKind"`
+	RelationType      string       `json:"relationType"`
+	SourceMemoryIDs   []string     `json:"sourceMemoryIds"`
 	Confidence        float64      `json:"confidence"`
 	SourceKnowledgeID string       `json:"sourceKnowledgeId"`
 	Trigger           string       `json:"trigger"`
@@ -1285,6 +1288,50 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 			return RelayResult{Reason: "knowledge conflicts with existing item"}, nil
 		}
 		if _, e := (knowledge.Service{Store: s}).Create(knowledge.KnowledgeItem{ID: kid, Kind: knowledge.Kind(in.KnowledgeKind), Statement: in.Content, SourceMemoryID: in.SourceMemoryID, Confidence: conf, Tags: append([]string(nil), in.Tags...)}); e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
+	case "relation.create":
+		// RHZ-122 (FR-RHZ-169): graph-edge authoring uses an actor-independent,
+		// deterministic ID. The actor gates this local-trust surface but is not
+		// part of relation.created, whose kernel-owned wire remains unchanged.
+		if strings.TrimSpace(actor) == "" {
+			return RelayResult{Reason: "actor required"}, nil
+		}
+		if strings.TrimSpace(in.From) == "" {
+			return RelayResult{Reason: "from required"}, nil
+		}
+		if strings.TrimSpace(in.To) == "" {
+			return RelayResult{Reason: "to required"}, nil
+		}
+		if strings.TrimSpace(in.RelationType) == "" {
+			return RelayResult{Reason: "relationType required"}, nil
+		}
+		if len(in.SourceMemoryIDs) == 0 {
+			return RelayResult{Reason: "sourceMemoryIds required"}, nil
+		}
+		for _, id := range in.SourceMemoryIDs {
+			if strings.TrimSpace(id) == "" {
+				return RelayResult{Reason: "sourceMemoryIds contains blank id"}, nil
+			}
+		}
+		conf := in.Confidence
+		if conf == 0 {
+			conf = 0.5
+		}
+		rsum := sha256.Sum256([]byte(in.From + "\x00" + in.RelationType + "\x00" + in.To))
+		rid := "rel-" + hex.EncodeToString(rsum[:])[:12]
+		if existing := s.List("relation", rid); len(existing) > 0 {
+			old, er := relation.Replay(existing)
+			if er != nil {
+				return RelayResult{Reason: er.Error()}, nil
+			}
+			if old.From == in.From && string(old.Type) == in.RelationType && old.To == in.To && sameStrings(old.SourceMemoryIDs, in.SourceMemoryIDs) && old.Confidence == conf {
+				return RelayResult{Accepted: true}, nil
+			}
+			return RelayResult{Reason: "relation conflicts with existing relation"}, nil
+		}
+		if _, e := (relation.Service{Store: s}).Create(relation.Relation{ID: rid, From: in.From, Type: relation.Type(in.RelationType), To: in.To, SourceMemoryIDs: append([]string(nil), in.SourceMemoryIDs...), Confidence: conf}); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil

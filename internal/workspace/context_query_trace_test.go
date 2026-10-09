@@ -117,6 +117,18 @@ func TestContextDeterministicBytesFRRHZ093(t *testing.T) {
 	}
 }
 
+func TestContextRelationWireOrderFRRHZ093(t *testing.T) {
+	s := fixture064(t)
+	code, body := getContext(t, NewHTTP(s).Handler(), "?task=mission-x")
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	want := []byte(`"relations":[{"id":"rel-1","type":"supports","from":"k-1","to":"k-3"}]`)
+	if !bytes.Contains(body, want) {
+		t.Fatalf("context relation wire changed\n got: %s\nwant fragment: %s", body, want)
+	}
+}
+
 // C2 (수용 2, 변이 probe): UseTrace 정확 1건 — payload 순서까지 일치, trace
 // 외 aggregate 증가 0, Replay 왕복.
 func TestContextRecordsOneUseTraceFRRHZ093(t *testing.T) {

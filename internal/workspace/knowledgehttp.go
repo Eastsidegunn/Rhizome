@@ -4,16 +4,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"rhizome/internal/edge"
 	"rhizome/internal/events"
+	"rhizome/internal/knowledge"
 	"rhizome/internal/memory"
+	"rhizome/internal/relation"
 )
 
-// KnowledgeSnapshot uses one immutable event snapshot for both the global
-// revision (§2) and memories.Search semantics (FR-RHZ-080).
+// KnowledgeSnapshot uses one immutable event snapshot for the global revision
+// and every projected collection (FR-RHZ-080, FR-RHZ-170). The public helper
+// preserves its original signature; the HTTP surface adds itemKind below.
 func KnowledgeSnapshot(s events.Port, kind memory.Kind, tag string) (KnowledgeProjection, error) {
-	p := KnowledgeProjection{Notes: []memory.Memory{}}
+	return knowledgeSnapshot(s, kind, "", tag)
+}
+
+func knowledgeSnapshot(s events.Port, kind memory.Kind, itemKind knowledge.Kind, tag string) (KnowledgeProjection, error) {
+	p := KnowledgeProjection{Notes: []memory.Memory{}, Items: []knowledge.KnowledgeItem{}, Relations: []relation.Relation{}}
 	if s == nil {
 		return p, fmt.Errorf("nil store")
 	}
@@ -27,13 +35,47 @@ func KnowledgeSnapshot(s events.Port, kind memory.Kind, tag string) (KnowledgePr
 		}
 	}
 	var err error
-	p.Notes, err = (memory.Service{Store: snapshot}).Search(kind, tag, "")
-	return p, err
+	if p.Notes, err = (memory.Service{Store: snapshot}).Search(kind, tag, ""); err != nil {
+		return p, err
+	}
+	if p.Items, err = (knowledge.Service{Store: snapshot}).Search(itemKind, "", tag); err != nil {
+		return p, err
+	}
+
+	surviving := make(map[string]bool, len(p.Items))
+	for _, item := range p.Items {
+		surviving[item.ID] = true
+	}
+	itemFilterActive := itemKind != "" || tag != ""
+	streams := make(map[string][]events.Event)
+	for _, e := range snapshot.All() {
+		if e.AggregateType == "relation" {
+			streams[e.AggregateID] = append(streams[e.AggregateID], e)
+		}
+	}
+	ids := make([]string, 0, len(streams))
+	for id := range streams {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		rel, replayErr := relation.Replay(streams[id])
+		if replayErr != nil {
+			return p, fmt.Errorf("relation %q: %w", id, replayErr)
+		}
+		if itemFilterActive && (!surviving[rel.From] || !surviving[rel.To]) {
+			continue
+		}
+		p.Relations = append(p.Relations, rel)
+	}
+	return p, nil
 }
 
 type KnowledgeProjection struct {
-	Revision uint64
-	Notes    []memory.Memory
+	Revision  uint64
+	Notes     []memory.Memory
+	Items     []knowledge.KnowledgeItem
+	Relations []relation.Relation
 }
 
 type knowledgeNoteDTO struct {
@@ -45,7 +87,27 @@ type knowledgeNoteDTO struct {
 	SourceType string      `json:"sourceType"`
 }
 type knowledgeBodyDTO struct {
-	Notes []knowledgeNoteDTO `json:"notes"`
+	Notes     []knowledgeNoteDTO     `json:"notes"`
+	Items     []knowledgeItemDTO     `json:"items"`
+	Relations []knowledgeRelationDTO `json:"relations"`
+}
+type knowledgeItemDTO struct {
+	ID             string           `json:"id"`
+	Kind           knowledge.Kind   `json:"kind"`
+	Statement      string           `json:"statement"`
+	Status         knowledge.Status `json:"status"`
+	Confidence     float64          `json:"confidence"`
+	SourceMemoryID string           `json:"sourceMemoryId"`
+	Tags           []string         `json:"tags"`
+	Supersedes     string           `json:"supersedes"`
+}
+type knowledgeRelationDTO struct {
+	ID              string   `json:"id"`
+	Type            string   `json:"type"`
+	From            string   `json:"from"`
+	To              string   `json:"to"`
+	SourceMemoryIDs []string `json:"sourceMemoryIds"`
+	Confidence      float64  `json:"confidence"`
 }
 type knowledgeEnvelope struct {
 	Revision uint64           `json:"revision"`
@@ -125,14 +187,25 @@ func (h *HTTPServer) serveKnowledgeSnapshot(w http.ResponseWriter, r *http.Reque
 		h.serveKnowledgeAbout(w, r, about)
 		return
 	}
-	p, err := KnowledgeSnapshot(h.Store, memory.Kind(r.URL.Query().Get("kind")), r.URL.Query().Get("tag"))
+	itemKind := knowledge.Kind(r.URL.Query().Get("itemKind"))
+	if itemKind != "" && !validKnowledgeKind(itemKind) {
+		http.Error(w, "invalid knowledge kind", http.StatusBadRequest)
+		return
+	}
+	p, err := knowledgeSnapshot(h.Store, memory.Kind(r.URL.Query().Get("kind")), itemKind, r.URL.Query().Get("tag"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	d := knowledgeBodyDTO{Notes: []knowledgeNoteDTO{}}
+	d := knowledgeBodyDTO{Notes: []knowledgeNoteDTO{}, Items: []knowledgeItemDTO{}, Relations: []knowledgeRelationDTO{}}
 	for _, m := range p.Notes {
 		d.Notes = append(d.Notes, knowledgeNoteDTO{m.ID, m.Kind, m.Content, append([]string{}, m.Tags...), m.SourceID, m.SourceType})
+	}
+	for _, item := range p.Items {
+		d.Items = append(d.Items, knowledgeItemDTO{item.ID, item.Kind, item.Statement, item.Status, item.Confidence, item.SourceMemoryID, append([]string{}, item.Tags...), item.Supersedes})
+	}
+	for _, rel := range p.Relations {
+		d.Relations = append(d.Relations, knowledgeRelationDTO{rel.ID, string(rel.Type), rel.From, rel.To, append([]string{}, rel.SourceMemoryIDs...), rel.Confidence})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(knowledgeEnvelope{p.Revision, d})
@@ -141,6 +214,14 @@ func (h *HTTPServer) serveKnowledgeSnapshot(w http.ResponseWriter, r *http.Reque
 func validMemoryKind(k memory.Kind) bool {
 	switch k {
 	case memory.Fact, memory.Decision, memory.Preference, memory.Observation, memory.Hypothesis, memory.Reference:
+		return true
+	}
+	return false
+}
+
+func validKnowledgeKind(k knowledge.Kind) bool {
+	switch k {
+	case knowledge.Concept, knowledge.Claim, knowledge.Procedure, knowledge.Constraint, knowledge.Assumption, knowledge.FailureMode:
 		return true
 	}
 	return false

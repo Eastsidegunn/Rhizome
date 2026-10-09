@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"rhizome/internal/events"
+	"rhizome/internal/knowledge"
 	"rhizome/internal/memory"
+	"rhizome/internal/relation"
 )
 
 func knowledgeHTTP(t *testing.T) (*events.Store, *httptest.Server) {
@@ -68,11 +70,93 @@ func TestKnowledgeGetStatusAndEnvelopeFRRHZ080(t *testing.T) {
 		t.Fatalf("status/envelope=%d %#v", st, v)
 	}
 }
-func TestKnowledgeEmptyNotesLiteralArrayFRRHZ080(t *testing.T) {
+func TestKnowledgeEmptyBodyLiteralArraysFRRHZ080FRRHZ170(t *testing.T) {
 	_, u := knowledgeHTTP(t)
 	_, _, b := getKnowledge(t, u, "")
-	if !bytes.Contains(b, []byte(`"notes":[]`)) {
-		t.Fatalf("empty notes not literal []: %s", b)
+	want := `{"revision":0,"body":{"notes":[],"items":[],"relations":[]}}`
+	if strings.TrimSpace(string(b)) != want {
+		t.Fatalf("empty knowledge golden\n got: %s\nwant: %s", b, want)
+	}
+}
+
+func addKnowledgeItem(t *testing.T, s *events.Store, id string, kind knowledge.Kind, statement, source string, confidence float64, tags ...string) {
+	t.Helper()
+	if _, err := (knowledge.Service{Store: s}).Create(knowledge.KnowledgeItem{ID: id, Kind: kind, Statement: statement, SourceMemoryID: source, Confidence: confidence, Tags: tags}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addRelation(t *testing.T, s *events.Store, id, from, to string, typ relation.Type, sourceIDs []string, confidence float64) {
+	t.Helper()
+	if _, err := (relation.Service{Store: s}).Create(relation.Relation{ID: id, From: from, Type: typ, To: to, SourceMemoryIDs: sourceIDs, Confidence: confidence}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKnowledgeItemsRelationsPopulatedGoldenFRRHZ170(t *testing.T) {
+	s, u := knowledgeHTTP(t)
+	addMemory(t, s, "mem-1", memory.Fact, "evidence", "red")
+	addKnowledgeItem(t, s, "know-z", knowledge.Claim, "z statement", "mem-1", .8, "red")
+	addKnowledgeItem(t, s, "know-a", knowledge.Concept, "a statement", "mem-1", .6)
+	addRelation(t, s, "rel-1", "know-a", "know-z", relation.Supports, []string{"mem-1"}, .7)
+	_, _, got := getKnowledge(t, u, "")
+	want := `{"revision":4,"body":{"notes":[{"id":"mem-1","kind":"fact","content":"evidence","tags":["red"],"sourceId":"mem-1","sourceType":"note"}],"items":[{"id":"know-a","kind":"concept","statement":"a statement","status":"candidate","confidence":0.6,"sourceMemoryId":"mem-1","tags":[],"supersedes":""},{"id":"know-z","kind":"claim","statement":"z statement","status":"candidate","confidence":0.8,"sourceMemoryId":"mem-1","tags":["red"],"supersedes":""}],"relations":[{"id":"rel-1","type":"supports","from":"know-a","to":"know-z","sourceMemoryIds":["mem-1"],"confidence":0.7}]}}`
+	if strings.TrimSpace(string(got)) != want {
+		t.Fatalf("populated knowledge golden\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestKnowledgeItemKindFiltersItemsAndRelationsFRRHZ170(t *testing.T) {
+	s, u := knowledgeHTTP(t)
+	addMemory(t, s, "mem-1", memory.Fact, "evidence")
+	addKnowledgeItem(t, s, "know-a", knowledge.Claim, "a", "mem-1", .5)
+	addKnowledgeItem(t, s, "know-b", knowledge.Claim, "b", "mem-1", .5)
+	addKnowledgeItem(t, s, "know-c", knowledge.Concept, "c", "mem-1", .5)
+	addRelation(t, s, "rel-claim", "know-a", "know-b", relation.Supports, []string{"mem-1"}, .5)
+	addRelation(t, s, "rel-mixed", "know-a", "know-c", relation.Supports, []string{"mem-1"}, .5)
+	_, v, _ := getKnowledge(t, u, "?itemKind=claim")
+	body := v["body"].(map[string]any)
+	items, relations := body["items"].([]any), body["relations"].([]any)
+	if len(items) != 2 || items[0].(map[string]any)["id"] != "know-a" || len(relations) != 1 || relations[0].(map[string]any)["id"] != "rel-claim" {
+		t.Fatalf("filtered body=%#v", body)
+	}
+}
+
+func TestKnowledgeTagFiltersNotesItemsAndRelationsFRRHZ170(t *testing.T) {
+	s, u := knowledgeHTTP(t)
+	addMemory(t, s, "mem-red", memory.Fact, "red evidence", "red")
+	addMemory(t, s, "mem-blue", memory.Fact, "blue evidence", "blue")
+	addKnowledgeItem(t, s, "know-a", knowledge.Claim, "a", "mem-red", .5, "red")
+	addKnowledgeItem(t, s, "know-b", knowledge.Claim, "b", "mem-red", .5, "red")
+	addKnowledgeItem(t, s, "know-c", knowledge.Claim, "c", "mem-blue", .5, "blue")
+	addRelation(t, s, "rel-red", "know-a", "know-b", relation.Supports, []string{"mem-red"}, .5)
+	addRelation(t, s, "rel-mixed", "know-a", "know-c", relation.Supports, []string{"mem-red"}, .5)
+	_, v, _ := getKnowledge(t, u, "?tag=red")
+	body := v["body"].(map[string]any)
+	if len(body["notes"].([]any)) != 1 || len(body["items"].([]any)) != 2 || len(body["relations"].([]any)) != 1 || body["relations"].([]any)[0].(map[string]any)["id"] != "rel-red" {
+		t.Fatalf("tag-filtered body=%#v", body)
+	}
+}
+
+func TestKnowledgeInvalidItemKind400FRRHZ170(t *testing.T) {
+	_, u := knowledgeHTTP(t)
+	resp, err := http.Get(u.URL + "/v1/knowledge?itemKind=theorem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest || string(body) != "invalid knowledge kind\n" {
+		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
+	}
+}
+
+func TestKnowledgeAboutGoldenUnchangedFRRHZ170(t *testing.T) {
+	_, u := knowledgeHTTP(t)
+	status, _, body := getKnowledge(t, u, "?about=missing")
+	want := `{"revision":0,"body":{"about":[]}}`
+	if status != http.StatusOK || strings.TrimSpace(string(body)) != want {
+		t.Fatalf("status=%d body=%s", status, body)
 	}
 }
 func TestKnowledgePostCreatesMemoryFRRHZ080(t *testing.T) {

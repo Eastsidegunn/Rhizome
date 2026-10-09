@@ -88,14 +88,29 @@ Other subcommands: `ingest`, `memories`, `index`, `graph` (see
 [cmd/rhizome/main.go](cmd/rhizome/main.go)). Only one process may write a
 journal at a time: while `serve` runs, send writes through `POST /v1/intent`.
 
-Main HTTP routes: `GET /v1/workspace` (+ `/v1/workspace/stream` SSE),
-`POST /v1/intent`, `GET /v1/knowledge`, `GET /v1/context`,
-`GET /v1/execution/{missionId}` (+ `/stream`), `POST /v1/blob`,
-`GET /v1/blob/{id}`, `GET /v1/codeindex`. Intent kinds include `goal.*`,
-`mission.*`, `question.ask`, `gate.approve|reject|requestChanges`,
-`note.create`, `knowledge.*`, `procedure.define|run`, `edge.declare|rewire`,
-`deliverable.register` and `task.instruct`. They are implemented in
-[internal/workspace/workspace.go](internal/workspace/workspace.go).
+Main HTTP routes:
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/workspace` | Project the operator board; `/v1/workspace/stream` is its SSE requery signal. |
+| `POST /v1/intent` | Relay one direct, local-trust write intent. |
+| `GET /v1/knowledge` | Project `{notes,items,relations}` from one revision; each relation is `{id,type,from,to,sourceMemoryIds,confidence}` in that order. `kind` filters notes by memory kind; `itemKind` filters items by the knowledge-kind vocabulary and an unknown value returns `400 invalid knowledge kind`; `tag` filters both notes and items. When `itemKind` or `tag` is present, relations survive only when both endpoint items survive; without either item filter, all relations are returned. `about=<memoryId>` retains the separate reverse-about response. |
+| `GET /v1/context` | Project task handoff context, or note context with `goal` / `mission`. |
+| `GET /v1/execution/{missionId}` | Project execution output; `/stream` is the streaming form. |
+| `POST /v1/blob`, `GET /v1/blob/{id}` | Store and read content-addressed blobs. |
+| `GET /v1/codeindex` | Read the derived code index. |
+
+Direct intent kinds are implemented in
+[internal/workspace/workspace.go](internal/workspace/workspace.go):
+
+| Intent kind | Purpose |
+|---|---|
+| `goal.*`, `mission.*`, `task.pause`, `task.resume`, `task.instruct` | Operate goals and missions. |
+| `question.ask`, `gate.approve`, `gate.reject`, `gate.requestChanges` | Open and decide gates. |
+| `note.create`, `knowledge.create`, `knowledge.promote`, `procedure.define`, `procedure.run` | Author notes, structured knowledge, and procedures. |
+| `relation.create` | Create a typed knowledge relation from lowerCamel `{from,to,relationType,sourceMemoryIds,confidence,actor}`. `actor` and all graph fields are required; a zero/omitted confidence defaults to `0.5`. Resubmitting an identical relation is idempotent. |
+| `edge.declare`, `edge.rewire`, `deliverable.register` | Link operational nodes and register outputs. |
+| `request.create`, `request.complete`, `request.unable`, `request.cancel`, `attest.create` | Record human work and signed attestations. |
 
 ## Data location
 
