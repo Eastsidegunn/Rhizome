@@ -8,33 +8,70 @@ public final class SignerStore {
     public var anchorURL: URL { directory.appendingPathComponent("anchor.json") }
     public var logURL: URL { directory.appendingPathComponent("requests.log") }
 
-    public init(directory: URL? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) {
+    public init(directory: URL? = nil, environment: [String: String] = ProcessInfo.processInfo.environment, honorsEnvironment: Bool = true) {
         if let directory {
             self.directory = directory
-        } else if let configured = environment["SIGNER_DIR"], !configured.isEmpty {
+        } else if honorsEnvironment, let configured = environment["SIGNER_DIR"], !configured.isEmpty {
             self.directory = URL(fileURLWithPath: configured, isDirectory: true)
         } else {
-            self.directory = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/rhizome-signer", isDirectory: true)
+            self.directory = Self.defaultDirectory
         }
+    }
+
+    public static var defaultDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/rhizome-signer", isDirectory: true)
     }
 
     public func ensureDirectory() throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        guard chmod(directory.path, 0o700) == 0 else { throw posixFailure("cannot protect signer directory") }
+        try Self.ensureProtectedDirectory(directory)
     }
 
     public func readKey() throws -> Data {
-        guard FileManager.default.fileExists(atPath: keyURL.path) else {
-            throw SignerFailure(.noKey, "no signing key; run key init")
+        var directoryInfo = stat()
+        guard lstat(directory.path, &directoryInfo) == 0 else {
+            if errno == ENOENT { throw SignerFailure(.noKey, "no signing key; run key init") }
+            throw posixFailure("cannot inspect signer directory")
         }
-        do { return try Data(contentsOf: keyURL) }
-        catch { throw SignerFailure(.noKey, "cannot read signing key") }
+        try Self.verifyProtectedDirectory(directory, info: directoryInfo)
+        let fd = open(keyURL.path, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else {
+            if errno == ENOENT { throw SignerFailure(.noKey, "no signing key; run key init") }
+            throw SignerFailure(.noKey, "cannot read signing key")
+        }
+        defer { close(fd) }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let amount = read(fd, &buffer, buffer.count)
+            if amount < 0 {
+                if errno == EINTR { continue }
+                throw SignerFailure(.noKey, "cannot read signing key")
+            }
+            if amount == 0 { break }
+            data.append(buffer, count: amount)
+        }
+        return data
+    }
+
+    public func writeInitialKey(_ key: Data, anchor: Data) throws {
+        try ensureDirectory()
+        guard !pathExists(keyURL), !pathExists(anchorURL) else {
+            throw SignerFailure(.refused, "signing key already exists")
+        }
+        try writeProtected(anchor, to: anchorURL, exclusive: true)
+        do {
+            try writeProtected(key, to: keyURL, exclusive: true)
+        } catch {
+            _ = unlink(anchorURL.path)
+            _ = unlink(keyURL.path)
+            throw error
+        }
     }
 
     public func writeNewKey(_ data: Data) throws {
         try ensureDirectory()
-        guard !FileManager.default.fileExists(atPath: keyURL.path), !FileManager.default.fileExists(atPath: anchorURL.path) else {
+        guard !pathExists(keyURL), !pathExists(anchorURL) else {
             throw SignerFailure(.refused, "signing key already exists")
         }
         try writeProtected(data, to: keyURL, exclusive: true)
@@ -68,6 +105,40 @@ public final class SignerStore {
             return total
         }
         guard written == data.count, fsync(fd) == 0 else { throw posixFailure("cannot write \(url.lastPathComponent)") }
+    }
+
+    private func pathExists(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 || errno != ENOENT
+    }
+
+    static func ensureProtectedDirectory(_ url: URL) throws {
+        var info = stat()
+        if lstat(url.path, &info) != 0 {
+            guard errno == ENOENT else { throw posixFailure("cannot inspect signer directory") }
+            let parent = url.deletingLastPathComponent()
+            if parent.path != url.path {
+                try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            }
+            if mkdir(url.path, 0o700) != 0, errno != EEXIST {
+                throw posixFailure("cannot create signer directory")
+            }
+            guard chmod(url.path, 0o700) == 0 else { throw posixFailure("cannot protect signer directory") }
+            guard lstat(url.path, &info) == 0 else { throw posixFailure("cannot inspect signer directory") }
+        }
+        try verifyProtectedDirectory(url, info: info)
+    }
+
+    private static func verifyProtectedDirectory(_ url: URL, info: stat) throws {
+        guard (info.st_mode & S_IFMT) == S_IFDIR else {
+            throw SignerFailure(.failure, "signer directory is not a directory: \(url.path)")
+        }
+        guard info.st_uid == getuid() else {
+            throw SignerFailure(.failure, "signer directory is not owned by the current uid: \(url.path)")
+        }
+        guard (info.st_mode & 0o7777) == 0o700 else {
+            throw SignerFailure(.failure, "signer directory mode must be 0700: \(url.path)")
+        }
     }
 }
 
@@ -180,8 +251,7 @@ public final class RequestLogger {
 
     private func withLockedLog<T>(_ body: (Int32, Data) throws -> T) throws -> T {
         let parent = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-        _ = chmod(parent.path, 0o700)
+        try SignerStore.ensureProtectedDirectory(parent)
         let fd = open(url.path, O_RDWR | O_CREAT | O_APPEND | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw SignerFailure(.refused, "cannot open request log") }
         defer { close(fd) }

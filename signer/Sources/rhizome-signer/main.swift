@@ -3,7 +3,13 @@ import Foundation
 import SignerCore
 
 do {
-    let output = try CommandLineDriver.run(arguments: Array(CommandLine.arguments.dropFirst()), stdin: FileHandle.standardInput.readDataToEndOfFile())
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    var stdin = Data()
+    if arguments.first == "sign-stdin" {
+        try CommandLineDriver.validateSignStdinArguments(arguments)
+        stdin = try CommandLineDriver.readSignStdin(FileHandle.standardInput)
+    }
+    let output = try CommandLineDriver.run(arguments: arguments, stdin: stdin)
     FileHandle.standardOutput.write(output)
     exit(SignerExit.success.rawValue)
 } catch let failure as SignerFailure {

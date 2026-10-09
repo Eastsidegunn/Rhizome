@@ -2,9 +2,23 @@ import Foundation
 
 public enum CommandLineDriver {
     public static let version = "rhizome-signer 1"
+    public static let maximumStdinBytes = 64 * 1024
 
     public static func validateSignStdinArguments(_ arguments: [String]) throws {
         guard arguments == ["sign-stdin"] else { throw SignerFailure(.refused, "sign-stdin accepts no arguments") }
+    }
+
+    public static func readSignStdin(_ handle: FileHandle) throws -> Data {
+        var result = Data()
+        while result.count <= maximumStdinBytes {
+            let remaining = maximumStdinBytes + 1 - result.count
+            let chunk: Data
+            do { chunk = try handle.read(upToCount: min(8192, remaining)) ?? Data() }
+            catch { throw SignerFailure(.refused, "cannot read sign-stdin request") }
+            if chunk.isEmpty { return result }
+            result.append(chunk)
+        }
+        throw SignerFailure(.refused, "sign-stdin request exceeds 64 KiB")
     }
 
     public static func run(arguments: [String], stdin: Data = Data()) throws -> Data {
@@ -15,8 +29,9 @@ public enum CommandLineDriver {
         }
         if command == "sign-stdin" {
             try validateSignStdinArguments(arguments)
+            guard stdin.count <= maximumStdinBytes else { throw SignerFailure(.refused, "sign-stdin request exceeds 64 KiB") }
             let input = try spawnInput(stdin)
-            let engine = try makeEngine(urlString: RhizomeURLPolicy.defaultURL)
+            let engine = try makeEngine(urlString: RhizomeURLPolicy.defaultURL, honorsEnvironment: false)
             return line(try engine.signDecision(gateId: input.gateId, requested: input.kind, reason: input.reason, correlationId: input.correlationId).spawn)
         }
         if command == "key" { return try runKey(Array(arguments.dropFirst())) }
@@ -76,7 +91,6 @@ public enum CommandLineDriver {
         var out: String?
         var expected: String?
         var url = RhizomeURLPolicy.defaultURL
-        var gateIds: [String] = []
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
@@ -88,22 +102,20 @@ public enum CommandLineDriver {
                 index += 1; guard index < arguments.count else { throw usage() }; expected = arguments[index]
             case "-rhizome":
                 index += 1; guard index < arguments.count else { throw usage() }; url = arguments[index]
-            default:
-                guard !arguments[index].hasPrefix("-") else { throw usage() }
-                gateIds.append(arguments[index])
+            default: throw usage()
             }
             index += 1
         }
         let engine = try makeEngine(urlString: url)
         if listMode {
-            guard !all, gateIds.isEmpty, expected == nil, let out else { throw usage() }
+            guard !all, expected == nil, let out else { throw usage() }
             let plan = try engine.attestList()
             try engine.writeAttestReview(items: plan.items, total: plan.total, digest: plan.digest, to: URL(fileURLWithPath: out))
             return Data(attestSummary(items: plan.items, total: plan.total, digest: plan.digest).utf8)
         }
-        guard out == nil, all != !gateIds.isEmpty else { throw usage() }
+        guard out == nil, all else { throw usage() }
         try AttestationPolicy.requireExpected(expected, actual: expected ?? "")
-        let intent = try engine.signAttestation(gateIds: all ? nil : gateIds, expected: expected)
+        let intent = try engine.signAttestation(expected: expected)
         return line(try engine.submit(intent))
     }
 
@@ -150,13 +162,13 @@ public enum CommandLineDriver {
         return line(submit ? try engine.submit(intent) : intent)
     }
 
-    private static func makeEngine(urlString: String) throws -> SignerEngine {
+    private static func makeEngine(urlString: String, honorsEnvironment: Bool = true) throws -> SignerEngine {
         let url = try RhizomeURLPolicy.validate(urlString)
-        let store = SignerStore()
+        let store = SignerStore(honorsEnvironment: honorsEnvironment)
         return SignerEngine(backend: SecureEnclaveBackend(), store: store, client: RhizomeClient(baseURL: url))
     }
 
-    private static func spawnInput(_ data: Data) throws -> SpawnInput {
+    public static func spawnInput(_ data: Data) throws -> SpawnInput {
         let object: [String: Any]
         do { object = try StrictJSON.oneObject(data, exactKeys: ["gateId", "kind", "reason", "correlationId"]) }
         catch { throw SignerFailure(.refused, "sign-stdin requires one exact JSON object") }
@@ -187,4 +199,13 @@ public enum CommandLineDriver {
     }
 }
 
-private struct SpawnInput { let gateId, kind, reason, correlationId: String }
+public struct SpawnInput {
+    public let gateId, kind, reason, correlationId: String
+
+    public init(gateId: String, kind: String, reason: String, correlationId: String) {
+        self.gateId = gateId
+        self.kind = kind
+        self.reason = reason
+        self.correlationId = correlationId
+    }
+}

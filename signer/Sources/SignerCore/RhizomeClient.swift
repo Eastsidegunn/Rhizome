@@ -1,4 +1,5 @@
 import Darwin
+import CoreFoundation
 import Foundation
 
 public enum RhizomeURLPolicy {
@@ -112,7 +113,8 @@ public final class RhizomeClient: RhizomeClientProtocol {
                 return
             }
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let data else {
-                result = .failure(SignerFailure(.rhizomeReadFailed, "Rhizome request failed"))
+                let detail = data.flatMap(rhizomeResponseDetail)
+                result = .failure(SignerFailure(.rhizomeReadFailed, rhizomeDiagnostic("Rhizome request failed", detail: detail)))
                 return
             }
             result = .success(data)
@@ -144,8 +146,17 @@ public enum StrictJSON {
               let requestDigest = object["requestDigest"] as? String,
               let state = object["state"] as? String,
               let status = object["verificationStatus"] as? String,
-              ["none", "claimed", "legacy-asserted", "verified", "attested"].contains(status) else {
+              ["none", "claimed", "legacy-asserted", "chain-valid", "verified", "attested"].contains(status) else {
             throw SignerFailure(.rhizomeReadFailed, "invalid signing response")
+        }
+        let journalId: String?
+        if actual.contains("journalId") {
+            guard let value = object["journalId"] as? String else {
+                throw SignerFailure(.rhizomeReadFailed, "invalid signing journalId")
+            }
+            journalId = value
+        } else {
+            journalId = nil
         }
         let sequence = hasDecision ? uint64(object["decisionSequence"]) : nil
         let decision = hasDecision ? object["decision"] as? String : nil
@@ -153,7 +164,7 @@ public enum StrictJSON {
         if hasDecision && (sequence == nil || decision == nil || reason == nil) {
             throw SignerFailure(.rhizomeReadFailed, "invalid signing decision response")
         }
-        return SigningInput(journalId: object["journalId"] as? String, consumer: consumer, gateId: gateId, title: title, requestDigest: requestDigest, state: state, verificationStatus: status, decisionSequence: sequence, decision: decision, reason: reason)
+        return SigningInput(journalId: journalId, consumer: consumer, gateId: gateId, title: title, requestDigest: requestDigest, state: state, verificationStatus: status, decisionSequence: sequence, decision: decision, reason: reason)
     }
 
     public static func signingList(_ data: Data) throws -> SigningList {
@@ -161,6 +172,15 @@ public enum StrictJSON {
         let actual = Set(object.keys)
         guard actual == ["journalId", "items"] || actual == ["items"], let rawItems = object["items"] as? [[String: Any]] else {
             throw SignerFailure(.rhizomeReadFailed, "invalid signing list schema")
+        }
+        let journalId: String?
+        if actual.contains("journalId") {
+            guard let value = object["journalId"] as? String else {
+                throw SignerFailure(.rhizomeReadFailed, "invalid signing list journalId")
+            }
+            journalId = value
+        } else {
+            journalId = nil
         }
         let expected: Set<String> = ["consumer", "gateId", "decisionSequence", "requestDigest", "decision", "reason", "title"]
         var items: [AttestItem] = []
@@ -177,7 +197,7 @@ public enum StrictJSON {
             }
             items.append(AttestItem(consumer: consumer, gateId: gateId, decisionSequence: sequence, digest: digest, decision: decision, reason: reason, title: title))
         }
-        return SigningList(journalId: object["journalId"] as? String, items: items)
+        return SigningList(journalId: journalId, items: items)
     }
 
     public static func oneObject(_ data: Data, exactKeys: Set<String>) throws -> [String: Any] {
@@ -201,8 +221,22 @@ public enum StrictJSON {
 
     private static func uint64(_ value: Any?) -> UInt64? {
         guard let number = value as? NSNumber else { return nil }
+        guard CFGetTypeID(number) != CFBooleanGetTypeID(), !CFNumberIsFloatType(number) else { return nil }
         let decimal = number.decimalValue
         guard decimal >= 0, decimal == Decimal(number.uint64Value) else { return nil }
         return number.uint64Value
     }
+
+}
+
+private func rhizomeResponseDetail(_ data: Data) -> String? {
+    if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       let reason = (object["Reason"] ?? object["reason"]) as? String,
+       !reason.isEmpty {
+        return reason
+    }
+    guard let body = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty else {
+        return nil
+    }
+    return body
 }

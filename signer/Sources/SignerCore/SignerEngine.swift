@@ -27,8 +27,7 @@ public final class SignerEngine {
             try backend.createKey(verificationPrompt: "Rhizome 서명 키 확인")
         }
         let anchor = Canonical.anchorJSON(publicKeyDER: material.publicKeyDER)
-        try store.writeNewKey(material.representation)
-        try store.writeAnchor(anchor)
+        try store.writeInitialKey(material.representation, anchor: anchor)
         return (anchor, Canonical.keyId(publicKeyDER: material.publicKeyDER))
     }
 
@@ -39,11 +38,17 @@ public final class SignerEngine {
     }
 
     public func signDecision(gateId: String, requested: String, reason: String, correlationId: String = "") throws -> (spawn: Data, intent: Data) {
+        try PromptText.validateField(gateId, name: "gateId")
+        try PromptText.validateField(reason, name: "reason")
+        guard SigningFieldPolicy.validGateId(gateId) else {
+            throw SignerFailure(.refused, "invalid gateId")
+        }
         let key = try loadedKey()
         let input: SigningInput
         do { input = try client.signingInput(gateId: gateId) }
         catch let failure as SignerFailure { throw failure.exit == .refused ? SignerFailure(.rhizomeReadFailed, failure.message) : failure }
         catch { throw SignerFailure(.rhizomeReadFailed, "cannot read signing input") }
+        try validateServerInput(input, requestedGateId: gateId)
         guard let journalId = input.journalId, !journalId.isEmpty else {
             throw SignerFailure(.rhizomeReadFailed, "anchorless serve: cannot sign")
         }
@@ -75,9 +80,10 @@ public final class SignerEngine {
         }
     }
 
-    public func attestList(gateIds: [String]? = nil) throws -> (journalId: String?, items: [AttestItem], total: Int, digest: String) {
+    public func attestList() throws -> (journalId: String?, items: [AttestItem], total: Int, digest: String) {
         let list = try client.unverifiedInputs()
-        let selected = try AttestationPolicy.select(list.items, gateIds: gateIds)
+        for item in list.items { try validateAttestItem(item) }
+        let selected = AttestationPolicy.select(list.items)
         return (list.journalId, selected.items, selected.total, Canonical.manifestDigest(selected.items))
     }
 
@@ -88,9 +94,9 @@ public final class SignerEngine {
         try store.writeReview(JSONCoding.encode(review, pretty: true), to: url)
     }
 
-    public func signAttestation(gateIds: [String]? = nil, expected: String?) throws -> Data {
+    public func signAttestation(expected: String?) throws -> Data {
         let key = try loadedKey()
-        let list = try attestList(gateIds: gateIds)
+        let list = try attestList()
         guard let journalId = list.journalId, !journalId.isEmpty else {
             throw SignerFailure(.rhizomeReadFailed, "anchorless serve: cannot sign")
         }
@@ -102,8 +108,9 @@ public final class SignerEngine {
         let record = RequestLogRecord(keyId: key.keyId, manifestDigest: list.digest, count: list.items.count, items: list.items.map {
             AttestLogItem(gateId: $0.gateId, decisionSequence: $0.decisionSequence, requestDigest: $0.digest, decision: $0.decision)
         })
+        let prompt = try PromptText.attest(count: list.items.count, manifestDigest: list.digest)
         let signature = try logger.performPrompt(record) {
-            try backend.sign(keyRepresentation: key.representation, message: message, prompt: PromptText.attest(count: list.items.count, manifestDigest: list.digest))
+            try backend.sign(keyRepresentation: key.representation, message: message, prompt: prompt)
         }
         let envelope = SignatureEnvelope(keyId: key.keyId, signedAt: signedAt, nonce: nonce, sig: signature.base64EncodedString())
         let intentItems = list.items.map { AttestIntentItem(consumer: $0.consumer, gateId: $0.gateId, decisionSequence: $0.decisionSequence, digest: $0.digest, decision: $0.decision, reason: $0.reason) }
@@ -120,7 +127,9 @@ public final class SignerEngine {
         let nonce = try nonce()
         let message = Canonical.addMessage(journalId: journalId, keyId: incoming.keyId, algorithm: incoming.algorithm, publicKeyDER: publicKeyDER, principal: principal, assurance: "key", signingKeyId: key.keyId, signedAt: signedAt, nonce: nonce)
         let prompt = "키 추가 H\n\(incoming.keyId)\n\(incoming.algorithm)"
-        guard prompt.count <= PromptText.maximumCharacters else { throw SignerFailure(.refused, "signing prompt exceeds 600 characters") }
+        try PromptText.validateField(incoming.keyId, name: "keyId")
+        try PromptText.validateField(incoming.algorithm, name: "algorithm")
+        try PromptText.requireWithinLimit(prompt)
         let record = RequestLogRecord(consumer: "trust", gateId: incoming.keyId, decision: "add", keyId: key.keyId)
         let signature = try logger.performPrompt(record) { try backend.sign(keyRepresentation: key.representation, message: message, prompt: prompt) }
         let envelope = SignatureEnvelope(keyId: key.keyId, signedAt: signedAt, nonce: nonce, sig: signature.base64EncodedString())
@@ -130,6 +139,8 @@ public final class SignerEngine {
 
     public func revokeKey(keyId: String, reason: String) throws -> Data {
         guard !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw SignerFailure(.refused, "revoke reason is required") }
+        try PromptText.validateField(keyId, name: "keyId")
+        try PromptText.validateField(reason, name: "reason")
         let key = try loadedKey()
         let list = try client.unverifiedInputs()
         guard let journalId = list.journalId, !journalId.isEmpty else { throw SignerFailure(.rhizomeReadFailed, "anchorless serve: cannot sign") }
@@ -137,7 +148,7 @@ public final class SignerEngine {
         let nonce = try nonce()
         let message = Canonical.revokeMessage(journalId: journalId, keyId: keyId, reason: reason, signingKeyId: key.keyId, signedAt: signedAt, nonce: nonce)
         let prompt = "키 폐기\n\(keyId)\n\(reason)"
-        guard prompt.count <= PromptText.maximumCharacters else { throw SignerFailure(.refused, "signing prompt exceeds 600 characters") }
+        try PromptText.requireWithinLimit(prompt)
         let record = RequestLogRecord(consumer: "trust", gateId: keyId, decision: "revoke", reasonHash16: RequestLogger.reasonHash16(reason), keyId: key.keyId)
         let signature = try logger.performPrompt(record) { try backend.sign(keyRepresentation: key.representation, message: message, prompt: prompt) }
         let envelope = SignatureEnvelope(keyId: key.keyId, signedAt: signedAt, nonce: nonce, sig: signature.base64EncodedString())
@@ -149,7 +160,8 @@ public final class SignerEngine {
         if let object = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
            let accepted = (object["Accepted"] ?? object["accepted"]) as? Bool,
            !accepted {
-            throw SignerFailure(.rhizomeReadFailed, "Rhizome refused intent")
+            let reason = (object["Reason"] ?? object["reason"]) as? String
+            throw SignerFailure(.rhizomeReadFailed, rhizomeDiagnostic("Rhizome refused intent", detail: reason))
         }
         return response
     }
@@ -163,6 +175,42 @@ public final class SignerEngine {
     private func decisionRecord(input: SigningInput, decision: String, reason: String, correlationId: String, keyId: String) -> RequestLogRecord {
         RequestLogRecord(consumer: input.consumer, gateId: input.gateId, decision: decision, reasonHash16: RequestLogger.reasonHash16(reason), requestDigest: input.requestDigest, correlationId: correlationId, keyId: keyId)
     }
+
+    private func validateServerInput(_ input: SigningInput, requestedGateId: String) throws {
+        for (name, field) in [("consumer", input.consumer), ("gateId", input.gateId), ("title", input.title), ("requestDigest", input.requestDigest)] {
+            try PromptText.validateField(field, name: name)
+        }
+        if let reason = input.reason { try PromptText.validateField(reason, name: "reason") }
+        guard input.gateId == requestedGateId else {
+            throw SignerFailure(.rhizomeReadFailed, "Rhizome returned a different gateId")
+        }
+        guard ["question", "approval"].contains(input.consumer),
+              SigningFieldPolicy.validGateId(input.gateId, consumer: input.consumer),
+              SigningFieldPolicy.validRequestDigest(input.requestDigest, consumer: input.consumer) else {
+            throw SignerFailure(.rhizomeReadFailed, "Rhizome returned invalid signing identifiers")
+        }
+    }
+
+    private func validateAttestItem(_ item: AttestItem) throws {
+        for (name, field) in [("consumer", item.consumer), ("gateId", item.gateId), ("title", item.title), ("requestDigest", item.digest), ("reason", item.reason)] {
+            try PromptText.validateField(field, name: name)
+        }
+        guard ["question", "approval"].contains(item.consumer),
+              SigningFieldPolicy.validGateId(item.gateId, consumer: item.consumer),
+              SigningFieldPolicy.validRequestDigest(item.digest, consumer: item.consumer) else {
+            throw SignerFailure(.rhizomeReadFailed, "Rhizome returned invalid attestation identifiers")
+        }
+    }
+}
+
+func rhizomeDiagnostic(_ prefix: String, detail: String?) -> String {
+    guard let detail, !detail.isEmpty else { return prefix }
+    let escaped = detail.unicodeScalars.prefix(1024).map { scalar -> String in
+        let code = scalar.value
+        if code <= 0x1f || (0x7f...0x9f).contains(code) { return String(format: "\\u{%04X}", code) }
+        return String(scalar)
+    }.joined()
+    return "\(prefix): \(escaped)"
 }
 
 public enum JSONCoding {

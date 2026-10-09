@@ -137,7 +137,7 @@ public enum DecisionPolicy {
     }
 
     public static func requireReason(decision: String, reason: String) throws {
-        if (decision == "reject" || decision == "requestChanges") && reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if (decision == "reject" || decision == "deny" || decision == "requestChanges") && reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw SignerFailure(.notSignable, "this decision requires a reason")
         }
     }
@@ -146,40 +146,88 @@ public enum DecisionPolicy {
 public enum PromptText {
     public static let maximumCharacters = 600
 
-    public static func decision(consumer: String, gateId: String, title: String, decision: String, reason: String, requestDigest: String) throws -> String {
-        let value = "\(consumer) \(gateId)\n\(title)\n\(decision): \(reason)\n\(requestDigest)"
-        guard value.count <= maximumCharacters else {
-            throw SignerFailure(.refused, "signing prompt exceeds 600 characters")
+    public static func validateField(_ value: String, name: String) throws {
+        for scalar in value.unicodeScalars {
+            let code = scalar.value
+            if code <= 0x1f || (0x7f...0x9f).contains(code) ||
+                (0x200b...0x200f).contains(code) ||
+                (0x2028...0x202e).contains(code) ||
+                (0x2060...0x2069).contains(code) || code == 0xfeff {
+                throw SignerFailure(.refused, "unsafe character in \(name)")
+            }
         }
+    }
+
+    public static func requireWithinLimit(_ value: String) throws {
+        guard value.unicodeScalars.count <= maximumCharacters else {
+            throw SignerFailure(.refused, "signing prompt exceeds 600 unicode scalars")
+        }
+    }
+
+    public static func decision(consumer: String, gateId: String, title: String, decision: String, reason: String, requestDigest: String) throws -> String {
+        for (name, field) in [("consumer", consumer), ("gateId", gateId), ("title", title), ("reason", reason), ("requestDigest", requestDigest)] {
+            try validateField(field, name: name)
+        }
+        let value = "\(consumer) \(gateId)\n\(title)\n\(decision): \(reason)\n\(requestDigest)"
+        guard value.split(separator: "\n", omittingEmptySubsequences: false).count == 4 else {
+            throw SignerFailure(.refused, "invalid decision prompt line count")
+        }
+        try requireWithinLimit(value)
         return value
     }
 
-    public static func attest(count: Int, manifestDigest: String) -> String {
-        "사후 확인 \(count)건\n\(manifestDigest)"
+    public static func attest(count: Int, manifestDigest: String) throws -> String {
+        try validateField(manifestDigest, name: "manifestDigest")
+        let value = "사후 확인 \(count)건\n\(manifestDigest)"
+        guard value.split(separator: "\n", omittingEmptySubsequences: false).count == 2 else {
+            throw SignerFailure(.refused, "invalid attestation prompt line count")
+        }
+        try requireWithinLimit(value)
+        return value
+    }
+}
+
+public enum SigningFieldPolicy {
+    private static let lowerHex = Set("0123456789abcdef")
+
+    public static func validGateId(_ value: String, consumer: String? = nil) -> Bool {
+        let prefix: String
+        switch consumer {
+        case "question": prefix = "q-"
+        case "approval": prefix = "appr-"
+        case nil:
+            return validGateId(value, consumer: "question") || validGateId(value, consumer: "approval")
+        default:
+            return false
+        }
+        guard value.hasPrefix(prefix) else { return false }
+        let suffix = value.dropFirst(prefix.count)
+        return suffix.count == 24 && suffix.allSatisfy { lowerHex.contains($0) }
+    }
+
+    public static func validRequestDigest(_ value: String, consumer: String) -> Bool {
+        switch consumer {
+        case "question":
+            let prefixes = ["rhz-question-v1:", "rhz-question-v2:"]
+            guard let prefix = prefixes.first(where: value.hasPrefix) else { return false }
+            let suffix = value.dropFirst(prefix.count)
+            return suffix.count == 64 && suffix.allSatisfy { lowerHex.contains($0) }
+        case "approval":
+            let prefix = "hx-args-digest-v1:"
+            return value.hasPrefix(prefix) && value.count > prefix.count
+        default:
+            return false
+        }
     }
 }
 
 public enum AttestationPolicy {
     public static let maximumItems = 256
 
-    public static func select(_ items: [AttestItem], gateIds: [String]? = nil) throws -> (items: [AttestItem], total: Int) {
+    public static func select(_ items: [AttestItem]) -> (items: [AttestItem], total: Int) {
         let sorted = items.sorted {
             if $0.decisionSequence != $1.decisionSequence { return $0.decisionSequence < $1.decisionSequence }
             return $0.gateId < $1.gateId
-        }
-        if let gateIds {
-            guard !gateIds.isEmpty, gateIds.count <= maximumItems else {
-                throw SignerFailure(.refused, "attest selection must contain 1...256 gates")
-            }
-            let wanted = Set(gateIds)
-            guard wanted.count == gateIds.count else {
-                throw SignerFailure(.refused, "duplicate attest gate")
-            }
-            let selected = sorted.filter { wanted.contains($0.gateId) }
-            guard selected.count == wanted.count else {
-                throw SignerFailure(.notSignable, "attest gate is not available")
-            }
-            return (selected, selected.count)
         }
         return (Array(sorted.prefix(maximumItems)), sorted.count)
     }
@@ -189,7 +237,7 @@ public enum AttestationPolicy {
             throw SignerFailure(.refused, "-expect is required")
         }
         guard expected == actual else {
-            throw SignerFailure(.refused, "manifest changed")
+            throw SignerFailure(.refused, "manifest changed; recomputed digest: \(actual)")
         }
     }
 }

@@ -5,6 +5,10 @@ import SignerCore
 
 private let journalId = "00112233445566778899aabbccddeeff"
 private let vectorKeyId = "sha256:06e3fd8fda29bb60ab59557de61edb0aecdb231134be30e75b455f8e1b792fa9"
+private let questionGateId = "q-92caa77d4e8cb1f9a861ff35"
+private let questionDigest = "rhz-question-v2:92caa77d4e8cb1f9a861ff35a08c42ea7cc48b20fdbacb911cbf8580adafeb61"
+private let approvalGateId = "appr-111111111111111111111111"
+private let approvalDigest = "hx-args-digest-v1:opaque-vector"
 
 private struct AssertionFailure: Error, CustomStringConvertible {
     let message: String
@@ -73,13 +77,13 @@ private func decisionEngineSignsOnceAndBuildsExactSpawnAndIntentShapes() throws 
     let backend = SoftwareP256Backend()
     let material = try backend.createKey(verificationPrompt: "ignored")
     try store.writeNewKey(material.representation)
-    let input = SigningInput(journalId: journalId, consumer: "approval", gateId: "appr-vector", title: "Deploy", requestDigest: "hx-args-digest-v1:vector", state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
+    let input = SigningInput(journalId: journalId, consumer: "approval", gateId: approvalGateId, title: "Deploy", requestDigest: approvalDigest, state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
     let client = FixedRhizomeClient(input: input)
     let instant = TimeFormat.parse("2026-10-09T00:00:00Z")!
     let engine = SignerEngine(backend: backend, store: store, client: client, now: { instant }, nonce: { "000102030405060708090a0b0c0d0e0f" })
     let result = try engine.signDecision(gateId: input.gateId, requested: "gate.approve", reason: "reviewed", correlationId: "cockpit:vector")
 
-    try expect(backend.signPrompts == ["approval appr-vector\nDeploy\nallow: reviewed\nhx-args-digest-v1:vector"])
+    try expect(backend.signPrompts == ["approval \(approvalGateId)\nDeploy\nallow: reviewed\n\(approvalDigest)"])
     let spawn = try JSONSerialization.jsonObject(with: result.spawn) as! [String: Any]
     let intent = try JSONSerialization.jsonObject(with: result.intent) as! [String: Any]
     try expect(Set(spawn.keys) == ["digest", "decision", "reason", "keyId", "signature"])
@@ -117,10 +121,37 @@ private func decisionMappingAndNotSignableCases() throws {
 private func promptTextAndLimit() throws {
     let prompt = try PromptText.decision(consumer: "question", gateId: "q-1", title: "제목", decision: "reject", reason: "이유", requestDigest: "sha256:abc")
     try expect(prompt == "question q-1\n제목\nreject: 이유\nsha256:abc")
-    let fixed = "question q-1\nt\napprove: \nsha256:x"
-    let fittingReason = String(repeating: "a", count: 600 - fixed.count)
-    try expect(try PromptText.decision(consumer: "question", gateId: "q-1", title: "t", decision: "approve", reason: fittingReason, requestDigest: "sha256:x").count == 600)
+    let fixed = "question q-1\nt\napprove: \nsha256:x".unicodeScalars.count
+    let fittingReason = String(repeating: "a", count: 600 - fixed)
+    try expect(try PromptText.decision(consumer: "question", gateId: "q-1", title: "t", decision: "approve", reason: fittingReason, requestDigest: "sha256:x").unicodeScalars.count == 600)
     try expectExit(.refused) { try PromptText.decision(consumer: "question", gateId: "q-1", title: "t", decision: "approve", reason: fittingReason + "a", requestDigest: "sha256:x") }
+
+    let combining = "a" + String(repeating: "\u{0301}", count: 600)
+    try expect(combining.count == 1)
+    try expectExit(.refused) { try PromptText.decision(consumer: "question", gateId: "q-1", title: "t", decision: "approve", reason: combining, requestDigest: "sha256:x") }
+}
+
+private func promptSanitizationRefusesEveryClassAndField() throws {
+    let unsafe = ["\r", "\n", "\u{0085}", "\u{0001}", "\u{007f}", "\u{2028}", "\u{2029}", "\u{202d}", "\u{2067}", "\u{200b}", "\u{200e}", "\u{feff}", "\u{2062}"]
+    for scalar in unsafe {
+        try expectExit(.refused) {
+            try PromptText.decision(consumer: "question", gateId: "q-1", title: "title", decision: "approve", reason: "bad\(scalar)value", requestDigest: "sha256:x")
+        }
+    }
+    let fields = [
+        ("question\u{200b}", "q-1", "title", "reason", "sha256:x"),
+        ("question", "q-1\u{200b}", "title", "reason", "sha256:x"),
+        ("question", "q-1", "title\u{200b}", "reason", "sha256:x"),
+        ("question", "q-1", "title", "reason\u{200b}", "sha256:x"),
+        ("question", "q-1", "title", "reason", "sha256:x\u{200b}"),
+    ]
+    for field in fields {
+        try expectExit(.refused) {
+            try PromptText.decision(consumer: field.0, gateId: field.1, title: field.2, decision: "approve", reason: field.3, requestDigest: field.4)
+        }
+    }
+    try expectExit(.refused) { try PromptText.attest(count: 1, manifestDigest: "sha256:x\u{202e}") }
+    try expect(try PromptText.attest(count: 1, manifestDigest: "sha256:x").split(separator: "\n", omittingEmptySubsequences: false).count == 2)
 }
 
 private func logDoesNotContainReasonOrTitleAndRateLimitPersists() throws {
@@ -174,17 +205,148 @@ private func loopbackURLRedirectAndProxyPolicy() throws {
 
 private func expectMissingAndMismatch() throws {
     try expectExit(.refused) { try AttestationPolicy.requireExpected(nil, actual: "sha256:a") }
-    try expectExit(.refused, message: "manifest changed") { try AttestationPolicy.requireExpected("sha256:a", actual: "sha256:b") }
+    try expectExit(.refused, message: "manifest changed; recomputed digest: sha256:b") { try AttestationPolicy.requireExpected("sha256:a", actual: "sha256:b") }
     try AttestationPolicy.requireExpected("sha256:a", actual: "sha256:a")
 }
 
 private func items257TruncateToFirst256BySequence() throws {
     let items = (1...257).reversed().map { AttestItem(consumer: "question", gateId: "q-\($0)", decisionSequence: UInt64($0), digest: "d-\($0)", decision: "approve", reason: "") }
-    let selection = try AttestationPolicy.select(items)
+    let selection = AttestationPolicy.select(items)
     try expect(selection.total == 257)
     try expect(selection.items.count == 256)
     try expect(selection.items.first?.decisionSequence == 1)
     try expect(selection.items.last?.decisionSequence == 256)
+}
+
+private func spawnInputEndToEndStrictJSONPath() throws {
+    let data = Data("{\"gateId\":\"\(questionGateId)\",\"kind\":\"gate.approve\",\"reason\":\"reviewed\",\"correlationId\":\"corr-1\"}".utf8)
+    let input = try CommandLineDriver.spawnInput(data)
+    try expect(input.gateId == questionGateId)
+    try expect(input.kind == "gate.approve")
+    try expect(input.reason == "reviewed")
+    try expect(input.correlationId == "corr-1")
+    try expectExit(.refused) { try CommandLineDriver.spawnInput(Data("{\"gateId\":\"x\",\"kind\":\"k\",\"reason\":\"r\",\"correlationId\":\"c\",\"extra\":1}".utf8)) }
+    try expectExit(.refused) { try CommandLineDriver.spawnInput(Data("{\"gateId\":1,\"kind\":\"k\",\"reason\":\"r\",\"correlationId\":\"c\"}".utf8)) }
+    try expectExit(.refused) { try CommandLineDriver.spawnInput(Data("{}{}".utf8)) }
+}
+
+private func strictDecoderStatusAndIntegerTypes() throws {
+    let chainValid = Data("{\"consumer\":\"question\",\"gateId\":\"\(questionGateId)\",\"title\":\"t\",\"requestDigest\":\"\(questionDigest)\",\"state\":\"pending\",\"verificationStatus\":\"chain-valid\"}".utf8)
+    let decoded = try StrictJSON.signingInput(chainValid)
+    try expect(decoded.verificationStatus == "chain-valid")
+    try expect(decoded.journalId == nil)
+
+    for invalidNumber in ["true", "1.0", "1.5"] {
+        let data = Data("{\"journalId\":\"\(journalId)\",\"consumer\":\"question\",\"gateId\":\"\(questionGateId)\",\"title\":\"t\",\"requestDigest\":\"\(questionDigest)\",\"state\":\"approved\",\"verificationStatus\":\"none\",\"decisionSequence\":\(invalidNumber),\"decision\":\"approve\",\"reason\":\"\"}".utf8)
+        try expectExit(.rhizomeReadFailed) { try StrictJSON.signingInput(data) }
+    }
+    let integer = Data("{\"journalId\":\"\(journalId)\",\"consumer\":\"question\",\"gateId\":\"\(questionGateId)\",\"title\":\"t\",\"requestDigest\":\"\(questionDigest)\",\"state\":\"approved\",\"verificationStatus\":\"none\",\"decisionSequence\":1,\"decision\":\"approve\",\"reason\":\"\"}".utf8)
+    try expect(try StrictJSON.signingInput(integer).decisionSequence == 1)
+}
+
+private func engineNotSignableAndAnchorlessCases() throws {
+    let root = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = SignerStore(directory: root.appendingPathComponent("data"))
+    let backend = SoftwareP256Backend()
+    let material = try backend.createKey(verificationPrompt: "ignored")
+    try store.writeNewKey(material.representation)
+
+    let approval = SigningInput(journalId: journalId, consumer: "approval", gateId: approvalGateId, title: "Deploy", requestDigest: approvalDigest, state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
+    let approvalEngine = SignerEngine(backend: backend, store: store, client: FixedRhizomeClient(input: approval))
+    try expectExit(.notSignable) { try approvalEngine.signDecision(gateId: approvalGateId, requested: "requestChanges", reason: "revise") }
+    try expectExit(.notSignable) { try approvalEngine.signDecision(gateId: approvalGateId, requested: "reject", reason: "") }
+
+    let question = SigningInput(journalId: journalId, consumer: "question", gateId: questionGateId, title: "Review", requestDigest: questionDigest, state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
+    let questionEngine = SignerEngine(backend: backend, store: store, client: FixedRhizomeClient(input: question))
+    try expectExit(.notSignable) { try questionEngine.signDecision(gateId: questionGateId, requested: "reject", reason: "") }
+
+    let anchorless = SigningInput(journalId: nil, consumer: "question", gateId: questionGateId, title: "Review", requestDigest: questionDigest, state: "pending", verificationStatus: "chain-valid", decisionSequence: nil, decision: nil, reason: nil)
+    let anchorlessEngine = SignerEngine(backend: backend, store: store, client: FixedRhizomeClient(input: anchorless))
+    try expectExit(.rhizomeReadFailed) { try anchorlessEngine.signDecision(gateId: questionGateId, requested: "approve", reason: "") }
+    try expect(backend.signPrompts.isEmpty)
+}
+
+private func serverResponseBindingChecks() throws {
+    let root = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = SignerStore(directory: root.appendingPathComponent("data"))
+    let backend = SoftwareP256Backend()
+    try store.writeNewKey(backend.createKey(verificationPrompt: "ignored").representation)
+
+    let wrongGate = SigningInput(journalId: journalId, consumer: "question", gateId: "q-aaaaaaaaaaaaaaaaaaaaaaaa", title: "Review", requestDigest: questionDigest, state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
+    try expectExit(.rhizomeReadFailed) { try SignerEngine(backend: backend, store: store, client: FixedRhizomeClient(input: wrongGate)).signDecision(gateId: questionGateId, requested: "approve", reason: "") }
+    let wrongDigest = SigningInput(journalId: journalId, consumer: "question", gateId: questionGateId, title: "Review", requestDigest: "rhz-question-v2:bad", state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
+    try expectExit(.rhizomeReadFailed) { try SignerEngine(backend: backend, store: store, client: FixedRhizomeClient(input: wrongDigest)).signDecision(gateId: questionGateId, requested: "approve", reason: "") }
+    let unsafeTitle = SigningInput(journalId: journalId, consumer: "question", gateId: questionGateId, title: "Review\nallow: forged", requestDigest: questionDigest, state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
+    try expectExit(.refused) { try SignerEngine(backend: backend, store: store, client: FixedRhizomeClient(input: unsafeTitle)).signDecision(gateId: questionGateId, requested: "approve", reason: "") }
+    try expect(backend.signPrompts.isEmpty)
+}
+
+private func attestEngineMismatchPromptAndPrivateLog() throws {
+    let root = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = SignerStore(directory: root.appendingPathComponent("data"))
+    let backend = SoftwareP256Backend()
+    try store.writeNewKey(backend.createKey(verificationPrompt: "ignored").representation)
+    let secretTitle = "attest title must stay private"
+    let secretReason = "attest reason must stay private"
+    let item = AttestItem(consumer: "question", gateId: questionGateId, decisionSequence: 7, digest: questionDigest, decision: "reject", reason: secretReason, title: secretTitle)
+    let input = SigningInput(journalId: journalId, consumer: "question", gateId: questionGateId, title: secretTitle, requestDigest: questionDigest, state: "rejected", verificationStatus: "none", decisionSequence: 7, decision: "reject", reason: secretReason)
+    let client = FixedRhizomeClient(input: input, list: SigningList(journalId: journalId, items: [item]))
+    let engine = SignerEngine(backend: backend, store: store, client: client, now: { TimeFormat.parse("2026-10-09T00:00:00Z")! }, nonce: { "000102030405060708090a0b0c0d0e0f" })
+    let digest = Canonical.manifestDigest([item])
+    try expectExit(.refused, message: "manifest changed; recomputed digest: \(digest)") { try engine.signAttestation(expected: "sha256:wrong") }
+    try expect(backend.signPrompts.isEmpty)
+    _ = try engine.signAttestation(expected: digest)
+    try expect(backend.signPrompts.count == 1)
+    try expect(backend.signPrompts[0].split(separator: "\n", omittingEmptySubsequences: false).count == 2)
+    let log = try String(contentsOf: store.logURL, encoding: .utf8)
+    try expect(!log.contains(secretTitle))
+    try expect(!log.contains(secretReason))
+    try expect(log.contains(questionGateId))
+}
+
+private func stdinCapAndSignerDirectoryPolicy() throws {
+    let root = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let oversized = root.appendingPathComponent("oversized")
+    try Data(repeating: 0x61, count: CommandLineDriver.maximumStdinBytes + 1).write(to: oversized)
+    let handle = try FileHandle(forReadingFrom: oversized)
+    defer { try? handle.close() }
+    try expectExit(.refused, message: "sign-stdin request exceeds 64 KiB") { try CommandLineDriver.readSignStdin(handle) }
+    try expectExit(.refused, message: "sign-stdin request exceeds 64 KiB") { try CommandLineDriver.run(arguments: ["sign-stdin"], stdin: Data(repeating: 0x61, count: CommandLineDriver.maximumStdinBytes + 1)) }
+
+    let custom = root.appendingPathComponent("custom")
+    let environment = ["SIGNER_DIR": custom.path]
+    try expect(SignerStore(environment: environment).directory.path == custom.path)
+    try expect(SignerStore(environment: environment, honorsEnvironment: false).directory.path == SignerStore.defaultDirectory.path)
+}
+
+private func storageRejectsUnsafeDirectoryAndKeySymlink() throws {
+    let root = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let wrongMode = root.appendingPathComponent("wrong-mode")
+    try FileManager.default.createDirectory(at: wrongMode, withIntermediateDirectories: false)
+    _ = chmod(wrongMode.path, 0o755)
+    try expectExit(.failure) { try SignerStore(directory: wrongMode).ensureDirectory() }
+
+    let directory = root.appendingPathComponent("safe")
+    let store = SignerStore(directory: directory)
+    try store.ensureDirectory()
+    let target = root.appendingPathComponent("target")
+    try Data("not a key".utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: store.keyURL, withDestinationURL: target)
+    try expectExit(.noKey) { try store.readKey() }
+}
+
+private func rejectionReasonIsSurfaced() throws {
+    let input = SigningInput(journalId: journalId, consumer: "question", gateId: questionGateId, title: "Review", requestDigest: questionDigest, state: "pending", verificationStatus: "none", decisionSequence: nil, decision: nil, reason: nil)
+    let client = FixedRhizomeClient(input: input, submitResponse: Data("{\"Accepted\":false,\"Reason\":\"stale manifest\"}".utf8))
+    let root = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let engine = SignerEngine(backend: SoftwareP256Backend(), store: SignerStore(directory: root.appendingPathComponent("data")), client: client)
+    try expectExit(.rhizomeReadFailed, message: "Rhizome refused intent: stale manifest") { try engine.submit(Data("{}".utf8)) }
 }
 
 private func vectorN1() -> [AttestItem] {
@@ -194,6 +356,7 @@ private func vectorN1() -> [AttestItem] {
 private func temporaryDirectory() -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("rhizome-signer-tests-\(UUID().uuidString)", isDirectory: true)
     try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    _ = chmod(url.path, 0o700)
     return url
 }
 
@@ -237,12 +400,18 @@ private final class SoftwareP256Backend: SigningBackend {
 
 private final class FixedRhizomeClient: RhizomeClientProtocol {
     let input: SigningInput
+    let list: SigningList
+    let submitResponse: Data
 
-    init(input: SigningInput) { self.input = input }
+    init(input: SigningInput, list: SigningList? = nil, submitResponse: Data = Data("{\"Accepted\":true}".utf8)) {
+        self.input = input
+        self.list = list ?? SigningList(journalId: input.journalId, items: [])
+        self.submitResponse = submitResponse
+    }
 
     func signingInput(gateId: String) throws -> SigningInput { input }
-    func unverifiedInputs() throws -> SigningList { SigningList(journalId: input.journalId, items: []) }
-    func submit(intent: Data) throws -> Data { Data("{\"Accepted\":true}".utf8) }
+    func unverifiedInputs() throws -> SigningList { list }
+    func submit(intent: Data) throws -> Data { submitResponse }
 }
 
 private let cases: [(String, () throws -> Void)] = [
@@ -254,12 +423,21 @@ private let cases: [(String, () throws -> Void)] = [
     ("keyIDAndAnchorAreGoCompatibleAndByteExact", keyIDAndAnchorAreGoCompatibleAndByteExact),
     ("decisionMappingAndNotSignableCases", decisionMappingAndNotSignableCases),
     ("promptTextAndLimit", promptTextAndLimit),
+    ("promptSanitizationRefusesEveryClassAndField", promptSanitizationRefusesEveryClassAndField),
     ("logDoesNotContainReasonOrTitleAndRateLimitPersists", logDoesNotContainReasonOrTitleAndRateLimitPersists),
     ("dataDirectoryAndReviewPermissions", dataDirectoryAndReviewPermissions),
     ("signStdinRejectsArguments", signStdinRejectsArguments),
     ("loopbackURLRedirectAndProxyPolicy", loopbackURLRedirectAndProxyPolicy),
     ("expectMissingAndMismatch", expectMissingAndMismatch),
     ("items257TruncateToFirst256BySequence", items257TruncateToFirst256BySequence),
+    ("spawnInputEndToEndStrictJSONPath", spawnInputEndToEndStrictJSONPath),
+    ("strictDecoderStatusAndIntegerTypes", strictDecoderStatusAndIntegerTypes),
+    ("engineNotSignableAndAnchorlessCases", engineNotSignableAndAnchorlessCases),
+    ("serverResponseBindingChecks", serverResponseBindingChecks),
+    ("attestEngineMismatchPromptAndPrivateLog", attestEngineMismatchPromptAndPrivateLog),
+    ("stdinCapAndSignerDirectoryPolicy", stdinCapAndSignerDirectoryPolicy),
+    ("storageRejectsUnsafeDirectoryAndKeySymlink", storageRejectsUnsafeDirectoryAndKeySymlink),
+    ("rejectionReasonIsSurfaced", rejectionReasonIsSurfaced),
 ]
 
 var passed = 0

@@ -13,11 +13,11 @@ swift build -c release
 
 From the repository root, the equivalent opt-in targets are `make signer` and `make signer-test`. They are intentionally not part of `make ci`, because the Go CI runners are not macOS hosts.
 
-The framework-free self-test executable runs all 14 cases with a protocol-conforming software P-256 signer. It never creates or accesses a Secure Enclave key and never displays a Touch ID prompt.
+The framework-free self-test executable uses a protocol-conforming software P-256 signer. It never creates or accesses a Secure Enclave key and never displays a Touch ID prompt.
 
 ## Data and network boundary
 
-The default data directory is `~/Library/Application Support/rhizome-signer`. Set `SIGNER_DIR` only when an isolated data directory is needed. The directory is mode `0700`; `key.sep`, `anchor.json`, and `requests.log` are mode `0600`.
+The default data directory is `~/Library/Application Support/rhizome-signer`. CLI commands honor `SIGNER_DIR` when an isolated data directory is needed; `sign-stdin` deliberately ignores it and always uses the fixed default directory. The directory must be owned by the current uid with mode `0700`; `key.sep`, `anchor.json`, and `requests.log` are mode `0600`.
 
 The spawn command always talks to the compile-time URL `http://127.0.0.1:8790`:
 
@@ -36,7 +36,6 @@ rhizome-signer key show [-anchor]
 rhizome-signer sign <gateId> <approve|reject|requestChanges|allow|deny> [-reason TEXT] [-submit] [-rhizome URL]
 rhizome-signer attest -list -out FILE [-rhizome URL]
 rhizome-signer attest -all -expect sha256:... [-rhizome URL]
-rhizome-signer attest <gateId>... -expect sha256:... [-rhizome URL]
 rhizome-signer key add <pub.der> -principal H [-submit] [-rhizome URL]
 rhizome-signer key revoke <keyId> -reason TEXT [-submit] [-rhizome URL]
 ```
@@ -45,4 +44,4 @@ rhizome-signer key revoke <keyId> -reason TEXT [-submit] [-rhizome URL]
 
 Exit codes are `0` success, `2` refusal/rate limit/usage, `3` Rhizome read or submit failure, `4` authentication cancellation, `5` missing key, and `6` a decision or gate that is not signable.
 
-Install the release binary as a root-owned, non-writable executable only after independently checking its SHA-256. The release binary hash is per-build and is not deterministic, so verify the exact artifact being installed rather than comparing it with a hash from another build. Key creation and every real signing command must be run by the human operator from a GUI login session, never by an agent or unattended process.
+Install the release binary as a root-owned, non-writable executable only after independently checking its SHA-256. The release binary hash is per-build and is not deterministic, so verify the exact artifact being installed rather than comparing it with a hash from another build. The human must be present at the prompt; the spawning caller (the adapter) may be automated.
