@@ -167,12 +167,13 @@ describe('FR-RHZ-133 approval provenance adapter round', () => {
     expect(nodesOf(adaptWithReport({ revision: 1, body: raw }).envelope).map((n) => n.id)).toEqual([WORKSPACE_NODE_ID]);
   });
 
-  it('A4b: superseded and verified gates drop; unknown status is retained with attention', () => {
+  it('A4b: superseded, verified, and attested gates drop; unknown status is retained with attention', () => {
     const raw = bodyOf(
       [
         gate('superseded', { superseded: true }),
         gate('unknown', { verification: { status: 'future-status' } }),
         gate('verified', { verification: { status: 'verified', assurance: 'key', keyId: `sha256:${'c'.repeat(64)}` } }),
+        gate('attested', { verification: { status: 'attested', assurance: 'key', keyId: `sha256:${'d'.repeat(64)}` } }),
       ],
       {
         attention: [

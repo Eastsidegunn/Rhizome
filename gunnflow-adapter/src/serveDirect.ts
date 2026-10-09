@@ -32,6 +32,7 @@ import {
 import { detailItems, fetchContextNotes, noteQueryFor, withNotes, type WireDetailBody } from './details.js';
 import { executionForWire } from './execution.js';
 import { createRhizomeUpstream, nodesOf } from './upstream.js';
+import type { SigningOptions } from './signing.js';
 
 /** The direct wire's fixed paths and header (WIRE.md). */
 const WIRE = DIRECT_WIRE;
@@ -72,9 +73,13 @@ export async function startRhizomeDirectServer(options: {
   rhizomeUrl: string;
   port?: number;
   host?: string;
+  /** Defaults to RHIZOME_SIGNING; OS seams are injectable for startup tests. */
+  signing?: SigningOptions;
 }): Promise<RhizomeDirectServer> {
   // Reshapes Rhizome's /v1/workspace (+ SSE) into contract NodeProjection[].
-  const upstream = await createRhizomeUpstream(options.rhizomeUrl);
+  const upstream = await createRhizomeUpstream(options.rhizomeUrl, {
+    signing: { ...options.signing, mode: options.signing?.mode ?? process.env.RHIZOME_SIGNING },
+  });
   const snapshot = (): DirectSnapshot => {
     const e = upstream.snapshot();
     return { revision: e.revision, nodes: nodesOf(e) };
@@ -222,7 +227,10 @@ const runDirectly = process.argv[1] !== undefined && import.meta.url === pathToF
 if (runDirectly) {
   const rhizomeUrl = process.env.RHIZOME_URL ?? 'http://127.0.0.1:8790';
   const port = Number(process.env.PORT ?? 8792);
-  void startRhizomeDirectServer({ rhizomeUrl, port }).then((s) =>
-    console.log(`rhizome direct-wire server  ${s.url}  →  ${rhizomeUrl}`),
-  );
+  void startRhizomeDirectServer({ rhizomeUrl, port })
+    .then((s) => console.log(`rhizome direct-wire server  ${s.url}  →  ${rhizomeUrl}`))
+    .catch((error: unknown) => {
+      console.error((error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, ' '));
+      process.exitCode = 1;
+    });
 }

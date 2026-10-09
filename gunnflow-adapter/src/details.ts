@@ -86,8 +86,8 @@ const text = (label: string, value: unknown): DetailItem[] =>
 /** Exact display vocabulary for the additive provenance DTO. */
 const verificationText = (verification: unknown): string => {
   if (!isGateVerification(verification)) return 'unverified';
-  if (verification.status === 'verified') {
-    return `verified (key)${verification.keyRevokedNow ? ' · 키 폐기됨' : ''}`;
+  if (verification.status === 'verified' || verification.status === 'attested') {
+    return `${verification.status} (key)${verification.keyRevokedNow ? ' · 키 폐기됨' : ''}`;
   }
   const base =
     verification.status === 'claimed' && (verification.claimKind === 'relayed' || verification.claimKind === 'session-direct')
@@ -95,6 +95,27 @@ const verificationText = (verification: unknown): string => {
       : verification.status;
   return base;
 };
+
+const KEY_ID_RE = /^sha256:[0-9a-f]{64}$/;
+
+/** `label=full-key-id`, comma separated. Malformed entries never label a key. */
+export function signerLabels(value: string | undefined = process.env.RHIZOME_SIGNER_LABEL): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  for (const entry of value?.split(',') ?? []) {
+    const equals = entry.indexOf('=');
+    if (equals <= 0) continue;
+    const label = entry.slice(0, equals).trim();
+    const keyId = entry.slice(equals + 1).trim();
+    if (label !== '' && KEY_ID_RE.test(keyId) && !labels.has(keyId)) labels.set(keyId, label);
+  }
+  return labels;
+}
+
+function keyDisplay(keyId: string, labels: ReadonlyMap<string, string>): string {
+  const key = `key ${keyId.slice(7, 15)}`;
+  const label = labels.get(keyId);
+  return label ? `${label} · ${key}` : key;
+}
 
 /**
  * The detail of one node, or undefined when the node has none (the 404 path).
@@ -152,6 +173,10 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
     const parsedBody = typeof gate.body === 'string' ? parseGateBodySections(gate.body) : undefined;
     const structuredBody = parsedBody && parsedBody.sections.length > 0;
     const hasStructuredRecommendation = parsedBody?.sections.some(({ label }) => label === '권고') ?? false;
+    const validVerification = isGateVerification(gate.verification) ? gate.verification : undefined;
+    const labels = signerLabels();
+    const verified = validVerification?.status === 'verified' ? validVerification : undefined;
+    const attested = validVerification?.status === 'attested' ? validVerification : undefined;
     return [
       ...(structuredBody
         ? [
@@ -163,7 +188,9 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
       ...(hasApprovalStatus ? [{ label: '승인 상태', text: verificationText(gate.verification) }] : []),
       ...(hasApprovalStatus ? text('결정 시각', gate.decidedAt) : []),
       ...(hasDecision ? text('decision', gate.decisionReason) : []),
-      ...text('decidedBy', gate.decidedBy),
+      ...(verified ? [{ label: 'decidedBy', text: keyDisplay(verified.keyId!, labels) }] : text('decidedBy', gate.decidedBy)),
+      ...(verified ? text('submittedBy', gate.decidedBy) : []),
+      ...(attested ? [{ label: 'attested by', text: keyDisplay(attested.keyId!, labels) }] : []),
       ...text('digest', gate.requestDigest),
     ];
   }

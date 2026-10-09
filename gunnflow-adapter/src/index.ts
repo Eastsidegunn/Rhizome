@@ -15,6 +15,18 @@ export { adaptEnvelope, adaptWithReport, contractRefusal, nodesOf } from './upst
 export type { RhizomeIntegrationReport } from './nodes.js';
 export { SseDecoder } from './upstream.js';
 export { detailOf, detailItems } from './details.js';
+export { signerLabels } from './details.js';
+export {
+  checkSignerStartup,
+  DEFAULT_SIGNER_PATH,
+  prepareSigner,
+  SIGNER_REFUSAL,
+  SIGNER_STDOUT_MAX_BYTES,
+  SIGNER_TIMEOUT_MS,
+  SignerClient,
+  signingMode,
+} from './signing.js';
+export type { SignRequest, SignResponse, SignResult, SigningMode, SigningOptions, SpawnedSigner, SpawnSigner } from './signing.js';
 export { GATE_BODY_LABELS, parseGateBodySections, stripMarkdown } from './gateBody.js';
 export { executionForWire, executionTaskProblem, projectExecution } from './execution.js';
 export type { RhizomeExecBody, RhizomeExecEvent, RhizomeExecSession } from './execution.js';
@@ -33,4 +45,6 @@ const DEFAULT_URL = 'http://127.0.0.1:8790';
 export const contractVersion = '0.4.0';
 
 /** Entry the BFF composition root loads by module name. */
-export const createUpstream: UpstreamFactory = (options) => createRhizomeUpstream(options.url ?? DEFAULT_URL);
+export const createUpstream: UpstreamFactory = (options) => createRhizomeUpstream(options.url ?? DEFAULT_URL, {
+  signing: { mode: process.env.RHIZOME_SIGNING },
+});

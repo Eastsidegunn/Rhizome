@@ -25,6 +25,7 @@ import { lookupCapability, validateIntent, type Intent, type NodeProjection } fr
 import { adaptWorkspaceBody } from './workspaceWire.js';
 import { projectRhizomeNodes, type RhizomeIntegrationReport } from './nodes.js';
 import type { RhizomeExecBody, RhizomeExecSession } from './execution.js';
+import { prepareSigner, SIGNER_REFUSAL, type SigningOptions } from './signing.js';
 
 const RECONNECT_MS = 2000;
 /** RHZ-095 (FR-RHZ-122): the timer pair the execFeed idle TTL runs on (the real clock unless a test injects one). */
@@ -111,6 +112,21 @@ export function snapshotDigest(wire: UpstreamProjectionEnvelope, gateId: unknown
   return typeof gate?.requestDigest === 'string' && gate.requestDigest !== '' ? gate.requestDigest : undefined;
 }
 
+/** The gate consumer is a property of Rhizome's raw snapshot, not the cockpit projection. */
+export function snapshotGateConsumer(wire: UpstreamProjectionEnvelope, gateId: unknown): 'question' | 'approval' | undefined {
+  if (typeof gateId !== 'string') return undefined;
+  const gates = (wire.body as { gates?: Array<{ id?: unknown; source?: unknown }> }).gates ?? [];
+  const gate = gates.find((g) => g.id === gateId);
+  return gate === undefined ? undefined : gate.source === 'internal' ? 'question' : 'approval';
+}
+
+/** Rhizome records trimmed reason, falling back to trimmed instruction when reason is empty. */
+export function effectiveReason(fields: Record<string, unknown>): string {
+  const reason = typeof fields.reason === 'string' ? fields.reason.trim() : '';
+  if (reason !== '') return reason;
+  return typeof fields.instruction === 'string' ? fields.instruction.trim() : '';
+}
+
 /** Rhizome names the human's text by intent kind: `name` for missions, `instruction` for directions. */
 const TEXT_FIELD: Record<string, string> = {
   'mission.create': 'name',
@@ -155,6 +171,8 @@ export async function createRhizomeUpstream(
     execFeedIdleMs?: number;
     /** RHZ-095 (FR-RHZ-122): the clock the idle TTL runs on; default the real timers (unref'd). Injectable for tests. */
     timers?: IdleTimers;
+    /** RHZ-117: required/off signing mode and its injectable OS seams. Omitted means off. */
+    signing?: SigningOptions;
   } = {},
 ): Promise<
   WorkspaceUpstream & {
@@ -171,6 +189,9 @@ export async function createRhizomeUpstream(
     subscribeExecutionBody(taskId: string, listener: (body: RhizomeExecBody) => void): () => void;
   }
 > {
+  // In required mode this completes the executable/parent/key checks before
+  // any upstream connection (and, for serveDirect, before listen()).
+  const signer = await prepareSigner(options.signing);
   const listeners = new Set<(p: UpstreamProjectionEnvelope) => void>();
   const mediaTypes = new Map<string, string>(); // blob id → served Content-Type
   const inflight = new Set<string>();
@@ -427,6 +448,31 @@ export async function createRhizomeUpstream(
         const digest = snapshotDigest(lastWire, rest.gateId);
         if (digest === undefined) return { accepted: false, reason: DIGEST_UNAVAILABLE };
         fields.digest = digest;
+
+        if (signer) {
+          const consumer = snapshotGateConsumer(lastWire, rest.gateId);
+          // approval.requestChanges is an instruction, not a decision. It stays
+          // on the byte-identical unsigned path (and keeps `instruction`).
+          if (!(consumer === 'approval' && kind === 'gate.requestChanges')) {
+            const gateId = rest.gateId as string;
+            const reason = effectiveReason(fields);
+            const idempotencyKey = (intent as { idempotencyKey: string }).idempotencyKey;
+            const signed = await signer.sign({
+              gateId,
+              kind,
+              reason,
+              correlationId: `cockpit:${idempotencyKey}`,
+            });
+            if (!signed.ok) return { accepted: false, reason: signed.reason };
+            if (signed.response.digest !== digest) {
+              return { accepted: false, reason: SIGNER_REFUSAL.digestMismatch };
+            }
+            if (kind === 'gate.requestChanges') delete fields.instruction;
+            fields.reason = signed.response.reason;
+            fields.verification = { signature: signed.response.signature };
+            actor = 'signer';
+          }
+        }
       }
       const res = await fetch(`${baseUrl}/v1/intent`, {
         method: 'POST',

@@ -226,7 +226,7 @@ export function isGateVerification(value: unknown): value is GateVerification {
   if (v.assurance !== undefined && typeof v.assurance !== 'string') return false;
   if (v.keyId !== undefined && typeof v.keyId !== 'string') return false;
   if (v.keyRevokedNow !== undefined && typeof v.keyRevokedNow !== 'boolean') return false;
-  if (v.status === 'verified') {
+  if (v.status === 'verified' || v.status === 'attested') {
     return v.claimKind === undefined && v.assurance === 'key' &&
       typeof v.keyId === 'string' && /^sha256:[0-9a-f]{64}$/.test(v.keyId);
   }
@@ -236,7 +236,7 @@ export function isGateVerification(value: unknown): value is GateVerification {
 /**
  * A terminal decision stays visible only when provenance is absent
  * (unverified), malformed, legacy asserted, or unknown. Only a valid claimed
- * or verified status clears approval_unverified.
+ * verified, or attested status clears approval_unverified.
  */
 export function isUnverifiedDecidedGate(gate: {
   state?: string;
@@ -245,7 +245,7 @@ export function isUnverifiedDecidedGate(gate: {
 }): boolean {
   if (gate.superseded || !DECIDED_GATE_STATES.has((gate.state ?? '') as GateProjection['state'])) return false;
   if (!isGateVerification(gate.verification)) return true;
-  return gate.verification.status !== 'claimed' && gate.verification.status !== 'verified';
+  return gate.verification.status !== 'claimed' && gate.verification.status !== 'verified' && gate.verification.status !== 'attested';
 }
 
 /**
