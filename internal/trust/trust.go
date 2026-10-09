@@ -936,8 +936,12 @@ func (v *Verifier) Attestations(prefix events.View) (map[string]Attestation, err
 	if v.mode == modeAnchorless {
 		return out, nil
 	}
+	manifests := prefix.List(AttestAggregateType, AttestAggregateID)
+	if len(manifests) == 0 {
+		return out, nil
+	}
 	prior := []events.Event{}
-	for _, event := range prefix.List(AttestAggregateType, AttestAggregateID) {
+	for _, event := range manifests {
 		payload, err := v.validateAttest(attestPrefixView{View: prefix, manifests: prior}, event, nil)
 		if err != nil {
 			return nil, err

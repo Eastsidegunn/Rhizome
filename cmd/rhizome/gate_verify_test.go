@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -327,13 +328,13 @@ func TestGateVerifyAttestedExit3FRRHZ167(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"anchored", []string{"-journal", journalPath, "-trust-anchor", anchorPath, q.ID}, "status=attested\nassurance=key\nkeyId=" + keyID + "\nkeyRevokedNow=false\nanchor=matched\n"},
-		{"unanchored cap", []string{"-journal", journalPath, q.ID}, "status=chain-valid\nassurance=key\nkeyId=" + keyID + "\nkeyRevokedNow=false\nanchor=absent\n"},
+		{"anchored", []string{"-journal", journalPath, "-trust-anchor", anchorPath, q.ID}, fmt.Sprintf("gate=%s\nconsumer=question\ndecision=approve\nrequestDigest=%s\ndigestVersion=v2\nstatus=attested\nassurance=key\nkeyId=%s\nkeyRevokedNow=false\nanchor=matched\n", q.ID, q.Digest, keyID)},
+		{"unanchored cap", []string{"-journal", journalPath, q.ID}, fmt.Sprintf("gate=%s\nconsumer=question\ndecision=approve\nrequestDigest=%s\ndigestVersion=v2\nstatus=chain-valid\nassurance=key\nkeyId=%s\nkeyRevokedNow=false\nanchor=absent\n", q.ID, q.Digest, keyID)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := gateVerify(tc.args, &stdout, &stderr); code != 3 || stderr.Len() != 0 || !strings.Contains(stdout.String(), tc.want) {
-				t.Fatalf("exit/status stdout=%q stderr=%q", stdout.String(), stderr.String())
+			if code := gateVerify(tc.args, &stdout, &stderr); code != 3 || stderr.Len() != 0 || stdout.String() != tc.want {
+				t.Fatalf("exit=%d stdout=%q want=%q stderr=%q", code, stdout.String(), tc.want, stderr.String())
 			}
 		})
 	}

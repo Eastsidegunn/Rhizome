@@ -97,6 +97,16 @@ func event164(f fixture164, items []attest.Item, sig trust.Signature, revision u
 	return events.Event{Sequence: uint64(len(f.store.All()) + 1), AggregateType: trust.AttestAggregateType, AggregateID: trust.AttestAggregateID, Revision: revision, Type: trust.AttestRecordedType, Payload: payload}
 }
 
+type countingView164 struct {
+	events.View
+	calls map[string]int
+}
+
+func (v *countingView164) List(aggregateType, aggregateID string) []events.Event {
+	v.calls[aggregateType+"/"+aggregateID]++
+	return v.View.List(aggregateType, aggregateID)
+}
+
 func revokeRoot164(t *testing.T, f fixture164) {
 	t.Helper()
 	signedAt, nonce := time.Now().UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z"), "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -223,6 +233,44 @@ func TestAttestVA2ExactKeysVocabularyAndVA3TerminalFRRHZ164(t *testing.T) {
 	if err := f.verifier.CheckAppend(f.store, event, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "payload") {
 		t.Fatalf("signature casing err=%v", err)
 	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"item case variant", func(item map[string]any) {
+			item["gateID"] = item["GateID"]
+			delete(item, "GateID")
+		}},
+		{"item extra key", func(item map[string]any) {
+			item["Extra"] = true
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rawEvent := event164(f, valid, f.signature(valid, "", "48484848484848484848484848484848"), 1)
+			var rawPayload map[string]any
+			if err := json.Unmarshal(rawEvent.Payload, &rawPayload); err != nil {
+				t.Fatal(err)
+			}
+			rawItems := rawPayload["Items"].([]any)
+			tc.mutate(rawItems[0].(map[string]any))
+			rawEvent.Payload, _ = json.Marshal(rawPayload)
+			if err := f.verifier.CheckAppend(f.store, rawEvent, time.Now().UTC()); err == nil || err.Error() != "invalid attest payload" {
+				t.Fatalf("err=%v, want invalid attest payload", err)
+			}
+		})
+	}
+}
+
+func TestAttestationsEmptyLogSkipsTrustReplayFRRHZ164(t *testing.T) {
+	f := newFixture164(t)
+	view := &countingView164{View: f.store, calls: map[string]int{}}
+	got, err := f.verifier.Attestations(view)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("attestations=%v err=%v", got, err)
+	}
+	if view.calls[trust.AttestAggregateType+"/"+trust.AttestAggregateID] != 1 || view.calls[trust.TrustAggregateType+"/"+trust.TrustAggregateID] != 0 {
+		t.Fatalf("list calls=%v", view.calls)
+	}
 }
 
 func TestAttestLatestVerifiedFreshnessAndSignatureRulesFRRHZ164(t *testing.T) {
@@ -306,14 +354,14 @@ func TestAttestVA6VA8AcrossManifestsAppendAndReplayFRRHZ164(t *testing.T) {
 	before := len(f.store.All())
 	second := []attest.Item{a, c}
 	sig := f.signature(second, "", "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
-	if err := (attest.Service{Store: f.store}).Create(trust.ManifestDigest(second), second, sig); err == nil || !strings.Contains(err.Error(), "already recorded") || len(f.store.All()) != before {
+	if err := (attest.Service{Store: f.store}).Create(trust.ManifestDigest(second), second, sig); err == nil || err.Error() != "attest gate already recorded" || len(f.store.All()) != before {
 		t.Fatalf("append err=%v writes=%d", err, len(f.store.All())-before)
 	}
 	event := event164(f, second, sig, 2)
-	if err := f.verifier.CheckReplay(f.store, event); err == nil || !strings.Contains(err.Error(), "already recorded") {
+	if err := f.verifier.CheckReplay(f.store, event); err == nil || err.Error() != "attest gate already recorded" {
 		t.Fatalf("replay err=%v", err)
 	}
-	if err := (attest.Service{Store: f.store}).Create(trust.ManifestDigest(first), first, f.signature(first, "", "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c")); err == nil || !strings.Contains(err.Error(), "manifest already") {
+	if err := (attest.Service{Store: f.store}).Create(trust.ManifestDigest(first), first, f.signature(first, "", "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c")); err == nil || err.Error() != "attest manifest already recorded" {
 		t.Fatalf("same digest err=%v", err)
 	}
 }

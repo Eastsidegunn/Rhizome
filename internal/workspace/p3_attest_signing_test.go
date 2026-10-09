@@ -132,8 +132,20 @@ func TestAttestedProjectionWorkspaceContextAndRevocationFRRHZ166(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/context?task=mission-parent-166", nil)
 	h.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"status":"attested"`)) {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("context %d: %s", rec.Code, rec.Body.String())
+	}
+	var context contextBundle
+	if err := json.Unmarshal(rec.Body.Bytes(), &context); err != nil {
+		t.Fatal(err)
+	}
+	if len(context.Steps) != 1 || len(context.Steps[0].Gates) != 1 || context.Steps[0].Gates[0].ID != q.ID {
+		t.Fatalf("context gates = %+v", context.Steps)
+	}
+	wantVerification := verificationDTO{Status: workspaceVerification.Status, ClaimKind: workspaceVerification.ClaimKind, Assurance: workspaceVerification.Assurance, KeyID: workspaceVerification.KeyID, KeyRevokedNow: workspaceVerification.KeyRevokedNow}
+	contextVerification := context.Steps[0].Gates[0].Verification
+	if contextVerification == nil || *contextVerification != wantVerification {
+		t.Fatalf("context verification = %+v, workspace verification = %+v", contextVerification, workspaceVerification)
 	}
 	keyID, _ := trust.KeyID(private.Public())
 	if err := appendRevoke149(t, store, verifier, private, keyID, "rotated", signedAt149(), "18181818181818181818181818181818"); err != nil {
@@ -275,7 +287,18 @@ func TestAttestCreateHTTPExactIntentFRRHZ164(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"kind": "attest.create", "manifestDigest": manifestDigest, "actor": "signer", "items": []map[string]any{{"consumer": item.Consumer, "gateId": item.GateID, "decisionSequence": item.DecisionSequence, "digest": item.Digest, "decision": item.Decision, "reason": item.Reason}}, "signature": map[string]any{"keyId": sig.KeyID, "signedAt": sig.SignedAt, "nonce": sig.Nonce, "sig": sig.Sig}})
 	h := NewHTTP(store)
 	h.Trust = verifier
+	var nestedExtra map[string]any
+	if err := json.Unmarshal(body, &nestedExtra); err != nil {
+		t.Fatal(err)
+	}
+	nestedExtra["items"].([]any)[0].(map[string]any)["extra"] = true
+	nestedExtraBody, _ := json.Marshal(nestedExtra)
 	rec := httptest.NewRecorder()
+	h.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/intent", bytes.NewReader(nestedExtraBody)))
+	if rec.Code != http.StatusOK || rec.Body.String() != "{\"Accepted\":false,\"Reason\":\"invalid attest\"}\n" || len(store.List("attest", "attest-root")) != 0 {
+		t.Fatalf("nested extra key = %d %s writes=%d", rec.Code, rec.Body.String(), len(store.List("attest", "attest-root")))
+	}
+	rec = httptest.NewRecorder()
 	h.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/intent", bytes.NewReader(body)))
 	if rec.Code != 200 || !bytes.Contains(rec.Body.Bytes(), []byte(`"Accepted":true`)) {
 		t.Fatalf("intent = %d %s", rec.Code, rec.Body.String())
