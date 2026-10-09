@@ -94,7 +94,7 @@ Main HTTP routes:
 |---|---|
 | `GET /v1/workspace` | Project the operator board; `/v1/workspace/stream` is its SSE requery signal. |
 | `POST /v1/intent` | Relay one direct, local-trust write intent. |
-| `GET /v1/knowledge` | Project `{notes,items,relations}` from one revision; each relation is `{id,type,from,to,sourceMemoryIds,confidence}` in that order. `kind` filters notes by memory kind; `itemKind` filters items by the knowledge-kind vocabulary and an unknown value returns `400 invalid knowledge kind`; `tag` filters both notes and items. When `itemKind` or `tag` is present, relations survive only when both endpoint items survive; without either item filter, all relations are returned. `about=<memoryId>` retains the separate reverse-about response. |
+| `GET /v1/knowledge` | Project `{notes,items,relations}` from one revision; each relation is `{id,type,from,to,sourceMemoryIds,confidence}` in that order; `items` lists every knowledge item including superseded ones (tell them apart by `status` and `supersedes`). `kind` filters notes by memory kind; `itemKind` filters items by the knowledge-kind vocabulary and an unknown value returns `400 invalid knowledge kind`; `tag` filters both notes and items. When `itemKind` or `tag` is present, relations survive only when both endpoint items survive; without either item filter, all relations are returned. `about=<memoryId>` retains the separate reverse-about response. |
 | `GET /v1/context` | Project task handoff context, or note context with `goal` / `mission`. |
 | `GET /v1/execution/{missionId}` | Project execution output; `/stream` is the streaming form. |
 | `POST /v1/blob`, `GET /v1/blob/{id}` | Store and read content-addressed blobs. |
