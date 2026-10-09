@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"rhizome/internal/approval"
+	"rhizome/internal/attest"
 	"rhizome/internal/gaterequest"
 	"rhizome/internal/journal"
 	"rhizome/internal/question"
@@ -280,6 +281,59 @@ func TestGateVerifyApprovalHXV1StatusesFRRHZ152(t *testing.T) {
 				if !strings.Contains(stdout.String(), want+"\n") {
 					t.Errorf("stdout missing %q: %q", want, stdout.String())
 				}
+			}
+		})
+	}
+}
+
+func TestGateVerifyAttestedExit3FRRHZ167(t *testing.T) {
+	dir := t.TempDir()
+	journalPath, anchorPath := filepath.Join(dir, "journal.ndjson"), filepath.Join(dir, "anchor.json")
+	writeServeAnchor148(t, anchorPath, serveAnchorJSON148)
+	anchor, _ := trust.ParseAnchor([]byte(serveAnchorJSON148))
+	verifier := trust.NewAnchored(anchor)
+	j, err := journal.OpenGuarded(journalPath, verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trust.EnsureGenesis(j, anchor); err != nil {
+		t.Fatal(err)
+	}
+	q, err := (question.Service{Store: j}).Ask("attested cli", "body", "", "", "", "agent", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err = (question.Service{Store: j}).Answer(q.ID, question.Approve, "", "operator", q.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := j.List("question", q.ID)[1]
+	items := []attest.Item{{Consumer: "question", GateID: q.ID, DecisionSequence: decision.Sequence, Digest: q.Digest, Decision: "approve", Reason: ""}}
+	seed, _ := hex.DecodeString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+	private := ed25519.NewKeyFromSeed(seed)
+	keyID, _ := trust.KeyID(private.Public())
+	summary, _ := verifier.TrustSummary(j)
+	signedAt, nonce := time.Now().UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z"), "21212121212121212121212121212121"
+	message := trust.AttestMessage(summary.JournalID, trust.ManifestDigest(items), "1", keyID, signedAt, nonce)
+	sig := trust.Signature{KeyID: keyID, SignedAt: signedAt, Nonce: nonce, Sig: base64.StdEncoding.EncodeToString(ed25519.Sign(private, message))}
+	if err := (attest.Service{Store: j}).Create(trust.ManifestDigest(items), items, sig); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"anchored", []string{"-journal", journalPath, "-trust-anchor", anchorPath, q.ID}, "status=attested\nassurance=key\nkeyId=" + keyID + "\nkeyRevokedNow=false\nanchor=matched\n"},
+		{"unanchored cap", []string{"-journal", journalPath, q.ID}, "status=chain-valid\nassurance=key\nkeyId=" + keyID + "\nkeyRevokedNow=false\nanchor=absent\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := gateVerify(tc.args, &stdout, &stderr); code != 3 || stderr.Len() != 0 || !strings.Contains(stdout.String(), tc.want) {
+				t.Fatalf("exit/status stdout=%q stderr=%q", stdout.String(), stderr.String())
 			}
 		})
 	}

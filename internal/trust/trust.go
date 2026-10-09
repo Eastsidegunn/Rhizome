@@ -20,6 +20,7 @@ import (
 	"os"
 	"regexp"
 	"rhizome/internal/events"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -40,6 +41,10 @@ const (
 	TrustGenesisType          = "trust.key.genesis"
 	TrustAddedType            = "trust.key.add"
 	TrustRevokedType          = "trust.key.revoke"
+	AttestMessageTag          = "rhz-gate-attest-v1"
+	AttestAggregateType       = "attest"
+	AttestAggregateID         = "attest-root"
+	AttestRecordedType        = "attest.recorded"
 
 	questionAggregateType   = "question"
 	approvalAggregateType   = "approval"
@@ -79,8 +84,36 @@ type genesisPayload struct {
 	Format, Principal, Algorithm, Assurance, PublicKey, KeyID, JournalID string
 }
 
-type signature struct {
+// Signature is the exact four-field signature envelope shared by decision,
+// trust-key, and attest events. JSON payloads use these Go-name keys.
+type Signature struct {
 	KeyID, SignedAt, Nonce, Sig string
+}
+
+type signature = Signature
+
+// AttestItem is one decision bound into an attest manifest.
+type AttestItem struct {
+	Consumer         string
+	GateID           string
+	DecisionSequence uint64
+	Digest           string
+	Decision         string
+	Reason           string
+}
+
+type attestPayload struct {
+	ManifestDigest string
+	Items          []AttestItem
+	Signature      Signature
+}
+
+// Attestation is the derived manifest fact used by gate projections.
+type Attestation struct {
+	Status           string
+	KeyID            string
+	DecisionSequence uint64
+	KeyRevokedNow    bool
 }
 
 type addedPayload struct {
@@ -350,6 +383,34 @@ func lengthPrefixed(fields ...[]byte) []byte {
 	return out
 }
 
+// AttestManifestBytes returns lp(item1...itemN), where every item is itself
+// the six-field length-prefixed canonical decision record.
+func AttestManifestBytes(items []AttestItem) []byte {
+	encoded := make([][]byte, len(items))
+	for i, item := range items {
+		encoded[i] = lengthPrefixed(
+			[]byte(item.Consumer), []byte(item.GateID),
+			[]byte(strconv.FormatUint(item.DecisionSequence, 10)),
+			[]byte(item.Digest), []byte(item.Decision), []byte(item.Reason),
+		)
+	}
+	return lengthPrefixed(encoded...)
+}
+
+// ManifestDigest returns the canonical sha256 identifier of an attest list.
+func ManifestDigest(items []AttestItem) string {
+	sum := sha256.Sum256(AttestManifestBytes(items))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// AttestMessage returns the authoritative seven-field manifest message.
+func AttestMessage(journalID, manifestDigest, count, keyID, signedAt, nonce string) []byte {
+	return lengthPrefixed(
+		[]byte(AttestMessageTag), []byte(journalID), []byte(manifestDigest),
+		[]byte(count), []byte(keyID), []byte(signedAt), []byte(nonce),
+	)
+}
+
 // DecisionMessage returns the ten-field signed gate-decision message.
 func DecisionMessage(journalID, consumer, gateID, requestDigest, decision, reason, keyID, signedAt, nonce string) []byte {
 	values := []string{DecisionMessageTag, journalID, consumer, gateID, requestDigest, decision, reason, keyID, signedAt, nonce}
@@ -392,6 +453,11 @@ func NewAnchorless() *Verifier { return &Verifier{mode: modeAnchorless} }
 func NewUnanchored() *Verifier {
 	return &Verifier{mode: modeUnanchored, statusCap: "chain-valid"}
 }
+
+// Anchored reports whether this verifier was constructed with an external
+// trust anchor. Read-only signing helpers use it to suppress journal identity
+// in anchorless serve mode.
+func (v *Verifier) Anchored() bool { return v != nil && v.mode == modeAnchored }
 
 type keyRecord struct {
 	algorithm string
@@ -587,6 +653,173 @@ func (v *Verifier) verifyDecision(prefix events.View, next events.Event, appendN
 	return sig, true, nil
 }
 
+func parseAttest(raw []byte) (attestPayload, error) {
+	object, err := exactObject(raw, "ManifestDigest", "Items", "Signature")
+	if err != nil {
+		return attestPayload{}, errors.New("invalid attest payload")
+	}
+	if _, err := exactObject(object["Signature"], "KeyID", "SignedAt", "Nonce", "Sig"); err != nil {
+		return attestPayload{}, errors.New("invalid attest payload")
+	}
+	var itemObjects []json.RawMessage
+	if json.Unmarshal(object["Items"], &itemObjects) != nil {
+		return attestPayload{}, errors.New("invalid attest payload")
+	}
+	if len(itemObjects) == 0 || len(itemObjects) > 256 {
+		return attestPayload{}, errors.New("invalid attest item count")
+	}
+	items := make([]AttestItem, len(itemObjects))
+	for i, rawItem := range itemObjects {
+		if _, err := exactObject(rawItem, "Consumer", "GateID", "DecisionSequence", "Digest", "Decision", "Reason"); err != nil {
+			return attestPayload{}, errors.New("invalid attest payload")
+		}
+		if json.Unmarshal(rawItem, &items[i]) != nil {
+			return attestPayload{}, errors.New("invalid attest payload")
+		}
+	}
+	sig, err := parseSignature(object["Signature"])
+	if err != nil {
+		return attestPayload{}, err
+	}
+	var digest string
+	if json.Unmarshal(object["ManifestDigest"], &digest) != nil || !keyIDPattern.MatchString(digest) {
+		return attestPayload{}, errors.New("invalid attest manifest digest")
+	}
+	if digest != ManifestDigest(items) {
+		return attestPayload{}, errors.New("attest manifest digest mismatch")
+	}
+	seen := map[string]bool{}
+	var previous uint64
+	for i, item := range items {
+		if (i > 0 && item.DecisionSequence <= previous) || item.DecisionSequence == 0 {
+			return attestPayload{}, errors.New("invalid attest item order")
+		}
+		previous = item.DecisionSequence
+		if item.GateID == "" || seen[item.GateID] {
+			return attestPayload{}, errors.New("duplicate attest gate")
+		}
+		seen[item.GateID] = true
+		switch item.Consumer {
+		case "question":
+			if item.Decision != "approve" && item.Decision != "reject" && item.Decision != "requestChanges" {
+				return attestPayload{}, errors.New("invalid attest decision")
+			}
+		case "approval":
+			if item.Decision != "allow" && item.Decision != "deny" {
+				return attestPayload{}, errors.New("invalid attest decision")
+			}
+		default:
+			return attestPayload{}, errors.New("invalid attest decision")
+		}
+	}
+	return attestPayload{ManifestDigest: digest, Items: items, Signature: sig}, nil
+}
+
+func attestDecision(prefix events.View, item AttestItem) (events.Event, string, string, string, error) {
+	aggregateType, eventType := questionAggregateType, QuestionAnsweredType
+	if item.Consumer == "approval" {
+		aggregateType, eventType = approvalAggregateType, ApprovalInputRecordedType
+	}
+	log := prefix.List(aggregateType, item.GateID)
+	if len(log) == 0 {
+		return events.Event{}, "", "", "", errors.New("attest gate not found")
+	}
+	var event events.Event
+	found := false
+	for i := len(log) - 1; i >= 0; i-- {
+		if log[i].Type == eventType {
+			event, found = log[i], true
+			break
+		}
+	}
+	if !found {
+		return events.Event{}, "", "", "", errors.New("attest gate is not terminal")
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(event.Payload, &object) != nil || object == nil {
+		return events.Event{}, "", "", "", errors.New("invalid decision payload")
+	}
+	decisionKey, digestKey := decisionPayloadKey, digestPayloadKey
+	if item.Consumer == "approval" {
+		decisionKey, digestKey = "decision", requestDigestPayloadKey
+	}
+	var decision, digest, reason string
+	if json.Unmarshal(object[decisionKey], &decision) != nil || json.Unmarshal(object[digestKey], &digest) != nil || json.Unmarshal(object[reasonPayloadKey], &reason) != nil {
+		return events.Event{}, "", "", "", errors.New("invalid decision payload")
+	}
+	if item.Consumer == "question" && decision != "approve" && decision != "reject" {
+		return events.Event{}, "", "", "", errors.New("attest gate is not terminal")
+	}
+	return event, digest, decision, reason, nil
+}
+
+func (v *Verifier) validateAttest(prefix events.View, next events.Event, appendNow *time.Time) (attestPayload, error) {
+	if next.AggregateType != AttestAggregateType || next.AggregateID != AttestAggregateID {
+		return attestPayload{}, errors.New("invalid attest aggregate")
+	}
+	if next.Type != AttestRecordedType {
+		return attestPayload{}, errors.New("unknown attest event")
+	}
+	manifests := prefix.List(AttestAggregateType, AttestAggregateID)
+	if next.Revision != uint64(len(manifests)+1) {
+		return attestPayload{}, errors.New("invalid attest revision")
+	}
+	payload, err := parseAttest(next.Payload)
+	if err != nil {
+		return attestPayload{}, err
+	}
+	previousGates := map[string]bool{}
+	for _, event := range manifests {
+		prior, err := parseAttest(event.Payload)
+		if err != nil {
+			return attestPayload{}, err
+		}
+		if prior.ManifestDigest == payload.ManifestDigest {
+			return attestPayload{}, errors.New("attest manifest already recorded")
+		}
+		for _, item := range prior.Items {
+			previousGates[item.GateID] = true
+		}
+	}
+	for _, item := range payload.Items {
+		if previousGates[item.GateID] {
+			return attestPayload{}, errors.New("attest gate already recorded")
+		}
+		decisionEvent, digest, decision, reason, err := attestDecision(prefix, item)
+		if err != nil {
+			return attestPayload{}, err
+		}
+		if decisionEvent.Sequence != item.DecisionSequence {
+			return attestPayload{}, errors.New("attest decision sequence mismatch")
+		}
+		if digest != item.Digest || decision != item.Decision || reason != item.Reason {
+			return attestPayload{}, errors.New("attest decision mismatch")
+		}
+		_, signed, err := v.verifyDecision(prefix, decisionEvent, nil)
+		if err != nil {
+			return attestPayload{}, err
+		}
+		if signed {
+			return attestPayload{}, errors.New("attest gate already verified")
+		}
+	}
+	if appendNow != nil && !fresh(payload.Signature, *appendNow) {
+		return attestPayload{}, errors.New("signature outside freshness window")
+	}
+	state, err := v.stateFrom(prefix.List(TrustAggregateType, TrustAggregateID), next.Sequence)
+	if err != nil || state.journalID == "" {
+		if err == nil {
+			err = errors.New("trust genesis missing")
+		}
+		return attestPayload{}, err
+	}
+	message := AttestMessage(state.journalID, payload.ManifestDigest, strconv.Itoa(len(payload.Items)), payload.Signature.KeyID, payload.Signature.SignedAt, payload.Signature.Nonce)
+	if err := verifyWith(state.keys[payload.Signature.KeyID], message, payload.Signature); err != nil {
+		return attestPayload{}, err
+	}
+	return payload, nil
+}
+
 func (v *Verifier) CheckAppend(prefix events.View, next events.Event, now time.Time) error {
 	if v == nil {
 		return errors.New("nil trust verifier")
@@ -600,6 +833,13 @@ func (v *Verifier) CheckAppend(prefix events.View, next events.Event, now time.T
 			return err
 		}
 		return v.applyTrust(state, next, &now)
+	}
+	if next.AggregateType == AttestAggregateType || strings.HasPrefix(next.Type, "attest.") {
+		if v.mode == modeAnchorless {
+			return errors.New("attest events require a trust anchor")
+		}
+		_, err := v.validateAttest(prefix, next, &now)
+		return err
 	}
 	_, _, err := v.verifyDecision(prefix, next, &now)
 	return err
@@ -618,6 +858,10 @@ func (v *Verifier) CheckReplay(prefix events.View, next events.Event) error {
 			return err
 		}
 		return v.applyTrust(state, next, nil)
+	}
+	if next.AggregateType == AttestAggregateType || strings.HasPrefix(next.Type, "attest.") {
+		_, err := v.validateAttest(prefix, next, nil)
+		return err
 	}
 	_, _, err := v.verifyDecision(prefix, next, nil)
 	return err
@@ -668,6 +912,55 @@ func (v *Verifier) VerifyDecision(prefix events.View, event events.Event) (*Deci
 	}
 	key := state.keys[sig.KeyID]
 	return &DecisionStatus{Status: v.statusCap, Assurance: AssuranceKey, KeyID: sig.KeyID, KeyRevokedNow: key != nil && key.revoked}, nil
+}
+
+type attestPrefixView struct {
+	events.View
+	manifests []events.Event
+}
+
+func (p attestPrefixView) List(aggregateType, aggregateID string) []events.Event {
+	if aggregateType == AttestAggregateType && aggregateID == AttestAggregateID {
+		return append([]events.Event(nil), p.manifests...)
+	}
+	return p.View.List(aggregateType, aggregateID)
+}
+
+// Attestations validates the manifest stream and builds its gate index once.
+// Anchorless projection deliberately ignores replayed attest events.
+func (v *Verifier) Attestations(prefix events.View) (map[string]Attestation, error) {
+	out := map[string]Attestation{}
+	if v == nil {
+		return nil, errors.New("nil trust verifier")
+	}
+	if v.mode == modeAnchorless {
+		return out, nil
+	}
+	prior := []events.Event{}
+	for _, event := range prefix.List(AttestAggregateType, AttestAggregateID) {
+		payload, err := v.validateAttest(attestPrefixView{View: prefix, manifests: prior}, event, nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range payload.Items {
+			status := "attested"
+			if v.mode == modeUnanchored {
+				status = v.statusCap
+			}
+			out[item.GateID] = Attestation{Status: status, KeyID: payload.Signature.KeyID, DecisionSequence: item.DecisionSequence}
+		}
+		prior = append(prior, event)
+	}
+	state, err := v.stateFrom(prefix.List(TrustAggregateType, TrustAggregateID), 0)
+	if err != nil {
+		return nil, err
+	}
+	for gateID, attestation := range out {
+		key := state.keys[attestation.KeyID]
+		attestation.KeyRevokedNow = key != nil && key.revoked
+		out[gateID] = attestation
+	}
+	return out, nil
 }
 
 // EnsureGenesis appends the single trust root for an empty trust aggregate.

@@ -136,11 +136,13 @@ func TestTrustExportedAPIAllowlistFRRHZ153(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"AddMessage", "AlgorithmECDSAP256", "AlgorithmEd25519", "Anchor", "AnchorFormat",
-		"ApprovalInputRecordedType", "AssuranceKey", "Authority", "CheckAppend", "CheckReplay",
-		"DecisionMessage", "DecisionMessageTag", "DecisionStatus", "EnsureGenesis", "ErrInvalidAnchor", "KeyID", "LoadAnchor",
-		"NewAnchored", "NewAnchorless", "NewUnanchored", "ParseAnchor", "QuestionAnsweredType",
-		"RecordKeyChange", "RevokeMessage", "Summary", "TrustAddedType", "TrustAggregateID", "TrustAggregateType", "TrustGenesisType",
+		"AddMessage", "AlgorithmECDSAP256", "AlgorithmEd25519", "Anchor", "AnchorFormat", "Anchored",
+		"ApprovalInputRecordedType", "AssuranceKey", "AttestAggregateID", "AttestAggregateType", "AttestItem",
+		"AttestManifestBytes", "AttestMessage", "AttestMessageTag", "AttestRecordedType", "Attestation", "Attestations",
+		"Authority", "CheckAppend", "CheckReplay",
+		"DecisionMessage", "DecisionMessageTag", "DecisionStatus", "EnsureGenesis", "ErrInvalidAnchor", "KeyID", "List", "LoadAnchor",
+		"ManifestDigest", "NewAnchored", "NewAnchorless", "NewUnanchored", "ParseAnchor", "QuestionAnsweredType",
+		"RecordKeyChange", "RevokeMessage", "Signature", "Summary", "TrustAddedType", "TrustAggregateID", "TrustAggregateType", "TrustGenesisType",
 		"TrustKeyMessageTag", "TrustRevokedType", "TrustSummary", "Verifier", "VerifyDecision", "VerifySignature",
 	}
 	if !reflect.DeepEqual(got, want) {

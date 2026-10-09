@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"rhizome/internal/events"
@@ -16,6 +17,33 @@ import (
 type intentRequest struct {
 	Intent
 	Actor string `json:"actor"`
+}
+
+func decodeAttestHTTPRequest(raw json.RawMessage, request *intentRequest) error {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil || object == nil || len(object) != 5 {
+		return errors.New("invalid attest")
+	}
+	for _, key := range []string{"kind", "manifestDigest", "items", "signature", "actor"} {
+		if _, ok := object[key]; !ok {
+			return errors.New("invalid attest")
+		}
+	}
+	request.Attest, _ = json.Marshal(struct {
+		ManifestDigest json.RawMessage `json:"manifestDigest"`
+		Items          json.RawMessage `json:"items"`
+		Signature      json.RawMessage `json:"signature"`
+	}{object["manifestDigest"], object["items"], object["signature"]})
+	return nil
+}
+
+func loopbackRemote(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 type missionDTO struct {
@@ -442,6 +470,48 @@ func (h *HTTPServer) Broadcast(p Projection) {
 }
 func (h *HTTPServer) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/trust/signing" && r.Method == http.MethodGet {
+			w.Header().Set("Cache-Control", "no-store")
+			if !loopbackRemote(r.RemoteAddr) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			q := r.URL.Query()
+			if len(q) != 1 {
+				http.Error(w, "invalid signing query", http.StatusBadRequest)
+				return
+			}
+			if values, ok := q["gate"]; ok {
+				if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+					http.Error(w, "invalid signing query", http.StatusBadRequest)
+					return
+				}
+				input, err := SigningInput(h.Store, h.Trust, values[0])
+				if errors.Is(err, errSigningGateNotFound) {
+					http.Error(w, "gate not found", http.StatusNotFound)
+					return
+				}
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(input)
+				return
+			}
+			if values, ok := q["unverified"]; ok && len(values) == 1 && values[0] == "1" {
+				inputs, err := SigningInputs(h.Store, h.Trust)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(inputs)
+				return
+			}
+			http.Error(w, "invalid signing query", http.StatusBadRequest)
+			return
+		}
 		if r.URL.Path == "/v1/knowledge" && r.Method == http.MethodGet {
 			h.serveKnowledgeSnapshot(w, r)
 			return
@@ -565,6 +635,10 @@ func (h *HTTPServer) Handler() http.Handler {
 			var in intentRequest
 			if json.Unmarshal(raw, &in) != nil {
 				http.Error(w, "invalid json", 400)
+				return
+			}
+			if in.Kind == "attest.create" && decodeAttestHTTPRequest(raw, &in) != nil {
+				http.Error(w, "invalid attest", http.StatusBadRequest)
 				return
 			}
 			in.Intent.requestUnknownField = requestIntentHasUnknownField(raw, in.Kind)

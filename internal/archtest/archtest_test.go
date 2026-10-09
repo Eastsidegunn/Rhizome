@@ -185,3 +185,13 @@ func TestRequestLayerPinnedFRRHZ154(t *testing.T) {
 		t.Fatalf("Allowed changed: got %v want %v", Allowed, want)
 	}
 }
+
+func TestAttestLayerPinnedFRRHZ164(t *testing.T) {
+	if Layers["attest"] != "exec" {
+		t.Fatalf("attest layer = %q, want exec", Layers["attest"])
+	}
+	want := []string{"coordinator->memory", "coordinator->source"}
+	if !reflect.DeepEqual(Allowed, want) {
+		t.Fatalf("Allowed changed: got %v want %v", Allowed, want)
+	}
+}

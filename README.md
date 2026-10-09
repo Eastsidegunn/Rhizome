@@ -154,6 +154,14 @@ still print the full static flag list and exit with status 2.
 
 With `-trust-anchor`, `serve` records or validates the journal's trust genesis
 and projects valid signed decisions as `verification.status:"verified"`.
+An operator can also append a signed `attest.recorded` manifest through the
+direct `attest.create` intent to attest terminal decisions that were originally
+recorded without signatures; those decisions project as
+`verification.status:"attested"`. The intent carries the signer-computed
+`manifestDigest` alongside its exact lowerCamel `items` and `signature`
+objects, and Rhizome rejects it if recomputation differs. The loopback-only,
+read-only `GET /v1/trust/signing?gate=<id>` endpoint returns canonical signer
+input, and `?unverified=1` lists terminal decisions eligible for a manifest.
 `-trust-enforce-janus=all` additionally rejects unsigned JANUS allow and deny
 inputs and rechecks them immediately before dispatch and submission. It does
 not change internal question gates. Without enforcement, signed verification
@@ -166,7 +174,8 @@ With `serve` stopped, inspect one gate directly from the journal:
 ```
 
 The final argument may be a gate ID or handle. With an anchor, a verified
-decision exits 0. Without an anchor, a cryptographically valid journal chain
+decision exits 0; an `attested` decision is reported distinctly and exits 3.
+Without an anchor, a cryptographically valid journal chain
 is reported as `chain-valid` and exits 3; pending and other unverified states
 also exit 3. Missing or corrupt journals exit 1, usage errors exit 2. The
 command never creates a journal and refuses to read one held by a running
@@ -286,7 +295,8 @@ split into layers, and the dependency direction is fixed:
  mission, domain,        memory, source, knowledge,
  decision, coordinator,  relation, procedure,
  wake, execution,        retrieval, evaluation
- approval, question, ...
+ approval, question,
+ attest, ...
                 \        /
                  substrate      events, journal, blob, policy, codeindex
 ```

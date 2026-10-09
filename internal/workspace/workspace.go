@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"rhizome/internal/approval"
 	"rhizome/internal/assembly"
+	"rhizome/internal/attest"
 	"rhizome/internal/decision"
 	"rhizome/internal/deliverable"
 	"rhizome/internal/domain"
@@ -143,6 +144,10 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 	} else if summary != nil {
 		p.Trust = &TrustSummary{JournalID: summary.JournalID, GenesisKeyID: summary.GenesisKeyID}
 	}
+	attestations, err := verifier.Attestations(s)
+	if err != nil {
+		return p, err
+	}
 	all := s.All()
 	p.handles = buildHandleIndex(all)
 	goals, mids, gids, qids, dids, eids, reqs, rids := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -236,7 +241,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			}
 		}
 		sup, _ := (approval.Service{Store: s}).IsSuperseded(id)
-		verification, er := approvalVerification(s, verifier, a)
+		verification, er := approvalVerification(s, verifier, attestations, a)
 		if er != nil {
 			return p, er
 		}
@@ -286,7 +291,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			return p, x
 		}
 		st := questionState(q)
-		verification, er := questionVerification(s, verifier, q)
+		verification, er := questionVerification(s, verifier, attestations, q)
 		if er != nil {
 			return p, er
 		}
@@ -452,18 +457,38 @@ func signedVerification(s events.Port, verifier *trust.Verifier, log []events.Ev
 	return &GateVerification{Status: derived.Status, Assurance: derived.Assurance, KeyID: derived.KeyID, KeyRevokedNow: derived.KeyRevokedNow}, nil
 }
 
-func questionVerification(s events.Port, verifier *trust.Verifier, q question.Ref) (*GateVerification, error) {
+func attestedVerification(log []events.Event, eventType, gateID string, attestations map[string]trust.Attestation) *GateVerification {
+	event, ok := storedDecision(log, eventType)
+	if !ok {
+		return nil
+	}
+	attestation, ok := attestations[gateID]
+	if !ok || attestation.DecisionSequence != event.Sequence {
+		return nil
+	}
+	return &GateVerification{Status: attestation.Status, Assurance: trust.AssuranceKey, KeyID: attestation.KeyID, KeyRevokedNow: attestation.KeyRevokedNow}
+}
+
+func questionVerification(s events.Port, verifier *trust.Verifier, attestations map[string]trust.Attestation, q question.Ref) (*GateVerification, error) {
 	if q.Verification != nil && q.Verification.Signature != nil {
 		return signedVerification(s, verifier, s.List("question", q.ID), trust.QuestionAnsweredType)
+	}
+	if derived := attestedVerification(s.List("question", q.ID), trust.QuestionAnsweredType, q.ID, attestations); derived != nil {
+		return derived, nil
 	}
 	return claimedVerification(q.Verification), nil
 }
 
-func approvalVerification(s events.Port, verifier *trust.Verifier, a approval.Ref) (*GateVerification, error) {
+func approvalVerification(s events.Port, verifier *trust.Verifier, attestations map[string]trust.Attestation, a approval.Ref) (*GateVerification, error) {
 	if a.Verification != nil {
 		if a.Verification.Signature != nil {
 			return signedVerification(s, verifier, s.List("approval", a.ID), trust.ApprovalInputRecordedType)
 		}
+	}
+	if derived := attestedVerification(s.List("approval", a.ID), trust.ApprovalInputRecordedType, a.ID, attestations); derived != nil {
+		return derived, nil
+	}
+	if a.Verification != nil {
 		return claimedVerification(a.Verification), nil
 	}
 	if a.ActorVerified {
@@ -623,6 +648,9 @@ type Intent struct {
 	Verification json.RawMessage `json:"verification,omitempty"`
 	// Trust is the exact lowerCamel payload for trust.key.add/revoke only.
 	Trust json.RawMessage `json:"trust,omitempty"`
+	// Attest holds the exact lowerCamel {manifestDigest,items,signature}
+	// object synthesized by the direct HTTP decoder for attest.create.
+	Attest json.RawMessage `json:"-"`
 	// RHZ-118 (FR-RHZ-155/156): human-action request fields.
 	RequestID string   `json:"requestId"`
 	Why       string   `json:"why"`
@@ -677,6 +705,56 @@ func exactIntentObject(raw json.RawMessage, keys ...string) (map[string]json.Raw
 		}
 	}
 	return object, nil
+}
+
+type attestIntentSignature struct {
+	KeyID    string `json:"keyId"`
+	SignedAt string `json:"signedAt"`
+	Nonce    string `json:"nonce"`
+	Sig      string `json:"sig"`
+}
+
+type attestIntentItem struct {
+	Consumer         string `json:"consumer"`
+	GateID           string `json:"gateId"`
+	DecisionSequence uint64 `json:"decisionSequence"`
+	Digest           string `json:"digest"`
+	Decision         string `json:"decision"`
+	Reason           string `json:"reason"`
+}
+
+func decodeAttestIntent(raw json.RawMessage) (string, []attest.Item, trust.Signature, error) {
+	object, err := exactIntentObject(raw, "manifestDigest", "items", "signature")
+	if err != nil {
+		return "", nil, trust.Signature{}, fmt.Errorf("invalid attest")
+	}
+	if _, err := exactIntentObject(object["signature"], "keyId", "signedAt", "nonce", "sig"); err != nil {
+		return "", nil, trust.Signature{}, fmt.Errorf("invalid attest")
+	}
+	var manifestDigest string
+	if json.Unmarshal(object["manifestDigest"], &manifestDigest) != nil {
+		return "", nil, trust.Signature{}, fmt.Errorf("invalid attest")
+	}
+	var rawItems []json.RawMessage
+	if json.Unmarshal(object["items"], &rawItems) != nil {
+		return "", nil, trust.Signature{}, fmt.Errorf("invalid attest")
+	}
+	items := make([]attest.Item, len(rawItems))
+	for i, rawItem := range rawItems {
+		if _, err := exactIntentObject(rawItem, "consumer", "gateId", "decisionSequence", "digest", "decision", "reason"); err != nil {
+			return "", nil, trust.Signature{}, fmt.Errorf("invalid attest")
+		}
+		var item attestIntentItem
+		if json.Unmarshal(rawItem, &item) != nil {
+			return "", nil, trust.Signature{}, fmt.Errorf("invalid attest")
+		}
+		items[i] = attest.Item{Consumer: item.Consumer, GateID: item.GateID, DecisionSequence: item.DecisionSequence, Digest: item.Digest, Decision: item.Decision, Reason: item.Reason}
+	}
+	var sig attestIntentSignature
+	if json.Unmarshal(object["signature"], &sig) != nil {
+		return "", nil, trust.Signature{}, fmt.Errorf("invalid attest")
+	}
+	return manifestDigest, items, trust.Signature{KeyID: sig.KeyID, SignedAt: sig.SignedAt, Nonce: sig.Nonce, Sig: sig.Sig}, nil
 }
 
 func trustIntentPayload(kind string, raw json.RawMessage) ([]byte, error) {
@@ -910,6 +988,9 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 	if len(in.Trust) != 0 && in.Kind != "trust.key.add" && in.Kind != "trust.key.revoke" {
 		return RelayResult{Reason: "invalid trust"}, nil
 	}
+	if len(in.Attest) != 0 && in.Kind != "attest.create" {
+		return RelayResult{Reason: "invalid attest"}, nil
+	}
 	if len(in.Verification) != 0 {
 		switch in.Kind {
 		case "gate.approve", "gate.reject", "gate.requestChanges":
@@ -930,6 +1011,18 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 	in = resolveHandles(s, in)
 	m := mission.Service{Store: s}
 	switch in.Kind {
+	case "attest.create":
+		if strings.TrimSpace(actor) == "" || len(in.Attest) == 0 {
+			return RelayResult{Reason: "invalid attest"}, nil
+		}
+		manifestDigest, items, sig, e := decodeAttestIntent(in.Attest)
+		if e != nil {
+			return RelayResult{Reason: "invalid attest"}, nil
+		}
+		if e := (attest.Service{Store: s}).Create(manifestDigest, items, sig); e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
 	case "trust.key.add", "trust.key.revoke":
 		if len(in.Trust) == 0 {
 			return RelayResult{Reason: "invalid trust"}, nil

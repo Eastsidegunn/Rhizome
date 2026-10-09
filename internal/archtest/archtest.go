@@ -19,7 +19,7 @@ var Layers = map[string]string{
 	// substrate keeps that minimality enforced via R2.
 	"codeindex": "substrate",
 	"domain":    "exec", "mission": "exec", "projector": "exec", "decision": "exec", "coordinator": "exec",
-	"wake": "exec", "execution": "exec", "approval": "exec", "gaterequest": "exec", "question": "exec", "request": "exec",
+	"wake": "exec", "execution": "exec", "approval": "exec", "gaterequest": "exec", "question": "exec", "request": "exec", "attest": "exec",
 	"janusadapter": "exec", "audit": "exec",
 	"memory": "knowledge", "source": "knowledge", "knowledge": "knowledge", "relation": "knowledge",
 	"procedure": "knowledge", "retrieval": "knowledge", "evaluation": "knowledge",

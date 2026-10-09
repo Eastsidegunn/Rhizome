@@ -42,6 +42,16 @@ Until 1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- Signed `attest.recorded` manifests provide all-or-nothing post-hoc
+  verification for unsigned terminal gate decisions, with `attested`
+  workspace/context projection and `rhizome gate verify` reporting
+  (FR-RHZ-164, FR-RHZ-166, FR-RHZ-167).
+- The loopback-only `GET /v1/trust/signing` read surface exposes canonical
+  single-gate signing input and ordered unverified manifest candidates without
+  writes, including while the journal writer is poisoned (FR-RHZ-168).
+- `gate.requestChanges` signatures bind the effective stored reason: when the
+  explicit reason is blank, the instruction text is signed and recorded
+  (FR-RHZ-165).
 - Journal-owned trust genesis and signed trust-key/decision events, guarded on
   append and strict replay with Ed25519 and P-256 verification. Workspace
   projections expose derived `verified` assurance and trust-domain identity

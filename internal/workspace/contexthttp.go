@@ -377,6 +377,10 @@ func (h *HTTPServer) serveNotesContext(w http.ResponseWriter, r *http.Request, k
 // spawned nothing yields an empty (non-nil) slice.
 func assembleSteps(store events.Port, verifier *trust.Verifier, es edge.Service, taskID string) ([]contextStepDTO, error) {
 	out := []contextStepDTO{}
+	attestations, err := verifier.Attestations(store)
+	if err != nil {
+		return nil, err
+	}
 	outgoing, err := es.ByNode("mission", taskID)
 	if err != nil {
 		return nil, err
@@ -407,7 +411,7 @@ func assembleSteps(store events.Port, verifier *trust.Verifier, es edge.Service,
 		}
 		if stepSet[q.MissionID] {
 			var verification *verificationDTO
-			if derived, err := questionVerification(store, verifier, q); err != nil {
+			if derived, err := questionVerification(store, verifier, attestations, q); err != nil {
 				return nil, err
 			} else if derived != nil {
 				verification = &verificationDTO{Status: derived.Status, ClaimKind: derived.ClaimKind, Assurance: derived.Assurance, KeyID: derived.KeyID, KeyRevokedNow: derived.KeyRevokedNow}
