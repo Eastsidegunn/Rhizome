@@ -45,6 +45,11 @@ type ExecConfig struct {
 	Scope          string      `json:"scope"`
 	SessionMode    string      `json:"sessionMode"`
 	Ceiling        ExecCeiling `json:"ceiling"`
+	// RefCeiling (RHZ-107 G1, FR-RHZ-140) lists the secret refs a
+	// mission.start may name in its approval record (not enforced): each G2,
+	// ascending, no duplicates, at most MaxRefCeiling. It is never normalized
+	// (nil stays nil), so a ledger without the key digests as before.
+	RefCeiling []string `json:"refCeiling,omitempty"`
 
 	// digest is the canonical ledger digest, computed once at parse time
 	// (FR-RHZ-124). Unexported: never decoded from nor encoded into JSON.
@@ -108,6 +113,17 @@ func ParseExecConfig(b []byte) (ExecConfig, error) {
 	if dec.More() {
 		return ExecConfig{}, fmt.Errorf("exec config: trailing data")
 	}
+	// FR-RHZ-140: an explicit "refCeiling": null (or any non-array) is a
+	// malformed ceiling, not "no ceiling". Same key matching as the decode.
+	var rc struct {
+		RefCeiling json.RawMessage `json:"refCeiling"`
+	}
+	if err := json.Unmarshal(b, &rc); err != nil {
+		return ExecConfig{}, fmt.Errorf("exec config: %w", err)
+	}
+	if t := bytes.TrimSpace(rc.RefCeiling); len(t) > 0 && t[0] != '[' {
+		return ExecConfig{}, fmt.Errorf("exec config: %w", errRefCeiling)
+	}
 	if err := c.validate(); err != nil {
 		return ExecConfig{}, fmt.Errorf("exec config: %w", err)
 	}
@@ -124,7 +140,15 @@ func LoadExecConfig(path string) (ExecConfig, error) {
 	return ParseExecConfig(b)
 }
 
+// MaxRefCeiling bounds ExecConfig.RefCeiling (FR-RHZ-140).
+const MaxRefCeiling = 64
+
+var errRefCeiling = fmt.Errorf("refCeiling must be an array of ascending unique refs (at most %d)", MaxRefCeiling)
+
 func (c *ExecConfig) validate() error {
+	if len(c.RefCeiling) > MaxRefCeiling || !execution.ValidRefList(c.RefCeiling) {
+		return errRefCeiling
+	}
 	for name, v := range map[string]string{"adapterId": c.AdapterID, "profileId": c.ProfileID, "profileHash": c.ProfileHash, "workspaceRef": c.WorkspaceRef, "scope": c.Scope, "sessionMode": c.SessionMode} {
 		if strings.TrimSpace(v) == "" {
 			return fmt.Errorf("%s required", name)
@@ -175,6 +199,10 @@ type StartRequest struct {
 	// Actor is who asked (from the relay); journaled in the intent's
 	// provenance only — never part of the idempotency key (FR-RHZ-124).
 	Actor string
+	// Refs are the mission.start secret refs (FR-RHZ-140): recorded in the
+	// provenance as an approval record (not enforced); never part of the
+	// key, the fingerprint or the run request.
+	Refs []string
 }
 
 // StartPlan is the zero-write preview of a start: the deterministic
@@ -232,6 +260,11 @@ func (s Starter) spec(req StartRequest) (startSpec, string, error) {
 	if req.Workdir != "" {
 		return startSpec{}, "workdir not supported by janus backend", nil
 	}
+	// FR-RHZ-140: refs are format-checked only (no registry lookup).
+	refs, ok := execution.StartRefs(req.Refs)
+	if !ok {
+		return startSpec{}, ReasonInvalidRef, nil
+	}
 	mode := req.SessionMode
 	if mode == "" {
 		mode = s.Exec.SessionMode
@@ -269,9 +302,14 @@ func (s Starter) spec(req StartRequest) (startSpec, string, error) {
 		ProfileID: s.Exec.ProfileID, ProfileHash: s.Exec.ProfileHash, SessionMode: mode}
 	// FR-RHZ-124: policy provenance for the journal (digests and numbers
 	// only). Computed after the key so it can never feed into it.
-	prov := execution.Provenance{Ceiling: ceiling, Requested: requested, Effective: eff, ProfileID: s.Exec.ProfileID, ProfileHash: s.Exec.ProfileHash, ExecConfigDigest: s.Exec.Digest(), Actor: req.Actor}
+	prov := execution.Provenance{Ceiling: ceiling, Requested: requested, Effective: eff, ProfileID: s.Exec.ProfileID, ProfileHash: s.Exec.ProfileHash, ExecConfigDigest: s.Exec.Digest(), Actor: req.Actor,
+		RequestedRefs: refs, AuthorizedRefs: execution.AuthorizeRefs(refs, s.Exec.RefCeiling)}
 	return startSpec{key: key, execID: execID, fingerprint: fp, requested: requested, ceiling: ceiling, params: params, prov: prov}, "", nil
 }
+
+// ReasonInvalidRef is the fixed X7 rejection for malformed mission.start
+// refs (SCP §0.2): it never echoes the input.
+const ReasonInvalidRef = "secret intent: invalid ref"
 
 func hashOf(parts ...string) string {
 	h := sha256.New()

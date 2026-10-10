@@ -4,6 +4,7 @@
 # local runtime data
 /.rhizome*/
 /rhizome
+/rhizome-secret-plane
 
 # local diagram scratch
 /*.mmd

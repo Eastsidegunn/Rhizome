@@ -1,12 +1,15 @@
 package workspace
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"rhizome/internal/events"
+	"rhizome/internal/secretref"
 	"rhizome/internal/trust"
 	"sort"
 	"strconv"
@@ -17,6 +20,20 @@ import (
 type intentRequest struct {
 	Intent
 	Actor string `json:"actor"`
+}
+
+// lenientIntentRequest is the non-secret HTTP decode target. The
+// FR-RHZ-135 secret request keys shadow Intent's fields (shallower depth
+// wins, case-insensitively), so the lenient decoder never fills or fails on
+// them: non-secret kinds decode exactly as before. Secret kinds are filled
+// only by I1 (decodeSecretIntent).
+type lenientIntentRequest struct {
+	intentRequest
+	OpID       json.RawMessage `json:"opId"`
+	RefKind    json.RawMessage `json:"refKind"`
+	ScopeTags  json.RawMessage `json:"scopeTags"`
+	Ref        json.RawMessage `json:"ref"`
+	ReasonCode json.RawMessage `json:"reasonCode"`
 }
 
 func decodeAttestHTTPRequest(raw json.RawMessage, request *intentRequest) error {
@@ -475,6 +492,10 @@ type HTTPServer struct {
 	// ExecGateDecided receives recorded launcher-gate decisions
 	// (FR-RHZ-124-S2, RelayHooks.GateDecided). nil = not wired.
 	ExecGateDecided func(GateDecision)
+	// Secrets is the single secret writer (FR-RHZ-135), shared by the
+	// composition root with the secret channel. nil = not wired: secret
+	// request intents are refused with X15 and GET /v1/secrets is 404.
+	Secrets *secretref.Service
 	// Blobs serves GET /v1/blob (RHZ-056, FR-RHZ-086), and POST /v1/blob when
 	// the value also implements BlobPutter (RHZ-081, FR-RHZ-112). nil = routes
 	// disabled (404), same 미배선 convention as ExecEvents. Injected by the
@@ -681,43 +702,101 @@ func (h *HTTPServer) Handler() http.Handler {
 				servePoisoned(w)
 				return
 			}
+			// The first-value decode streams the body exactly as before
+			// (bytes after the first value are never read for other kinds);
+			// a secret kind then reads the rest, because I1 checks every byte.
+			// The body is capped like blob uploads (413 above the cap).
+			lim := http.MaxBytesReader(w, r.Body, MaxIntentBodyBytes)
+			var seen bytes.Buffer
 			var raw json.RawMessage
-			if json.NewDecoder(r.Body).Decode(&raw) != nil {
+			if err := json.NewDecoder(io.TeeReader(lim, &seen)).Decode(&raw); err != nil {
+				if intentTooLarge(err) {
+					http.Error(w, "intent too large", http.StatusRequestEntityTooLarge)
+					return
+				}
 				http.Error(w, "invalid json", 400)
 				return
 			}
-			var in intentRequest
-			if json.Unmarshal(raw, &in) != nil {
+			hooks := RelayHooks{Inject: h.ExecInject, Start: h.ExecStart, EnforceJANUS: h.EnforceJANUS, GateDecided: h.ExecGateDecided, Secrets: h.Secrets}
+			if kind := secretKindProbe(raw); kind != "" {
+				if _, err := io.Copy(&seen, lim); err != nil {
+					if intentTooLarge(err) {
+						http.Error(w, "intent too large", http.StatusRequestEntityTooLarge)
+						return
+					}
+					http.Error(w, "invalid json", 400)
+					return
+				}
+				h.serveSecretIntent(w, kind, seen.Bytes(), hooks)
+				return
+			}
+			var lenient lenientIntentRequest
+			if json.Unmarshal(raw, &lenient) != nil {
 				http.Error(w, "invalid json", 400)
 				return
 			}
+			in := lenient.intentRequest
 			if in.Kind == "attest.create" && decodeAttestHTTPRequest(raw, &in) != nil {
 				http.Error(w, "invalid attest", http.StatusBadRequest)
 				return
 			}
 			in.Intent.requestUnknownField = requestIntentHasUnknownField(raw, in.Kind)
-			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, trust.Authority{}, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart, EnforceJANUS: h.EnforceJANUS, GateDecided: h.ExecGateDecided})
-			if storePoisoned(h.Store) || errors.Is(e, events.ErrPoisoned) {
-				servePoisoned(w)
-				return
-			}
-			if e != nil {
-				http.Error(w, e.Error(), 500)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(res)
-			if res.Accepted {
-				// FR-RHZ-080: note changes reuse workspace "projection" push as
-				// a GET /v1/knowledge requery signal, not a knowledge payload.
-				if p, x := Snapshot(h.Store, h.Trust); x == nil {
-					h.Broadcast(p)
-				}
-			}
+			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, trust.Authority{}, hooks)
+			h.answerIntent(w, res, e)
+			return
+		}
+		if r.URL.Path == "/v1/secrets" && r.Method == http.MethodGet {
+			h.serveSecrets(w, r)
 			return
 		}
 		http.NotFound(w, r)
 	})
+}
+
+// answerIntent writes a relay result: poison first (§1.8 MJ-1a), then a
+// relay error as 500, else the result; an accepted change (secret request
+// events included, FR-RHZ-135) re-publishes the workspace stream.
+func (h *HTTPServer) answerIntent(w http.ResponseWriter, res RelayResult, e error) {
+	if storePoisoned(h.Store) || errors.Is(e, events.ErrPoisoned) {
+		servePoisoned(w)
+		return
+	}
+	if e != nil {
+		http.Error(w, e.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+	if res.Accepted {
+		// FR-RHZ-080: note changes reuse workspace "projection" push as
+		// a GET /v1/knowledge requery signal, not a knowledge payload.
+		if p, x := Snapshot(h.Store, h.Trust); x == nil {
+			h.Broadcast(p)
+		}
+	}
+}
+
+// serveSecretIntent is the HTTP path of a "secret." kind (SCP §2.2): I0
+// before I1, then I1 over the whole body, then the relay (I2–I7). The
+// lenient decode only chose this path; none of its results are used.
+func (h *HTTPServer) serveSecretIntent(w http.ResponseWriter, kind string, body []byte, hooks RelayHooks) {
+	var (
+		res RelayResult
+		e   error
+	)
+	switch kind {
+	case secretref.KindRegisterRequest, secretref.KindRotateRequest, secretref.KindRevokeRequest:
+		in, actor, ok := decodeSecretIntent(body)
+		if !ok {
+			res = RelayResult{Reason: secretref.ReasonMalformed}
+			break
+		}
+		res, e = RelayIntentHooks(h.Store, in, actor, trust.Authority{}, hooks)
+	default:
+		// I0 (X1) through the relay, so the poison checks still apply.
+		res, e = RelayIntentHooks(h.Store, Intent{Kind: kind}, "", trust.Authority{}, hooks)
+	}
+	h.answerIntent(w, res, e)
 }
 
 func (h *HTTPServer) serveExecutionSnapshot(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -770,4 +849,14 @@ func (h *HTTPServer) serveExecutionStream(w http.ResponseWriter, r *http.Request
 			write("projection", x)
 		}
 	}
+}
+
+// MaxIntentBodyBytes caps a POST /v1/intent body (RHZ-107 review): the body
+// is buffered for the secret I1 check, so it is bounded like blob uploads.
+// Note content is already limited to 16 KiB; 1 MiB leaves ample room.
+const MaxIntentBodyBytes = 1 << 20
+
+func intentTooLarge(err error) bool {
+	var tooBig *http.MaxBytesError
+	return errors.As(err, &tooBig)
 }

@@ -99,6 +99,7 @@ Main HTTP routes:
 | `GET /v1/execution/{missionId}` | Project execution output; `/stream` is the streaming form. |
 | `POST /v1/blob`, `GET /v1/blob/{id}` | Store and read content-addressed blobs. |
 | `GET /v1/codeindex` | Read the derived code index. |
+| `GET /v1/secrets` | Project the secret registry as `{revision, body:{secrets}}`: per ref its name, kind, origin, scope tags, state, version, pending request, last outcome, lifecycle times and latest observation. No field holds a secret value. |
 
 Direct intent kinds are implemented in
 [internal/workspace/workspace.go](internal/workspace/workspace.go):
@@ -111,6 +112,7 @@ Direct intent kinds are implemented in
 | `relation.create` | Create a typed knowledge relation from lowerCamel `{from,to,relationType,sourceMemoryIds,confidence,actor}`. `actor` and all graph fields are required; a zero/omitted confidence defaults to `0.5`. Resubmitting an identical relation is idempotent. |
 | `edge.declare`, `edge.rewire`, `deliverable.register` | Link operational nodes and register outputs. |
 | `request.create`, `request.complete`, `request.unable`, `request.cancel`, `attest.create` | Record human work and signed attestations. |
+| `secret.register.request`, `secret.rotate.request`, `secret.revoke.request` | Ask the secret plane to register, rotate or revoke a secret. These carry metadata only (`opId`, `name`, `refKind`, `scopeTags`, `ref`, `reasonCode`, `actor`); any value field is rejected. |
 
 ## Agent onboarding
 
@@ -198,6 +200,7 @@ still print the full static flag list and exit with status 2.
 | `-trust-anchor <file>` | *(off)* | Validate the journal trust root against an operator-owned public-key anchor and verify signed gate decisions. |
 | `-trust-enforce-janus=all` | *(off)* | Require verified signatures for both allow and deny decisions on every JANUS gate. Requires `-trust-anchor`. |
 | `-janus-*` | *(off)* | Optional JANUS execution wiring, see below. |
+| `-secret-plane-*` | *(off)* | Optional secret plane channel, see below. |
 
 ### Signed gate verification
 
@@ -289,6 +292,144 @@ was enough for `podman info`, `podman run` and `hx --version`, also without
 The execution adapter IDs currently accepted are `claudecode` and `codex`.
 Adding another ID requires a code change in `validAdapter` in
 `internal/janusadapter/run.go`.
+
+### Secret plane (optional)
+
+A separate secret plane process holds secret values. The secret surfaces
+(secret intents, `GET /v1/secrets`, the channel frames, the journal events
+and the channel log lines) have no field for a value and reject unknown
+fields. Existing free-text fields elsewhere, such as notes or instructions,
+are outside this guarantee: do not paste values into them. Without
+`-secret-plane-socket`, secret requests are still recorded and stay pending.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-secret-plane-socket` | *(off)* | Absolute path of the plane's Unix socket. Its directory must be a real directory owned by you with mode `0700` or stricter. |
+| `-secret-plane-interval` | `2s` | Poll interval; at least `200ms`. |
+| `-secret-plane-id` | *(any)* | Only accept the plane with this `planeId` (`pl-` + 32 hex). |
+
+An invalid value prints only `serve: invalid secret-plane flag` and exits 2.
+Channel problems are logged as `secret channel: <code>` with fixed codes.
+The peer check accepts only a plane running as your own user. That is also
+its limit: any other process of the same user can impersonate the plane or
+Rhizome, so the plane's local `0600` files are not protected from your own
+processes.
+
+#### `rhizome secret`
+
+A small HTTP client of a running `serve` for the secret registry. It never
+opens the journal and has no way to enter a value: requests only ask the
+plane to act, and the plane prompts for any value itself. Every subcommand
+takes `-addr <host:port>` (default `127.0.0.1:8080`, the `serve` default).
+
+```sh
+./rhizome secret list [-json]
+./rhizome secret register-request -name <name> -kind provider-key|gateway-credential|other [-scope-tag <tag>]...
+./rhizome secret rotate-request -ref <sref-…>
+./rhizome secret revoke-request -ref <sref-…> -reason unused|exposed|rotated-out|other
+```
+
+The three request commands also take `-op-id <op-…>` (default: a fresh random
+id; repeat it to retry the same request safely) and `-actor <name>` (default
+`rhizome-cli`). `-scope-tag` may be repeated; tags are sent sorted and a
+duplicate is a usage error. On success they print `<opId>\t<ref>` and exit 0.
+`list` prints a tab-separated table with the header
+`ref name kind state version origin pending`, one line per ref; `pending` is
+the outstanding operation (`register`, `rotate` or `revoke`) and empty cells
+are `-`. `list -json` prints the `secrets` array of `GET /v1/secrets` (`[]`
+when empty).
+
+| stderr | Exit | When |
+|---|---|---|
+| `secret: usage` | 2 | Unknown subcommand or flag, missing required flag, extra argument, duplicate `-scope-tag`. |
+| `secret: rejected: <reason>` | 1 | `serve` refused the request with a known secret reason, such as `secret intent: name in use`. |
+| `secret: rejected` | 1 | `serve` refused the request with any other reason (not shown). |
+| `secret: serve unreachable` | 1 | No connection to `serve`. |
+| `secret: serve error` | 1 | Non-200 status (redirects are not followed), or a response that is not exactly the expected shape (body not shown). |
+| `secret: unavailable` | 1 | `serve` has no `GET /v1/secrets` route, or no random request id could be generated. |
+
+Error output never echoes extra arguments, flag names or values, the
+address, response bodies or unknown reasons. Successful output prints the
+request's `opId` and `ref`, and `list` prints projection fields only after
+checking each against its fixed format.
+
+#### `rhizome-secret-plane`
+
+The plane is a separate binary (`go build ./cmd/rhizome-secret-plane`). Run
+it in your own terminal:
+
+```sh
+./rhizome-secret-plane session [-state-dir <abs>] [-socket <abs>]
+./rhizome-secret-plane quarantine list [-state-dir <abs>]
+./rhizome-secret-plane run [-state-dir <abs>] <profile> [-- <extra args>]
+```
+
+`-state-dir` defaults to `<user config dir>/rhizome-secret-plane` and must be
+its own directory, separate from any Rhizome data directory. `-socket`
+defaults to `<state-dir>/run/plane.sock`; pass the same path to
+`serve -secret-plane-socket`. `session` refuses to work without a terminal on
+stdin; it shows Rhizome's requests and asks you to accept each one (values
+are typed without echo, twice). There is no flag or API that accepts for
+you.
+
+#### Injecting a secret into one program (`run`)
+
+`run` starts one program with stored values in its environment, so a tool
+such as a model download helper can use a token without the token ever
+being in your shell, in Rhizome, on the board or in a log. You set it up once
+in the `session`:
+
+```text
+plane> profile-add
+profile name: hf
+program (absolute path, no PATH lookup): /abs/path/to/hf
+fixed argument (empty line to finish): download
+fixed argument (empty line to finish):
+allow extra arguments at run time? (yes/no): no
+variable name (empty line to finish): HF_TOKEN
+ref for the variable: sref-<24 hex>
+variable name (empty line to finish):
+type "add profile" to continue: add profile
+```
+
+Then any process of yours can run `./rhizome-secret-plane run hf`. It reads
+the profile and the value, builds the environment from `HOME USER LOGNAME
+PATH LANG TMPDIR SHELL` of the caller plus the profile's variables, and
+replaces itself with the program (`exec`), so no plane process stays around
+holding the value. If `exec` fails, `run` prints `exec-failed` and exits
+at once; until that exit the value is still in its memory. Profiles hold refs, never values; the ref must be a
+stored value of this plane (attested refs have none). `profiles` lists them
+and `profile-remove <name>` removes one, both only in the session.
+
+`run` never prompts and never confirms anything. It prints only
+`rhizome-secret-plane: run: <code>` on failure, with `<code>` one of
+`usage`, `unknown-profile`, `extra-args-refused`, `value-missing`,
+`state-unsafe`, `program-unsafe`, `exec-failed`; profile names, arguments and
+paths are not echoed.
+
+The program is checked when the profile is added and again right before
+`exec`: the file and every directory on its path, from `/` down, must be
+owned by you or root and must not be group- or other-writable, and the file
+must be a regular executable. Symlinks are resolved: each symlink on the
+given path must be owned by you or root, the resolved path gets the same
+checks, and the resolved path is what runs. A program under a sticky
+world-writable directory such as `/tmp` fails. A failed check at `run` time
+prints `program-unsafe`.
+
+Limits, honestly:
+
+- Any process running as your user can read the plane's `0600` values file
+  directly; `run` does not change that (weak local mode).
+- A program that prints, logs or forwards its credential exposes it. Extra
+  arguments could make a program do so, which is why they are refused unless
+  the profile allows them and why the program path is fixed.
+- The value is in the program's environment, which same-user tools can
+  inspect while it runs.
+- Go cannot guarantee that every intermediate copy of a value is cleared
+  (slice growth, `ReadPassword`, base64 decoding); the plane wipes the buffers
+  it owns, which narrows but does not close that window.
+- Nothing is added to the calling shell; the session launcher already strips
+  secret-shaped variable names from agent sessions.
 
 ### Gunnflow adapter (optional)
 

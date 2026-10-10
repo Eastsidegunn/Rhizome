@@ -129,8 +129,15 @@ func scanInternal(t *testing.T) map[string][]string {
 // P4: 실저장소 전체가 비준 경계를 지킨다 — 위반 정확히 0(coordinator 2건은
 // allowed가 흡수, R5가 그 목록의 신선함까지 강제). 변이 probe 4종(금지
 // import·예외 삭제·유령 예외·미분류 패키지)은 전부 이 테스트에서 FAIL한다.
+//
+// FR-RHZ-136 (SCP §7 item 2): the input is now scanTree reduced by
+// reduceLegacy; TestRepoEdgesFRRHZ136 pins it equal to scanInternal's.
 func TestRepositoryObeysKernelBoundaryFRRHZ085(t *testing.T) {
-	imports := scanInternal(t)
+	tree, err := scanTree(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	imports := reduceLegacy(tree)
 	// 스캐너 퇴행 방지: 조용히 0개를 읽으면 경계 검사는 공허하게 green이 된다.
 	if len(imports) < 30 {
 		t.Fatalf("scanner found only %d packages — scan broken?", len(imports))
