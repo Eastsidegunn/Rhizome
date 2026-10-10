@@ -1070,6 +1070,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return graphCmd(args[1:], out, errOut)
 	case "gate":
 		return gate(args[1:], out, errOut)
+	case "agent":
+		return agentCmd(args[1:], out, errOut)
 	default:
 		return 2
 	}

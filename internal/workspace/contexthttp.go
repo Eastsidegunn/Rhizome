@@ -43,6 +43,12 @@ type contextBundle struct {
 		CurrentAction string  `json:"currentAction,omitempty"`
 		Progress      float64 `json:"progress,omitempty"`
 		HasProgress   bool    `json:"hasProgress"`
+		// Prompt: RHZ-131 (FR-RHZ-172), opt-in and nested. The mission's
+		// prompt (domain.Mission.Success) is filled only for
+		// ?include=prompt, so a request without it stays byte-identical to
+		// the pre-RHZ-131 bundle (pinned goldens) and the `,"steps":[]}`
+		// suffix pin is unaffected.
+		Prompt string `json:"prompt,omitempty"`
 	} `json:"task"`
 	Goal struct {
 		ID          string `json:"id"`
@@ -138,6 +144,24 @@ func (h *HTTPServer) serveContext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "task, goal and mission are mutually exclusive", http.StatusBadRequest)
 		return
 	}
+	// RHZ-131 (FR-RHZ-172): include is a task-bundle opt-in whose only value
+	// is "prompt". Like the other bad parameters here, an unknown value, or
+	// include on a goal/mission notes bundle, is a 400 — never silently
+	// ignored. It changes only the task.prompt field: the knowledge
+	// retrieval and the UseTrace (Query "task:<id>") are the same with or
+	// without it.
+	include := q.Get("include")
+	for _, v := range q["include"] {
+		// Every repeated value is checked: include=prompt&include=bogus is a 400.
+		if v != include || (v != "" && v != "prompt") {
+			http.Error(w, "invalid include", http.StatusBadRequest)
+			return
+		}
+	}
+	if include != "" && taskID == "" {
+		http.Error(w, "include requires task", http.StatusBadRequest)
+		return
+	}
 	if goalID != "" {
 		h.serveNotesContext(w, r, "goal", goalID)
 		return
@@ -191,6 +215,9 @@ func (h *HTTPServer) serveContext(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(seeds)
 	bundle := contextBundle{Memories: []contextMemoryDTO{}, Knowledge: []contextKnowledgeDTO{}, Relations: []contextRelationDTO{}}
 	bundle.Task.ID, bundle.Task.Name, bundle.Task.State, bundle.Task.Assignee = taskID, m.Description, mapState(m.State), m.Assignee
+	if include == "prompt" {
+		bundle.Task.Prompt = m.Success
+	}
 	sv, err := (surface.Service{Store: h.Store}).ByMission(taskID)
 	if err != nil && len(h.Store.List("surface", "surface-"+taskID)) > 0 {
 		http.Error(w, "surface replay failed", http.StatusInternalServerError)
