@@ -702,21 +702,32 @@ func (h *HTTPServer) Handler() http.Handler {
 				servePoisoned(w)
 				return
 			}
-			// The whole body is kept: a secret kind is checked strictly over
-			// every byte (I1). The first-value decode is unchanged.
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(w, "invalid json", 400)
-				return
-			}
+			// The first-value decode streams the body exactly as before
+			// (bytes after the first value are never read for other kinds);
+			// a secret kind then reads the rest, because I1 checks every byte.
+			// The body is capped like blob uploads (413 above the cap).
+			lim := http.MaxBytesReader(w, r.Body, MaxIntentBodyBytes)
+			var seen bytes.Buffer
 			var raw json.RawMessage
-			if json.NewDecoder(bytes.NewReader(body)).Decode(&raw) != nil {
+			if err := json.NewDecoder(io.TeeReader(lim, &seen)).Decode(&raw); err != nil {
+				if intentTooLarge(err) {
+					http.Error(w, "intent too large", http.StatusRequestEntityTooLarge)
+					return
+				}
 				http.Error(w, "invalid json", 400)
 				return
 			}
 			hooks := RelayHooks{Inject: h.ExecInject, Start: h.ExecStart, EnforceJANUS: h.EnforceJANUS, GateDecided: h.ExecGateDecided, Secrets: h.Secrets}
 			if kind := secretKindProbe(raw); kind != "" {
-				h.serveSecretIntent(w, kind, body, hooks)
+				if _, err := io.Copy(&seen, lim); err != nil {
+					if intentTooLarge(err) {
+						http.Error(w, "intent too large", http.StatusRequestEntityTooLarge)
+						return
+					}
+					http.Error(w, "invalid json", 400)
+					return
+				}
+				h.serveSecretIntent(w, kind, seen.Bytes(), hooks)
 				return
 			}
 			var lenient lenientIntentRequest
@@ -838,4 +849,14 @@ func (h *HTTPServer) serveExecutionStream(w http.ResponseWriter, r *http.Request
 			write("projection", x)
 		}
 	}
+}
+
+// MaxIntentBodyBytes caps a POST /v1/intent body (RHZ-107 review): the body
+// is buffered for the secret I1 check, so it is bounded like blob uploads.
+// Note content is already limited to 16 KiB; 1 MiB leaves ample room.
+const MaxIntentBodyBytes = 1 << 20
+
+func intentTooLarge(err error) bool {
+	var tooBig *http.MaxBytesError
+	return errors.As(err, &tooBig)
 }
