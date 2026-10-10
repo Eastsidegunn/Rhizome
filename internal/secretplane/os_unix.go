@@ -21,3 +21,6 @@ func lockDir(f *os.File) error {
 	}
 	return nil
 }
+
+// oNoFollow makes an open fail on a symlink (read-only plane file reads).
+const oNoFollow = syscall.O_NOFOLLOW

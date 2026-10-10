@@ -7,6 +7,7 @@
 //
 //	rhizome-secret-plane session [-state-dir <abs>] [-socket <abs>]
 //	rhizome-secret-plane quarantine list [-state-dir <abs>]
+//	rhizome-secret-plane run [-state-dir <abs>] <profile> [-- <extra args>]
 //
 // -state-dir is the plane state directory. It must be absolute and must be a
 // directory of its own, separate from any Rhizome data directory (the plane
@@ -21,11 +22,14 @@
 // (macOS sun_path); with a long state directory pass a shorter -socket.
 //
 // session requires an interactive terminal on stdin and refuses all work
-// otherwise. There is no non-interactive completion path: no --yes, no
-// auto-approve configuration, no API that confirms, no batch rotate/revoke
+// otherwise. Run profiles are added and removed only there. There is no
+// non-interactive completion path: no --yes, no auto-approve configuration, no API that confirms, no batch rotate/revoke
 // (split plan §4, D19). quarantine list is read-only and needs no terminal.
+// run (see run.go) execs a profile's program with stored values in its
+// environment; it consumes values and confirms nothing.
 //
-// Flag parse errors print only "rhizome-secret-plane: usage" (exit 2); -h
+// Flag parse errors print only "rhizome-secret-plane: usage" (run:
+// "rhizome-secret-plane: run: usage") (exit 2); -h
 // prints "Usage of <command>:" and the flag defaults (exit 2) (SCP §1.8
 // MJ-2, P6). Values are never printed and never part of an error message.
 package main
@@ -39,6 +43,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"rhizome/internal/peercred"
 	"rhizome/internal/secretplane"
@@ -75,11 +80,15 @@ type env struct {
 	verify func(*net.UnixConn) (peercred.Verified, error)
 	// started is a test hook called once the server listens.
 	started func(*server.Server)
+	// environ and exec serve `run` (syscall.Exec in the binary).
+	environ func() []string
+	exec    func(argv0 string, argv, envv []string) error
 }
 
 func realEnv() *env {
 	return &env{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, stdinFd: int(os.Stdin.Fd()),
-		isTerminal: termio.IsTerminal, readPassword: termio.ReadPassword, configDir: os.UserConfigDir, exit: os.Exit}
+		isTerminal: termio.IsTerminal, readPassword: termio.ReadPassword, configDir: os.UserConfigDir, exit: os.Exit,
+		environ: os.Environ, exec: syscall.Exec}
 }
 
 func main() { os.Exit(run(os.Args[1:], realEnv())) }
@@ -92,6 +101,8 @@ func run(args []string, e *env) int {
 	switch args[0] {
 	case "session":
 		return runSession(args[1:], e)
+	case "run":
+		return runRun(args[1:], e)
 	case "quarantine":
 		if len(args) < 2 || args[1] != "list" {
 			fmt.Fprintln(e.stderr, msgUsage)
@@ -147,7 +158,8 @@ func errCode(err error) string {
 		secretplane.ErrValuesCorrupt, secretplane.ErrFatal, secretplane.ErrClosed, secretplane.ErrInvalidPending,
 		secretplane.ErrInvalidInput, secretplane.ErrInvalidDecision, secretplane.ErrUnknownOp, secretplane.ErrUnknownRef,
 		secretplane.ErrDone, secretplane.ErrOpBusy, secretplane.ErrDisplayOnly, secretplane.ErrFrozen,
-		secretplane.ErrEpochPhase, secretplane.ErrHalted, secretplane.ErrStalePlane} {
+		secretplane.ErrEpochPhase, secretplane.ErrHalted, secretplane.ErrStalePlane, secretplane.ErrProfileExists,
+		secretplane.ErrUnknownProfile, secretplane.ErrValueMissing, secretplane.ErrProfilesCorrupt} {
 		if errors.Is(err, k) {
 			return strings.TrimPrefix(k.Error(), "secretplane: ")
 		}

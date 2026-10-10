@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,8 @@ const (
 	confirmRotated  = "rotated externally"
 	confirmAttest   = "attest"
 	confirmReplace  = "replace epoch"
+	confirmAddProf  = "add profile"
+	confirmRmProf   = "remove profile"
 	actionAccept    = "accept"
 	actionReject    = "reject"
 	actionSkip      = "skip"
@@ -47,6 +50,9 @@ const helpText = `commands:
   quarantine       list quarantined entries and abandoned operations
   unreconciled     list refs in the values file unknown to the ledger
   epoch-replace    freeze the plane and replace its epoch (P5)
+  profiles         list run profiles (no values)
+  profile-add      add a run profile: program + variables bound to refs
+  profile-remove <name>  remove a run profile
   help             this text
   quit             stop the plane
 `
@@ -144,6 +150,12 @@ func (s *session) loop() {
 			s.showUnreconciled()
 		case "epoch-replace":
 			s.epochReplace()
+		case "profiles":
+			s.showProfiles()
+		case "profile-add":
+			s.profileAdd()
+		case "profile-remove":
+			s.profileRemove(arg)
 		default:
 			s.say("unknown command; type \"help\"")
 		}
@@ -511,4 +523,132 @@ func (s *session) epochReplace() {
 		return
 	}
 	s.say("phase frozen: the next polls from Rhizome record the cutoff, quarantine and switch to the new plane id (see status)")
+}
+
+func formatProfile(p secretplane.Profile) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s program=%s", p.Name, strconv.Quote(p.Program))
+	if len(p.Args) > 0 {
+		q := make([]string, len(p.Args))
+		for i, a := range p.Args {
+			q[i] = strconv.Quote(a)
+		}
+		b.WriteString(" args=" + strings.Join(q, " "))
+	}
+	if p.AllowExtraArgs {
+		b.WriteString(" extra-args=allowed")
+	} else {
+		b.WriteString(" extra-args=refused")
+	}
+	names := make([]string, 0, len(p.Env))
+	for n := range p.Env {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		b.WriteString(" " + n + "=" + p.Env[n])
+	}
+	return b.String()
+}
+
+func (s *session) showProfiles() {
+	ps, err := s.pl.Profiles()
+	if err != nil {
+		s.fail(err)
+		return
+	}
+	if len(ps) == 0 {
+		s.say("no profiles")
+		return
+	}
+	for _, p := range ps {
+		s.say("%s", formatProfile(p))
+	}
+}
+
+// profileAdd collects a run profile. Variables bind to refs only; a value is
+// never entered here.
+func (s *session) profileAdd() {
+	var p secretplane.Profile
+	var ok bool
+	if p.Name, ok = s.readLine("profile name: "); !ok || !secretwire.ValidName(p.Name) {
+		s.say(msgInvalidInput)
+		return
+	}
+	if p.Program, ok = s.readLine("program (absolute path, no PATH lookup): "); !ok || !secretplane.ExecutableFile(p.Program) ||
+		filepath.Clean(p.Program) != p.Program || !filepath.IsAbs(p.Program) {
+		s.say(msgInvalidInput)
+		return
+	}
+	for {
+		a, ok := s.readLine("fixed argument (empty line to finish): ")
+		if !ok {
+			s.say(msgInvalidInput)
+			return
+		}
+		if a == "" {
+			break
+		}
+		if len(p.Args) == secretplane.MaxProfileArgs {
+			s.say(msgInvalidInput)
+			return
+		}
+		p.Args = append(p.Args, a)
+	}
+	switch x, _ := s.readLine("allow extra arguments at run time? (yes/no): "); x {
+	case "yes":
+		p.AllowExtraArgs = true
+	case "no":
+	default:
+		s.say(msgInvalidInput)
+		return
+	}
+	p.Env = map[string]string{}
+	for {
+		n, ok := s.readLine("variable name (empty line to finish): ")
+		if !ok {
+			s.say(msgInvalidInput)
+			return
+		}
+		if n == "" {
+			break
+		}
+		r, ok := s.readLine("ref for the variable: ")
+		if !ok || !secretplane.ValidEnvName(n) || !secretwire.ValidRef(r) || p.Env[n] != "" || len(p.Env) == secretplane.MaxProfileEnv {
+			s.say(msgInvalidInput)
+			return
+		}
+		p.Env[n] = r
+	}
+	if len(p.Env) == 0 {
+		s.say(msgInvalidInput)
+		return
+	}
+	s.say("profile: %s", formatProfile(p))
+	s.say("run gives this program the stored values in these variables; a program that prints them exposes them")
+	if !s.confirm(confirmAddProf) {
+		s.say(msgNotConfirmed)
+		return
+	}
+	if err := s.pl.AddProfile(p); err != nil {
+		s.fail(err)
+		return
+	}
+	s.say("profile added: %s", p.Name)
+}
+
+func (s *session) profileRemove(name string) {
+	if !secretwire.ValidName(name) {
+		s.say(msgInvalidInput)
+		return
+	}
+	if !s.confirm(confirmRmProf) {
+		s.say(msgNotConfirmed)
+		return
+	}
+	if err := s.pl.RemoveProfile(name); err != nil {
+		s.fail(err)
+		return
+	}
+	s.say("profile removed: %s", name)
 }

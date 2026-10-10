@@ -46,8 +46,16 @@ func (pl *Plane) readValues() ([]valueRec, error) {
 		return nil, ErrIO
 	}
 	defer clear(data)
+	return parseValues(data)
+}
+
+// parseValues strictly parses values-file bytes (shared by the plane and
+// the lock-free run reader). On error nothing is returned and every decoded
+// value is wiped.
+func parseValues(data []byte) ([]valueRec, error) {
 	var vf valuesFile
 	if !decodeLine(data, &vf) || vf.V != 1 {
+		wipeValues(vf.Values)
 		return nil, ErrValuesCorrupt
 	}
 	seen := map[string]bool{}
@@ -136,7 +144,7 @@ func (pl *Plane) writeValues(vals []valueRec) error {
 	return pl.syncDir()
 }
 
-// removeTemps deletes leftover temp values files (P4).
+// removeTemps deletes leftover temp values and profiles files (P4).
 func (pl *Plane) removeTemps() error {
 	ents, err := os.ReadDir(pl.dir)
 	if err != nil {
@@ -144,7 +152,7 @@ func (pl *Plane) removeTemps() error {
 	}
 	removed := false
 	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), valuesTmpPrefix) {
+		if strings.HasPrefix(e.Name(), valuesTmpPrefix) || strings.HasPrefix(e.Name(), profilesTmpPrefix) {
 			if err := os.Remove(filepath.Join(pl.dir, e.Name())); err != nil {
 				return ErrIO
 			}

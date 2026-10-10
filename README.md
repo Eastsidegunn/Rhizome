@@ -353,6 +353,72 @@ address, response bodies or unknown reasons. Successful output prints the
 request's `opId` and `ref`, and `list` prints projection fields only after
 checking each against its fixed format.
 
+#### `rhizome-secret-plane`
+
+The plane is a separate binary (`go build ./cmd/rhizome-secret-plane`). Run
+it in your own terminal:
+
+```sh
+./rhizome-secret-plane session [-state-dir <abs>] [-socket <abs>]
+./rhizome-secret-plane quarantine list [-state-dir <abs>]
+./rhizome-secret-plane run [-state-dir <abs>] <profile> [-- <extra args>]
+```
+
+`-state-dir` defaults to `<user config dir>/rhizome-secret-plane` and must be
+its own directory, separate from any Rhizome data directory. `-socket`
+defaults to `<state-dir>/run/plane.sock`; pass the same path to
+`serve -secret-plane-socket`. `session` refuses to work without a terminal on
+stdin; it shows Rhizome's requests and asks you to accept each one (values
+are typed without echo, twice). There is no flag or API that accepts for
+you.
+
+#### Injecting a secret into one program (`run`)
+
+`run` starts one program with stored values in its environment, so a tool
+such as a model download helper can use a token without the token ever
+being in your shell, in Rhizome, on the board or in a log. You set it up once
+in the `session`:
+
+```text
+plane> profile-add
+profile name: hf
+program (absolute path, no PATH lookup): /abs/path/to/hf
+fixed argument (empty line to finish): download
+fixed argument (empty line to finish):
+allow extra arguments at run time? (yes/no): no
+variable name (empty line to finish): HF_TOKEN
+ref for the variable: sref-<24 hex>
+variable name (empty line to finish):
+type "add profile" to continue: add profile
+```
+
+Then any process of yours can run `./rhizome-secret-plane run hf`. It reads
+the profile and the value, builds the environment from `HOME USER LOGNAME
+PATH LANG TMPDIR SHELL` of the caller plus the profile's variables, and
+replaces itself with the program (`exec`), so no plane process stays around
+holding the value. If `exec` fails, `run` prints `exec-failed` and exits
+at once; until that exit the value is still in its memory. Profiles hold refs, never values; the ref must be a
+stored value of this plane (attested refs have none). `profiles` lists them
+and `profile-remove <name>` removes one, both only in the session.
+
+`run` never prompts and never confirms anything. It prints only
+`rhizome-secret-plane: run: <code>` on failure, with `<code>` one of
+`usage`, `unknown-profile`, `extra-args-refused`, `value-missing`,
+`state-unsafe`, `exec-failed`; profile names, arguments and paths are not
+echoed.
+
+Limits, honestly:
+
+- Any process running as your user can read the plane's `0600` values file
+  directly; `run` does not change that (weak local mode).
+- A program that prints, logs or forwards its credential exposes it. Extra
+  arguments could make a program do so, which is why they are refused unless
+  the profile allows them and why the program path is fixed.
+- The value is in the program's environment, which same-user tools can
+  inspect while it runs.
+- Nothing is added to the calling shell; the session launcher already strips
+  secret-shaped variable names from agent sessions.
+
 ### Gunnflow adapter (optional)
 
 [gunnflow-adapter/](gunnflow-adapter/) serves the Gunnflow direct wire in front

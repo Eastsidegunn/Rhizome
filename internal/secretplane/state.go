@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 
 	"rhizome/internal/secretwire"
@@ -66,7 +67,7 @@ func decodeLine(line []byte, v any) bool {
 		return false
 	}
 	_, err := dec.Token()
-	return err != nil // only EOF may follow
+	return err == io.EOF // only whitespace may follow; garbage is corrupt
 }
 
 type phase int

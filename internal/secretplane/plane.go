@@ -126,7 +126,7 @@ func (pl *Plane) startup() error {
 	defer pl.mu.Unlock()
 	// Mode checks first: nothing is written into a directory holding an
 	// unsafe plane file.
-	for _, name := range []string{ledgerName, valuesName, quarantineName} {
+	for _, name := range []string{ledgerName, valuesName, quarantineName, profilesName} {
 		fi, err := os.Lstat(filepath.Join(pl.dir, name))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
