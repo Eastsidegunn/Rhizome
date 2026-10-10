@@ -99,6 +99,7 @@ Main HTTP routes:
 | `GET /v1/execution/{missionId}` | Project execution output; `/stream` is the streaming form. |
 | `POST /v1/blob`, `GET /v1/blob/{id}` | Store and read content-addressed blobs. |
 | `GET /v1/codeindex` | Read the derived code index. |
+| `GET /v1/secrets` | Project the secret registry as `{revision, body:{secrets}}`: per ref its name, kind, origin, scope tags, state, version, pending request, last outcome, lifecycle times and latest observation. No field holds a secret value. |
 
 Direct intent kinds are implemented in
 [internal/workspace/workspace.go](internal/workspace/workspace.go):
@@ -111,6 +112,7 @@ Direct intent kinds are implemented in
 | `relation.create` | Create a typed knowledge relation from lowerCamel `{from,to,relationType,sourceMemoryIds,confidence,actor}`. `actor` and all graph fields are required; a zero/omitted confidence defaults to `0.5`. Resubmitting an identical relation is idempotent. |
 | `edge.declare`, `edge.rewire`, `deliverable.register` | Link operational nodes and register outputs. |
 | `request.create`, `request.complete`, `request.unable`, `request.cancel`, `attest.create` | Record human work and signed attestations. |
+| `secret.register.request`, `secret.rotate.request`, `secret.revoke.request` | Ask the secret plane to register, rotate or revoke a secret. These carry metadata only (`opId`, `name`, `refKind`, `scopeTags`, `ref`, `reasonCode`, `actor`); any value field is rejected. |
 
 ## Agent onboarding
 
@@ -198,6 +200,7 @@ still print the full static flag list and exit with status 2.
 | `-trust-anchor <file>` | *(off)* | Validate the journal trust root against an operator-owned public-key anchor and verify signed gate decisions. |
 | `-trust-enforce-janus=all` | *(off)* | Require verified signatures for both allow and deny decisions on every JANUS gate. Requires `-trust-anchor`. |
 | `-janus-*` | *(off)* | Optional JANUS execution wiring, see below. |
+| `-secret-plane-*` | *(off)* | Optional secret plane channel, see below. |
 
 ### Signed gate verification
 
@@ -289,6 +292,28 @@ was enough for `podman info`, `podman run` and `hx --version`, also without
 The execution adapter IDs currently accepted are `claudecode` and `codex`.
 Adding another ID requires a code change in `validAdapter` in
 `internal/janusadapter/run.go`.
+
+### Secret plane (optional)
+
+A separate secret plane process holds secret values. The secret surfaces
+(secret intents, `GET /v1/secrets`, the channel frames, the journal events
+and the channel log lines) have no field for a value and reject unknown
+fields. Existing free-text fields elsewhere, such as notes or instructions,
+are outside this guarantee: do not paste values into them. Without
+`-secret-plane-socket`, secret requests are still recorded and stay pending.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-secret-plane-socket` | *(off)* | Absolute path of the plane's Unix socket. Its directory must be a real directory owned by you with mode `0700` or stricter. |
+| `-secret-plane-interval` | `2s` | Poll interval; at least `200ms`. |
+| `-secret-plane-id` | *(any)* | Only accept the plane with this `planeId` (`pl-` + 32 hex). |
+
+An invalid value prints only `serve: invalid secret-plane flag` and exits 2.
+Channel problems are logged as `secret channel: <code>` with fixed codes.
+The peer check accepts only a plane running as your own user. That is also
+its limit: any other process of the same user can impersonate the plane or
+Rhizome, so the plane's local `0600` files are not protected from your own
+processes.
 
 ### Gunnflow adapter (optional)
 

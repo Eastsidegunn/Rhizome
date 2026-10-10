@@ -26,7 +26,9 @@ import (
 	"rhizome/internal/memory"
 	"rhizome/internal/projector"
 	"rhizome/internal/question"
+	"rhizome/internal/secretchannel"
 	"rhizome/internal/secretref"
+	"rhizome/internal/secretwire"
 	"rhizome/internal/sessionlauncher"
 	"rhizome/internal/source"
 	"rhizome/internal/trust"
@@ -569,6 +571,13 @@ func assembleServeWith(store events.Port, blobs workspace.BlobGetter, indexRepo,
 // the HTTP relay and GET /v1/secrets; the caller owns the pointer so the
 // secret channel can share it.
 func assembleServeShared(store events.Port, secrets *secretref.Service, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, sl *sessionlauncher.Launcher, errOut io.Writer, enforceAll bool, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
+	_, handler, loop := assembleServeCore(store, secrets, blobs, indexRepo, indexOut, jc, sl, errOut, enforceAll, verifiers...)
+	return handler, loop
+}
+
+// assembleServeCore is assembleServeShared that also returns the workspace
+// server, so serve can push SSE projections from the secret channel (W12).
+func assembleServeCore(store events.Port, secrets *secretref.Service, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, sl *sessionlauncher.Launcher, errOut io.Writer, enforceAll bool, verifiers ...*trust.Verifier) (*workspace.HTTPServer, http.Handler, *janusadapter.Loop) {
 	h := workspace.NewHTTP(store)
 	h.Secrets = secrets
 	h.EnforceJANUS = enforceAll
@@ -584,7 +593,7 @@ func assembleServeShared(store events.Port, secrets *secretref.Service, blobs wo
 		if assembleServeInspect != nil {
 			assembleServeInspect(h)
 		}
-		return h.Handler(), nil
+		return h, h.Handler(), nil
 	}
 	replay := janusadapter.RealReplay(jc.HX)
 	// FR-RHZ-083 (T25): the /v1/execution outbound emit projects each bound
@@ -655,8 +664,36 @@ func assembleServeShared(store events.Port, secrets *secretref.Service, blobs wo
 	if assembleServeInspect != nil {
 		assembleServeInspect(h)
 	}
-	return h.Handler(), loop
+	return h, h.Handler(), loop
 }
+
+// errSecretPlaneFlag is the only stderr text for a bad -secret-plane-* value
+// (§3.4): the value itself is never echoed.
+const errSecretPlaneFlag = "serve: invalid secret-plane flag"
+
+// secretChannelFromFlags validates the -secret-plane-* flags (§3.4, approval
+// Q3). An empty socket turns the channel off (nil): secret requests are
+// still recorded and stay pending (D10 fail-closed).
+func secretChannelFromFlags(socket, interval, planeID string) (*secretchannel.Config, error) {
+	iv, err := time.ParseDuration(interval)
+	if err != nil || iv < secretchannel.MinInterval {
+		return nil, errors.New(errSecretPlaneFlag)
+	}
+	if planeID != "" && !secretwire.ValidPlaneID(planeID) {
+		return nil, errors.New(errSecretPlaneFlag)
+	}
+	if socket == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(socket) || filepath.Clean(socket) != socket {
+		return nil, errors.New(errSecretPlaneFlag)
+	}
+	return &secretchannel.Config{SocketPath: socket, Interval: iv, ExpectedPlaneID: planeID}, nil
+}
+
+// secretChannelInspect, when set (tests only), sees the channel config
+// serve built. nil in production.
+var secretChannelInspect func(secretchannel.Config)
 
 // serve runs serveCtx until SIGINT/SIGTERM (FR-RHZ-107): the signal cancels
 // the context, the HTTP server shuts down and the deferred journal unlock runs,
@@ -702,6 +739,9 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	slPath := f.String("session-launcher-config", "", "")
 	trustAnchor := f.String("trust-anchor", "", "")
 	trustEnforce := f.String("trust-enforce-janus", "", "")
+	scSocket := f.String("secret-plane-socket", "", "")
+	scInterval := f.String("secret-plane-interval", secretchannel.DefaultInterval.String(), "")
+	scPlaneID := f.String("secret-plane-id", "", "")
 	if err := f.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			f.SetOutput(errOut)
@@ -714,6 +754,11 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		} else {
 			fmt.Fprintln(errOut, "serve: usage")
 		}
+		return 2
+	}
+	scCfg, e := secretChannelFromFlags(*scSocket, *scInterval, *scPlaneID)
+	if e != nil {
+		fmt.Fprintln(errOut, errSecretPlaneFlag)
 		return 2
 	}
 	journalSet, blobsSet, janusEnvModeSet, trustAnchorSet, trustEnforceSet := false, false, false, false, false
@@ -839,21 +884,48 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	// The one secret writer of this process (FR-RHZ-134 §1.5): shared with
 	// the secret channel (S4), which must receive this same pointer.
 	secrets := secretref.New(j)
-	handler, loop := assembleServeShared(j, secrets, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, sl, errOut, enforceAll, verifier)
+	h, handler, loop := assembleServeCore(j, secrets, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, sl, errOut, enforceAll, verifier)
+	var sc *secretchannel.Channel
+	if scCfg != nil {
+		// Exactly one channel per secret writer (§1.5, W8): the same pointer
+		// as the HTTP relay, the journal's poison latch, SSE like the JANUS
+		// loop (W12), fixed §3.6 reports.
+		scCfg.Service = secrets
+		scCfg.Latch = j
+		scCfg.OnAppend = func() {
+			if p, e := workspace.Snapshot(j, h.Trust); e == nil {
+				h.Broadcast(p)
+			}
+		}
+		scCfg.OnError = func(msg string) { fmt.Fprintf(errOut, "secret channel: %s\n", msg) }
+		if secretChannelInspect != nil {
+			secretChannelInspect(*scCfg)
+		}
+		if sc, e = secretchannel.New(*scCfg); e != nil {
+			fmt.Fprintln(errOut, errSecretPlaneFlag)
+			return 2
+		}
+	}
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Bind before any background loop starts: a failed bind then returns
+	// with no JANUS loop or secret channel running against the journal.
+	ln, e := net.Listen("tcp", *addr)
+	if e != nil {
+		fmt.Fprintln(errOut, e)
+		return 1
+	}
 	var wg sync.WaitGroup
 	if loop != nil {
 		wg.Add(1)
 		go func() { defer wg.Done(); _ = loop.Run(ctx, jc.Interval) }()
 	}
-	ln, e := net.Listen("tcp", *addr)
-	if e != nil {
-		fmt.Fprintln(errOut, e)
-		return 1
+	if sc != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = sc.Run(ctx) }()
 	}
 	// Request contexts end with ctx, so long-lived SSE handlers (which exit
 	// only on r.Context()) release their connections instead of stalling
