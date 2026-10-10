@@ -10,16 +10,31 @@ import type { CapabilityLevel } from '@gunnflow/contract';
  * The cockpit's current projection shape, as far as this adapter produces it.
  * Declared here so the adapter depends on nothing but the contract and the port.
  */
+/**
+ * RHZ-133 (FR-RHZ-173): optional per-node facts Rhizome derives from its
+ * journal — changedAtRevision / lastActivityTs (own streams), and for tasks
+ * active / originNodeId / steps, for goals steps. Carried through verbatim
+ * when present; validated only where nodes.ts emits them (wire fields 0.6).
+ */
+export interface StepsCount {
+  done: number;
+  total: number;
+}
+interface Liveness {
+  changedAtRevision?: number;
+  lastActivityTs?: number;
+}
 type NodeState = 'queued' | 'running' | 'waiting' | 'paused' | 'blocked' | 'completed' | 'failed' | 'cancelled';
-interface MissionProjection {
+interface MissionProjection extends Liveness {
   kind: 'mission';
   id: string;
   name: string;
   attention: boolean;
   /** Goal lifecycle state (RHZ-061). Terminal goals are dropped upstream (조종석=진행 중); non-terminal goals stay even without a live task (RHZ-074/FR-RHZ-102). */
   state?: string;
+  steps?: StepsCount;
 }
-interface TaskProjection {
+interface TaskProjection extends Liveness {
   kind: 'task';
   id: string;
   missionId: string;
@@ -29,8 +44,11 @@ interface TaskProjection {
   progress?: number;
   blockedReason?: string;
   attention: boolean;
+  active?: boolean;
+  originNodeId?: string;
+  steps?: StepsCount;
 }
-interface GateProjection {
+interface GateProjection extends Liveness {
   kind: 'gate';
   id: string;
   missionId: string;
@@ -66,7 +84,7 @@ interface WireWorkspaceBody extends Record<string, unknown> {
   /** Read-only trust-domain metadata is accepted but never projected to nodes. */
   trust?: WireTrustSummary;
 }
-interface DeliverableProjection {
+interface DeliverableProjection extends Liveness {
   kind: 'deliverable';
   id: string;
   missionId: string;
@@ -99,7 +117,7 @@ interface EdgeProjection {
   /** Id of the edge this one replaces (edge.rewire, RHZ-066); the replaced edge is not a live relationship. */
   supersedes?: string;
 }
-export interface RequestProjection {
+export interface RequestProjection extends Liveness {
   kind: 'request';
   id: string;
   name: string;
@@ -177,7 +195,7 @@ export interface WorkspaceProjection {
   effects: unknown[];
 }
 
-interface WireTask {
+interface WireTask extends Liveness {
   id: string;
   missionId: string;
   name: string;
@@ -187,8 +205,18 @@ interface WireTask {
   hasProgress: boolean;
   blockedReason?: string;
   attention: boolean;
+  active?: boolean;
+  originNodeId?: string;
+  steps?: StepsCount;
 }
-interface WireGate {
+interface WireMission extends Liveness {
+  id: string;
+  name: string;
+  attention?: boolean;
+  state?: string;
+  steps?: StepsCount;
+}
+interface WireGate extends Liveness {
   id: string;
   // 'changes_requested' (RHZ-078, FR-RHZ-109) is non-terminal: approve/reject may still follow.
   state: 'pending' | 'changes_requested' | 'approved' | 'rejected';
@@ -204,7 +232,7 @@ interface WireGate {
   verification?: GateVerification;
   decidedAt?: string;
 }
-interface WireDeliverable {
+interface WireDeliverable extends Liveness {
   id: string;
   kind: string;
   missionId: string;
@@ -222,7 +250,7 @@ interface WireEdge {
   actor?: string;
   correlation?: string;
 }
-interface WireRequest {
+interface WireRequest extends Liveness {
   id: string;
   name: string;
   state: RequestProjection['state'];
@@ -246,6 +274,12 @@ const DECIDED_GATE_STATES = new Set<GateProjection['state']>(['approved', 'rejec
 export const DEFAULT_UNVERIFIED_DECIDED_MAX = 10;
 /** Terminal goal states (RHZ-061): a closed/cancelled goal leaves the cockpit. */
 const TERMINAL_GOAL_STATES = new Set<string>(['achieved', 'failed', 'cancelled']);
+
+/** RHZ-133 (FR-RHZ-173): the own-stream activity pair, carried only when stated. */
+const livenessOf = (w: Liveness): Liveness => ({
+  ...(w.changedAtRevision !== undefined ? { changedAtRevision: w.changedAtRevision } : {}),
+  ...(w.lastActivityTs !== undefined ? { lastActivityTs: w.lastActivityTs } : {}),
+});
 
 /** Items that already carry the cockpit's discriminator pass through untouched. */
 const isAdapted = (x: unknown, kind: string) =>
@@ -370,6 +404,10 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       progress: w.hasProgress ? (w.progress ?? 0) : undefined,
       blockedReason: w.blockedReason,
       attention: w.attention ?? false,
+      ...livenessOf(w),
+      ...(w.active !== undefined ? { active: w.active } : {}),
+      ...(w.originNodeId !== undefined ? { originNodeId: w.originNodeId } : {}),
+      ...(w.steps !== undefined ? { steps: w.steps } : {}),
     };
   });
 
@@ -384,17 +422,19 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       tasks.map((t) => [t.id, { pause: 'enabled', resume: 'enabled', instruct: 'enabled' } as TaskCapabilities]),
     );
 
-  const allMissions: MissionProjection[] = list('missions').map((m) =>
-    isAdapted(m, 'mission')
-      ? (m as MissionProjection)
-      : ({
-          kind: 'mission',
-          id: (m as { id: string }).id,
-          name: (m as { name: string }).name,
-          attention: (m as { attention?: boolean }).attention ?? false,
-          state: (m as { state?: string }).state,
-        } satisfies MissionProjection),
-  );
+  const allMissions: MissionProjection[] = list('missions').map((m) => {
+    if (isAdapted(m, 'mission')) return m as MissionProjection;
+    const w = m as WireMission;
+    return {
+      kind: 'mission',
+      id: w.id,
+      name: w.name,
+      attention: w.attention ?? false,
+      state: w.state,
+      ...livenessOf(w),
+      ...(w.steps !== undefined ? { steps: w.steps } : {}),
+    } satisfies MissionProjection;
+  });
   const allGates: GateProjection[] = list('gates').map((g) => {
     if (isAdapted(g, 'gate')) return g as GateProjection;
     const w = g as WireGate;
@@ -412,6 +452,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       state: w.superseded ? 'superseded' : w.state === 'pending' ? 'waiting' : w.state,
       ...(verification ? { verification } : {}),
       ...(w.decidedAt ? { decidedAt: w.decidedAt } : {}),
+      ...livenessOf(w),
     } satisfies GateProjection;
   });
   const allDeliverables: DeliverableProjection[] = list('deliverables').map((d) => {
@@ -426,6 +467,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       deliverableType: w.kind,
       sourceRef: w.sourceRef,
       // No lifecycle state in v1 → omitted, never invented.
+      ...livenessOf(w),
     } satisfies DeliverableProjection;
   });
   const allEdges: EdgeProjection[] = list('edges').map((e) => {
@@ -478,6 +520,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       ...(w.missionId ? { missionId: w.missionId } : {}),
       ...(w.goalId ? { goalId: w.goalId } : {}),
       createdAt: w.createdAt,
+      ...livenessOf(w),
     };
   });
   const liveRequests = allRequests.flatMap((r): RequestProjection[] => {

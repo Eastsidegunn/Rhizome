@@ -119,7 +119,9 @@ func TestMissionCreateWithoutGoalIDKeepsPairFRRHZ100(t *testing.T) {
 	if _, err := ms.Create("mission-n", "goal-n", "n", "success"); err != nil {
 		t.Fatal(err)
 	}
-	want := getWorkspace071(t, golden)
+	// RHZ-133 (FR-RHZ-173): lastActivityTs reads envelope time; both stores
+	// are compared with the same pinned times.
+	want := getWorkspace071(t, pinnedTimes173(t, golden))
 
 	s := &events.Store{}
 	res, err := RelayIntent(s, Intent{Kind: "mission.create", Name: "n", Prompt: "success"}, "tester", noAuthority())
@@ -129,7 +131,7 @@ func TestMissionCreateWithoutGoalIDKeepsPairFRRHZ100(t *testing.T) {
 	if len(s.List("goal", "goal-n")) != 1 || len(s.List("mission", "mission-n")) != 1 {
 		t.Fatal("pair not created")
 	}
-	if got := getWorkspace071(t, s); !bytes.Equal(got, want) {
+	if got := getWorkspace071(t, pinnedTimes173(t, s)); !bytes.Equal(got, want) {
 		t.Fatalf("/v1/workspace differs from pre-change golden:\n got %s\nwant %s", got, want)
 	}
 }

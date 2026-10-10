@@ -157,7 +157,9 @@ func TestQuestionAskMissionIDPathUnchangedFRRHZ108(t *testing.T) {
 	if _, err := (question.Service{Store: golden}).Ask("t", "b", "r", "mission-q4", "", "unverified-local-operator:tester", "corr-q4"); err != nil {
 		t.Fatal(err)
 	}
-	want := getWorkspace071(t, golden)
+	// RHZ-133 (FR-RHZ-173): lastActivityTs reads envelope time; both stores
+	// are compared with the same pinned times.
+	want := getWorkspace071(t, pinnedTimes173(t, golden))
 
 	s := &events.Store{}
 	missionIn062(t, s, "mission-q4", domain.MissionReady, domain.MissionRunning)
@@ -165,7 +167,7 @@ func TestQuestionAskMissionIDPathUnchangedFRRHZ108(t *testing.T) {
 	if err != nil || !res.Accepted {
 		t.Fatalf("question.ask missionId: %v %+v", err, res)
 	}
-	got := getWorkspace071(t, s)
+	got := getWorkspace071(t, pinnedTimes173(t, s))
 	if !bytes.Equal(got, want) {
 		t.Fatalf("/v1/workspace differs from golden:\n got %s\nwant %s", got, want)
 	}

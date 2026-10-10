@@ -80,16 +80,18 @@ func TestMissionDTOKeySetFRRHZ096(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	keys := env.Body.Missions[0]
-	for _, want := range []string{"id", "name", "attention", "state", "success", "handle"} {
+	// RHZ-133 (FR-RHZ-173) adds changedAtRevision, lastActivityTs and steps
+	// (the fixture goal has one task).
+	for _, want := range []string{"id", "name", "attention", "state", "success", "handle", "changedAtRevision", "lastActivityTs", "steps"} {
 		if _, ok := keys[want]; !ok {
 			t.Fatalf("key %s missing", want)
 		}
 	}
-	if len(keys) != 6 {
+	if len(keys) != 9 {
 		t.Fatalf("unexpected keys: %v", keys)
 	}
 	zero, err := json.Marshal(missionDTO{})
-	if err != nil || strings.Contains(string(zero), "success") {
+	if err != nil || strings.Contains(string(zero), "success") || strings.Contains(string(zero), "changedAtRevision") || strings.Contains(string(zero), "steps") {
 		t.Fatalf("omitempty broken: %s err=%v", zero, err)
 	}
 }
