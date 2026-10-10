@@ -58,6 +58,12 @@ type missionDTO struct {
 	// Handle is the short deterministic node handle (RHZ-073, FR-RHZ-103;
 	// additive, always present). See handle.go for the rule.
 	Handle string `json:"handle"`
+	// RHZ-133 (FR-RHZ-173, additive, omitempty): own-stream activity —
+	// global Sequence / envelope CreatedAt (Unix ms) of the node's latest
+	// own event. Absent when unknown.
+	ChangedAtRevision uint64    `json:"changedAtRevision,omitempty"`
+	LastActivityTs    int64     `json:"lastActivityTs,omitempty"`
+	Steps             *stepsDTO `json:"steps,omitempty"`
 }
 type taskDTO struct {
 	ID            string  `json:"id"`
@@ -71,8 +77,24 @@ type taskDTO struct {
 	Attention     bool    `json:"attention"`
 	Handle        string  `json:"handle"` // RHZ-073 (FR-RHZ-103), additive.
 	// Assignee is the current assignee (RHZ-080, FR-RHZ-111; additive,
-	// omitempty: an unassigned task serializes exactly as before). Last field.
+	// omitempty: an unassigned task serializes exactly as before).
 	Assignee string `json:"assignee,omitempty"`
+	// RHZ-133 (FR-RHZ-173, additive, omitempty): own-stream activity —
+	// global Sequence / envelope CreatedAt (Unix ms) of the node's latest
+	// own event. Absent when unknown.
+	ChangedAtRevision uint64 `json:"changedAtRevision,omitempty"`
+	LastActivityTs    int64  `json:"lastActivityTs,omitempty"`
+	// Active is present on every task (false is a fact); OriginNodeID is
+	// the single live spawn source; Steps counts spawn children.
+	Active       *bool     `json:"active,omitempty"`
+	OriginNodeID string    `json:"originNodeId,omitempty"`
+	Steps        *stepsDTO `json:"steps,omitempty"`
+}
+
+// stepsDTO (RHZ-133, FR-RHZ-173) is emitted only when Total >= 1.
+type stepsDTO struct {
+	Done  int `json:"done"`
+	Total int `json:"total"`
 }
 type gateDTO struct {
 	ID            string `json:"id"`
@@ -96,6 +118,11 @@ type gateDTO struct {
 	DecidedAt    string           `json:"decidedAt,omitempty"`
 	Handle       string           `json:"handle"` // RHZ-073 (FR-RHZ-103), additive.
 	Verification *verificationDTO `json:"verification,omitempty"`
+	// RHZ-133 (FR-RHZ-173, additive, omitempty): own-stream activity —
+	// global Sequence / envelope CreatedAt (Unix ms) of the node's latest
+	// own event. Absent when unknown.
+	ChangedAtRevision uint64 `json:"changedAtRevision,omitempty"`
+	LastActivityTs    int64  `json:"lastActivityTs,omitempty"`
 }
 type verificationDTO struct {
 	Status        string `json:"status"`
@@ -137,6 +164,11 @@ type requestDTO struct {
 	ClosedAt    string   `json:"closedAt,omitempty"`
 	Memo        string   `json:"memo,omitempty"`
 	Reason      string   `json:"reason,omitempty"`
+	// RHZ-133 (FR-RHZ-173, additive, omitempty): own-stream activity —
+	// global Sequence / envelope CreatedAt (Unix ms) of the node's latest
+	// own event. Absent when unknown.
+	ChangedAtRevision uint64 `json:"changedAtRevision,omitempty"`
+	LastActivityTs    int64  `json:"lastActivityTs,omitempty"`
 }
 type requestCapabilityDTO struct {
 	Complete string `json:"complete"`
@@ -185,6 +217,11 @@ type deliverableDTO struct {
 	// GoalID is set for a goal-bound deliverable (RHZ-081, FR-RHZ-112);
 	// additive suffix, absent for mission-bound and pre-081 journals.
 	GoalID string `json:"goalId,omitempty"`
+	// RHZ-133 (FR-RHZ-173, additive, omitempty): own-stream activity —
+	// global Sequence / envelope CreatedAt (Unix ms) of the node's latest
+	// own event. Absent when unknown.
+	ChangedAtRevision uint64 `json:"changedAtRevision,omitempty"`
+	LastActivityTs    int64  `json:"lastActivityTs,omitempty"`
 }
 type edgeDTO struct {
 	ID          string            `json:"id"`
@@ -244,17 +281,18 @@ func toDTO(p Projection) dto {
 		d.GateCapabilities[id] = gateCapabilityDTO{g.Approve, g.Reject, g.RequestChanges}
 	}
 	for _, m := range p.Missions {
-		d.Missions = append(d.Missions, missionDTO{m.ID, m.Name, m.Attention, m.State, m.Success, p.handles.of("g", m.ID)})
+		d.Missions = append(d.Missions, missionDTO{m.ID, m.Name, m.Attention, m.State, m.Success, p.handles.of("g", m.ID), m.ChangedAtRevision, m.LastActivityTs, toStepsDTO(m.Steps)})
 	}
 	for _, t := range p.Tasks {
-		d.Tasks = append(d.Tasks, taskDTO{t.ID, t.MissionID, t.Name, t.State, t.CurrentAction, t.Progress, t.HasProgress, t.BlockedReason, t.Attention, p.handles.of("m", t.ID), t.Assignee})
+		active := t.Active
+		d.Tasks = append(d.Tasks, taskDTO{t.ID, t.MissionID, t.Name, t.State, t.CurrentAction, t.Progress, t.HasProgress, t.BlockedReason, t.Attention, p.handles.of("m", t.ID), t.Assignee, t.ChangedAtRevision, t.LastActivityTs, &active, t.OriginNodeID, toStepsDTO(t.Steps)})
 	}
 	for _, g := range p.Gates {
 		var verification *verificationDTO
 		if g.Verification != nil {
 			verification = &verificationDTO{Status: g.Verification.Status, ClaimKind: g.Verification.ClaimKind, Assurance: g.Verification.Assurance, KeyID: g.Verification.KeyID, KeyRevokedNow: g.Verification.KeyRevokedNow}
 		}
-		d.Gates = append(d.Gates, gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, DecidedAt: g.DecidedAt, Handle: p.handles.of(gateHandleTag(g.Source), g.ID), Verification: verification})
+		d.Gates = append(d.Gates, gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, DecidedAt: g.DecidedAt, Handle: p.handles.of(gateHandleTag(g.Source), g.ID), Verification: verification, ChangedAtRevision: g.ChangedAtRevision, LastActivityTs: g.LastActivityTs})
 	}
 	for _, a := range p.Attention {
 		d.Attention = append(d.Attention, attentionDTO{a.Kind, a.RefID, a.Cause, a.SourceRef, a.IncidentRef, a.MissionID})
@@ -272,16 +310,26 @@ func toDTO(p Projection) dto {
 			MissionID: r.MissionID, GoalID: r.GoalID, Why: r.Why, Where: r.Where,
 			Commands: commands, After: r.After, Rollback: r.Rollback, RequestedBy: r.RequestedBy,
 			CreatedAt: r.CreatedAt, ClosedBy: r.ClosedBy, ClosedAt: r.ClosedAt, Memo: r.Memo, Reason: r.Reason,
+			ChangedAtRevision: r.ChangedAtRevision, LastActivityTs: r.LastActivityTs,
 		})
 	}
 	d.Counts.Running, d.Counts.NeedsYou, d.Counts.Blocked = p.Counts.Running, p.Counts.NeedsYou, p.Counts.Blocked
 	for _, x := range p.Deliverables {
-		d.Deliverables = append(d.Deliverables, deliverableDTO{x.ID, x.Kind, x.MissionID, x.SourceRef, x.Summary, p.handles.of("d", x.ID), x.GoalID})
+		a := p.deliverableActivity[x.ID]
+		d.Deliverables = append(d.Deliverables, deliverableDTO{x.ID, x.Kind, x.MissionID, x.SourceRef, x.Summary, p.handles.of("d", x.ID), x.GoalID, a.ChangedAtRevision, a.LastActivityTs})
 	}
 	for _, x := range p.Edges {
 		d.Edges = append(d.Edges, edgeDTO{x.ID, map[string]string{"type": x.From.Type, "id": x.From.ID}, map[string]string{"type": x.To.Type, "id": x.To.ID}, string(x.Kind), x.Supersedes, x.Actor, x.Correlation})
 	}
 	return d
+}
+
+// toStepsDTO (RHZ-133, FR-RHZ-173) omits steps with no countable member.
+func toStepsDTO(s Steps) *stepsDTO {
+	if s.Total < 1 {
+		return nil
+	}
+	return &stepsDTO{Done: s.Done, Total: s.Total}
 }
 
 // filterAssignee answers GET /v1/workspace?assignee=<x> (RHZ-080,

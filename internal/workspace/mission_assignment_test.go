@@ -109,9 +109,10 @@ func TestMissionAssignProjectedFRRHZ111(t *testing.T) {
 	if _, has := tasks["mission-b"]["assignee"]; has {
 		t.Fatalf("unassigned task must omit assignee: %v", tasks["mission-b"])
 	}
-	// assignee is the last key of an assigned task (additive suffix).
+	// assignee directly trails handle (additive suffix); RHZ-133 (FR-RHZ-173)
+	// appends its liveness keys after it.
 	raw := workspaceBody080(t, s, "")
-	if !bytes.Contains(raw, []byte(`,"handle":"`+handleFor("m", "mission-a", handlePrefixLen)+`","assignee":"agent-a"}`)) {
+	if !bytes.Contains(raw, []byte(`,"handle":"`+handleFor("m", "mission-a", handlePrefixLen)+`","assignee":"agent-a","changedAtRevision":`)) {
 		t.Fatalf("assignee must trail handle in the task object: %s", raw)
 	}
 	h := NewHTTP(s).Handler()
@@ -208,7 +209,8 @@ func TestWorkspaceAssigneeFilterFRRHZ111(t *testing.T) {
 	missionIn062(t, s, "mission-1", domain.MissionReady, domain.MissionRunning, domain.MissionWaitingHuman)
 	missionIn062(t, s, "mission-2", domain.MissionReady, domain.MissionRunning)
 	missionIn062(t, s, "mission-3")
-	wantKeys := []string{"attention", "handle", "hasProgress", "id", "missionId", "name", "state"}
+	// RHZ-133 (FR-RHZ-173) adds active, changedAtRevision and lastActivityTs.
+	wantKeys := []string{"active", "attention", "changedAtRevision", "handle", "hasProgress", "id", "lastActivityTs", "missionId", "name", "state"}
 	plain := workspaceBody080(t, s, "")
 	if bytes.Contains(plain, []byte(`"assignee"`)) {
 		t.Fatalf("pre-assignment body must not mention assignee: %s", plain)

@@ -139,7 +139,7 @@ func TestDeliverableRegisterMissionBoundFRRHZ112(t *testing.T) {
 	if got == nil {
 		t.Fatalf("deliverable missing from workspace: %s", body)
 	}
-	if ks := keys080(got); strings.Join(ks, ",") != "handle,id,kind,missionId,sourceRef,summary" {
+	if ks := keys080(got); strings.Join(ks, ",") != "changedAtRevision,handle,id,kind,lastActivityTs,missionId,sourceRef,summary" { // RHZ-133 (FR-RHZ-173) adds the activity pair
 		t.Fatalf("key set %v", ks)
 	}
 	if got["kind"] != "code" || got["missionId"] != "mission-a" || got["sourceRef"] != src.BlobID || got["summary"] != "patch v1" || got["handle"] != handleFor("d", id, handlePrefixLen) {
@@ -201,7 +201,7 @@ func TestDeliverableRegisterGoalBoundFRRHZ112(t *testing.T) {
 	if got == nil || got["goalId"] != "goal-x" || got["missionId"] != "" {
 		t.Fatalf("dto %v", got)
 	}
-	if !bytes.Contains(body, []byte(`,"handle":"`+handleFor("d", id, handlePrefixLen)+`","goalId":"goal-x"}`)) {
+	if !bytes.Contains(body, []byte(`,"handle":"`+handleFor("d", id, handlePrefixLen)+`","goalId":"goal-x","changedAtRevision":`)) {
 		t.Fatalf("goalId must trail handle: %s", body)
 	}
 	if e := es["edge-produces-goal-x-"+id]; e == nil || e["from"].(map[string]any)["type"] != "goal" {

@@ -41,6 +41,10 @@ type Mission struct {
 	// the one goal detail the surface was missing.
 	Success   string
 	Attention bool
+	// RHZ-133 (FR-RHZ-173): own-stream activity and the done/total of tasks
+	// under this goal and every goal it contains.
+	Activity
+	Steps Steps
 }
 type Task struct {
 	ID, MissionID, Name, State, CurrentAction, BlockedReason string
@@ -49,6 +53,13 @@ type Task struct {
 	// Assignee is the mission's current assignee (RHZ-080, FR-RHZ-111);
 	// "" = unassigned.
 	Assignee string
+	// RHZ-133 (FR-RHZ-173): activity over mission/<id> and
+	// surface/surface-<id>; Active iff the domain state is running;
+	// OriginNodeID is the single live spawn source; Steps over spawn children.
+	Activity
+	Active       bool
+	OriginNodeID string
+	Steps        Steps
 }
 type Gate struct {
 	ID, State, HumanDecision, JanusDecision, MissionID, Name string
@@ -67,6 +78,8 @@ type Gate struct {
 	// It is never persisted in a domain payload.
 	DecidedAt    string
 	Verification *GateVerification
+	// RHZ-133 (FR-RHZ-173): activity over the stream(s) the gate replays from.
+	Activity
 }
 type GateVerification struct {
 	Status, ClaimKind, Assurance, KeyID string
@@ -80,6 +93,7 @@ type Request struct {
 	ID, Name, State, MissionID, GoalID, Why, Where, After, Rollback string
 	Commands                                                        []string
 	RequestedBy, CreatedAt, ClosedBy, ClosedAt, Memo, Reason        string
+	Activity                                                        // RHZ-133 (FR-RHZ-173): activity over request/<id>.
 }
 
 // Capability levels (RHZ-070, FR-RHZ-099) — the cockpit vocabulary the
@@ -128,6 +142,11 @@ type Projection struct {
 	// the ?deliverableOrder=desc filter of GET /v1/workspace (http.go).
 	// Derived from the same All() scan as Revision; never serialized.
 	deliverableSeq map[string]uint64
+	// deliverableActivity (RHZ-133, FR-RHZ-173) is each deliverable's
+	// own-stream activity, consumed by toDTO; derived from the same All()
+	// scan as Revision. deliverable.Deliverable belongs to another package,
+	// so the fact rides beside it rather than on it.
+	deliverableActivity map[string]Activity
 }
 
 func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
@@ -152,10 +171,12 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 	all := s.All()
 	p.handles = buildHandleIndex(all)
 	goals, mids, gids, qids, dids, eids, reqs, rids := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	act := activityIndex{}
 	for _, e := range all {
 		if e.Sequence > p.Revision {
 			p.Revision = e.Sequence
 		}
+		act.note(e)
 		switch e.AggregateType {
 		case "goal":
 			goals[e.AggregateID] = true
@@ -194,8 +215,9 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		if e != nil {
 			return p, e
 		}
-		p.Missions = append(p.Missions, Mission{ID: g.ID, Name: g.Description, State: string(g.State), Success: g.Success})
+		p.Missions = append(p.Missions, Mission{ID: g.ID, Name: g.Description, State: string(g.State), Success: g.Success, Activity: act.of(aggKey{"goal", id})})
 	}
+	missionStates := map[string]domain.MissionState{}
 	for _, id := range ids(mids) {
 		m, x := projector.ReplayMission(s.List("mission", id))
 		if x != nil {
@@ -221,6 +243,9 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			blocked = m.BlockedReason
 		}
 		t := Task{ID: m.ID, MissionID: m.GoalID, Name: m.Description, State: mapState(m.State), BlockedReason: blocked, Attention: m.State == domain.MissionWaitingHuman, CurrentAction: sv.CurrentAction, Progress: sv.Progress, HasProgress: sv.HasProgress, Assignee: m.Assignee}
+		t.Activity = act.of(aggKey{"mission", id}, aggKey{"surface", "surface-" + id})
+		t.Active = m.State == domain.MissionRunning
+		missionStates[m.ID] = m.State
 		p.Tasks = append(p.Tasks, t)
 		p.Capabilities[m.ID] = taskCapabilities(m.State)
 		if m.State == domain.MissionWaitingHuman {
@@ -247,6 +272,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			return p, er
 		}
 		g := Gate{ID: a.ID, Source: "janus", State: st, HumanDecision: string(a.HumanDecision), JanusDecision: string(a.JanusDecision), Superseded: sup, Name: a.GateName, RequestDigest: a.RequestDigest, Verification: verification}
+		g.Activity = act.of(aggKey{"approval", id}, aggKey{"approvalrequest", id})
 		if (st == "approved" || st == "rejected") && a.HumanDecision != "" {
 			g.DecidedAt = latestEventCreatedAt(s.List("approval", id), "approval.input_recorded")
 		}
@@ -284,7 +310,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		if er != nil {
 			return p, er
 		}
-		p.Gates = append(p.Gates, Gate{ID: gr.ID, Source: "janus", State: "pending", Name: gr.Name, MissionID: gr.MissionID, RequestDigest: gr.RequestDigest, DisplaySummary: gr.DisplaySummary, ExpiresAt: gr.ExpiresAt})
+		p.Gates = append(p.Gates, Gate{ID: gr.ID, Source: "janus", State: "pending", Name: gr.Name, MissionID: gr.MissionID, RequestDigest: gr.RequestDigest, DisplaySummary: gr.DisplaySummary, ExpiresAt: gr.ExpiresAt, Activity: act.of(aggKey{"approvalrequest", id})})
 	}
 	for _, id := range ids(qids) {
 		q, x := (question.Service{Store: s}).Get(id)
@@ -296,7 +322,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		if er != nil {
 			return p, er
 		}
-		g := Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: verification}
+		g := Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: verification, Activity: act.of(aggKey{"question", id})}
 		if st == "approved" || st == "rejected" {
 			g.DecidedAt = latestEventCreatedAt(s.List("question", id), "question.answered")
 		}
@@ -336,6 +362,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			Why: r.Why, Where: r.Where, Commands: append([]string(nil), r.Commands...), After: r.After,
 			Rollback: r.Rollback, RequestedBy: r.RequestedBy, CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano),
 			ClosedBy: closedBy, ClosedAt: closedAt, Memo: r.Memo, Reason: r.Reason,
+			Activity: act.of(aggKey{"request", id}),
 		})
 		p.RequestCapabilities[r.ID] = caps
 	}
@@ -345,6 +372,10 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			return p, x
 		}
 		p.Deliverables = append(p.Deliverables, d)
+		if p.deliverableActivity == nil {
+			p.deliverableActivity = map[string]Activity{}
+		}
+		p.deliverableActivity[d.ID] = act.of(aggKey{"deliverable", id})
 	}
 	for _, id := range ids(eids) {
 		x, er := (edge.Service{Store: s}).Get(id)
@@ -353,6 +384,8 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		}
 		p.Edges = append(p.Edges, x)
 	}
+	// RHZ-133 (FR-RHZ-173): origin and steps from the live edges.
+	applyStructureFacts(&p, missionStates)
 	execs := map[string]bool{}
 	for _, e := range all {
 		if e.AggregateType == "execution" {

@@ -83,6 +83,14 @@ func open(path string, guard events.Guard, readOnly bool) (*Journal, error) {
 			f.Close()
 			return nil, er
 		}
+		// RHZ-133 (FR-RHZ-173): a line written before Append stamped the
+		// envelope time carries the zero time on disk. Restore it as the Unix
+		// epoch so the store does not re-stamp it with the load time: replay
+		// stays deterministic and the projection reads "unknown" (ms <= 0).
+		// Readers of the envelope time must treat ms <= 0 as unknown.
+		if e.CreatedAt.IsZero() {
+			e.CreatedAt = time.Unix(0, 0).UTC()
+		}
 		if er = s.AppendRevision(e); er != nil {
 			f.Close()
 			return nil, er
@@ -132,7 +140,15 @@ func (j *Journal) Append(expected uint64, e events.Event) error {
 		return events.ErrRevisionConflict
 	}
 	e.Sequence = uint64(j.store.Len() + 1)
-	if err := j.guard.CheckAppend(j.store, e, time.Now().UTC()); err != nil {
+	now := time.Now().UTC()
+	// RHZ-133 (FR-RHZ-173): stamp the envelope time BEFORE the line is
+	// written. Previously the store stamped it after the write, so the
+	// in-memory event and the durable line disagreed (zero time on disk) and
+	// every reopen re-stamped it with the load time.
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = now
+	}
+	if err := j.guard.CheckAppend(j.store, e, now); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(e)

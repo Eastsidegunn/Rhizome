@@ -10,7 +10,8 @@ export {
   unverifiedDecidedMax,
 } from './workspaceWire.js';
 export type { GateVerification } from './workspaceWire.js';
-export { APPROVAL_UNVERIFIED, projectRhizomeNodes, WORKSPACE_NODE_ID } from './nodes.js';
+export { APPROVAL_UNVERIFIED, projectRhizomeNodes, shortNameOf, summaryOf, wireFieldsOf, WORKSPACE_NODE_ID } from './nodes.js';
+export type { ProjectOptions, WireFields } from './nodes.js';
 export { adaptEnvelope, adaptWithReport, contractRefusal, nodesOf } from './upstream.js';
 export type { RhizomeIntegrationReport } from './nodes.js';
 export { SseDecoder } from './upstream.js';

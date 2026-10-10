@@ -23,7 +23,7 @@ import type {
 } from '@gunnflow/upstream-port';
 import { lookupCapability, validateIntent, type Intent, type NodeProjection } from '@gunnflow/contract';
 import { adaptWorkspaceBody } from './workspaceWire.js';
-import { projectRhizomeNodes, type RhizomeIntegrationReport } from './nodes.js';
+import { projectRhizomeNodes, wireFieldsOf, type RhizomeIntegrationReport, type WireFields } from './nodes.js';
 import type { RhizomeExecBody, RhizomeExecSession } from './execution.js';
 import { prepareSigner, SIGNER_REFUSAL, type SigningOptions } from './signing.js';
 
@@ -209,6 +209,11 @@ export async function createRhizomeUpstream(
     timers?: IdleTimers;
     /** RHZ-117: required/off signing mode and its injectable OS seams. Omitted means off. */
     signing?: SigningOptions;
+    /**
+     * RHZ-133 (FR-RHZ-173): node field set; omitted = GUNNFLOW_WIRE_FIELDS
+     * (only the exact value `0.6` turns the 0.6 fields on; default '0.5').
+     */
+    wireFields?: WireFields;
   } = {},
 ): Promise<
   WorkspaceUpstream & {
@@ -236,9 +241,10 @@ export async function createRhizomeUpstream(
   let abort = new AbortController();
   const execFeedIdleMs = options.execFeedIdleMs ?? EXEC_FEED_IDLE_MS;
   const idleTimers = options.timers ?? REAL_IDLE_TIMERS;
+  const wireFields = options.wireFields ?? wireFieldsOf();
 
   let lastWire = await fetchRawSnapshot(baseUrl);
-  const init = adaptWithReport(lastWire, mediaTypeOf);
+  const init = adaptWithReport(lastWire, mediaTypeOf, { wireFields });
   let current: UpstreamProjectionEnvelope = init.envelope;
   let report: RhizomeIntegrationReport = init.report;
 
@@ -250,7 +256,7 @@ export async function createRhizomeUpstream(
 
   const applyEnvelope = (wire: UpstreamProjectionEnvelope) => {
     lastWire = wire;
-    const adapted = adaptWithReport(wire, mediaTypeOf);
+    const adapted = adaptWithReport(wire, mediaTypeOf, { wireFields });
     current = adapted.envelope;
     report = adapted.report;
     for (const l of listeners) l(current);
@@ -584,12 +590,17 @@ export function adaptEnvelope(wire: UpstreamProjectionEnvelope): UpstreamProject
 export function adaptWithReport(
   wire: UpstreamProjectionEnvelope,
   mediaTypeOf?: (blobId: string) => string | undefined,
+  options: { wireFields?: WireFields } = {},
 ): {
   envelope: UpstreamProjectionEnvelope;
   report: RhizomeIntegrationReport;
 } {
   const body = adaptWorkspaceBody(wire.body);
-  const { nodes, report } = projectRhizomeNodes(wire.body, body, mediaTypeOf);
+  // RHZ-133 (FR-RHZ-173): changedAtRevision is bounded by the envelope revision.
+  const { nodes, report } = projectRhizomeNodes(wire.body, body, mediaTypeOf, {
+    wireFields: options.wireFields,
+    revision: wire.revision,
+  });
   return { envelope: { revision: wire.revision, body: { ...body, nodes } }, report };
 }
 
