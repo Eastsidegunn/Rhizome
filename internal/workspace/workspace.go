@@ -73,7 +73,7 @@ type GateVerification struct {
 	KeyRevokedNow                       bool
 }
 type TrustSummary struct{ JournalID, GenesisKeyID string }
-type AttentionItem struct{ Kind, RefID, Cause, SourceRef, IncidentRef string }
+type AttentionItem struct{ Kind, RefID, Cause, SourceRef, IncidentRef, MissionID string }
 
 // Request is the replayed human-action request projected to /v1/workspace.
 type Request struct {
@@ -225,7 +225,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		p.Capabilities[m.ID] = taskCapabilities(m.State)
 		if m.State == domain.MissionWaitingHuman {
 			p.Counts.NeedsYou++
-			p.Attention = append(p.Attention, AttentionItem{"waiting_for_human", m.ID, "mission waiting", "", ""})
+			p.Attention = append(p.Attention, AttentionItem{Kind: "waiting_for_human", RefID: m.ID, Cause: "mission waiting"})
 		}
 	}
 	for _, id := range ids(gids) {
@@ -385,6 +385,11 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		if t.State == "blocked" {
 			p.Counts.Blocked++
 		}
+	}
+	// RHZ-132 (FR-RHZ-171): human-owned attention kinds and the deduplicated
+	// counts.needsYou (attention.go).
+	if err := applyHumanAttention(s, all, &p); err != nil {
+		return p, err
 	}
 	sort.Slice(p.Attention, func(i, j int) bool {
 		if p.Attention[i].Kind != p.Attention[j].Kind {

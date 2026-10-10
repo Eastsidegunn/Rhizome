@@ -115,6 +115,9 @@ type attentionDTO struct {
 	Cause       string `json:"cause"`
 	SourceRef   string `json:"sourceRef,omitempty"`
 	IncidentRef string `json:"incidentRef,omitempty"`
+	// MissionID (RHZ-132, FR-RHZ-171, additive) is the owning mission of a
+	// gate_pending / request_waiting / note_blocked item, when known.
+	MissionID string `json:"missionId,omitempty"`
 }
 type requestDTO struct {
 	ID          string   `json:"id"`
@@ -254,7 +257,7 @@ func toDTO(p Projection) dto {
 		d.Gates = append(d.Gates, gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, DecidedAt: g.DecidedAt, Handle: p.handles.of(gateHandleTag(g.Source), g.ID), Verification: verification})
 	}
 	for _, a := range p.Attention {
-		d.Attention = append(d.Attention, attentionDTO{a.Kind, a.RefID, a.Cause, a.SourceRef, a.IncidentRef})
+		d.Attention = append(d.Attention, attentionDTO{a.Kind, a.RefID, a.Cause, a.SourceRef, a.IncidentRef, a.MissionID})
 	}
 	if p.RequestCapabilities != nil {
 		d.RequestCapabilities = map[string]requestCapabilityDTO{}

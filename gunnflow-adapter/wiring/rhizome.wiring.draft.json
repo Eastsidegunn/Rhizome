@@ -2,59 +2,59 @@
   "version": "0.1.0",
   "render": {
     "queued": {
-      "glyph": "ring",
+      "glyph": "○",
       "tone": "#5b6672"
     },
     "running": {
-      "glyph": "play",
+      "glyph": "▶",
       "tone": "#4da3ff"
     },
     "waiting": {
-      "glyph": "clock",
+      "glyph": "◷",
       "tone": "#ffb02e"
     },
     "paused": {
-      "glyph": "pause",
+      "glyph": "⏸",
       "tone": "#e8a33d"
     },
     "blocked": {
-      "glyph": "alert",
+      "glyph": "⚠",
       "tone": "#ff5d5d"
     },
     "completed": {
-      "glyph": "check",
+      "glyph": "✓",
       "tone": "#6ee7a8"
     },
     "failed": {
-      "glyph": "cross",
+      "glyph": "✕",
       "tone": "#ff5d5d"
     },
     "approved": {
-      "glyph": "check",
+      "glyph": "✓",
       "tone": "#6ee7a8"
     },
     "rejected": {
-      "glyph": "cross",
+      "glyph": "✕",
       "tone": "#5b6672"
     },
     "superseded": {
-      "glyph": "neutral",
+      "glyph": "–",
       "tone": "#5b6672"
     },
     "unstated": {
-      "glyph": "dot",
+      "glyph": "·",
       "tone": "#dde3ea"
     },
     "active": {
-      "glyph": "play",
+      "glyph": "▶",
       "tone": "#4da3ff"
     },
     "achieved": {
-      "glyph": "check",
+      "glyph": "✓",
       "tone": "#6ee7a8"
     },
     "cancelled": {
-      "glyph": "pause",
+      "glyph": "⏸",
       "tone": "#e8a33d"
     }
   },
@@ -80,13 +80,43 @@
       "match": {
         "cause": "needs_human"
       },
-      "mechanism": "interrupt"
+      "mechanism": "interrupt",
+      "group": "결정"
+    },
+    {
+      "match": {
+        "cause": "gate_pending"
+      },
+      "mechanism": "interrupt",
+      "group": "결정"
+    },
+    {
+      "match": {
+        "cause": "needs_human_action"
+      },
+      "mechanism": "interrupt",
+      "group": "할 일"
+    },
+    {
+      "match": {
+        "cause": "request_waiting"
+      },
+      "mechanism": "interrupt",
+      "group": "할 일"
+    },
+    {
+      "match": {
+        "cause": "note_blocked"
+      },
+      "mechanism": "interrupt",
+      "group": "차단"
     },
     {
       "match": {
         "cause": "waiting_for_human"
       },
-      "mechanism": "interrupt"
+      "mechanism": "interrupt",
+      "group": "결정"
     },
     {
       "match": {
@@ -193,6 +223,38 @@
           "source": "kind"
         }
       ]
+    },
+    "note": {
+      "parts": [
+        {
+          "id": "label",
+          "part": "label",
+          "source": "label"
+        },
+        {
+          "id": "answer",
+          "part": "text",
+          "action": "note.answer"
+        },
+        {
+          "id": "send-answer",
+          "part": "send",
+          "action": "note.answer",
+          "requires": [
+            "answer"
+          ]
+        }
+      ]
     }
+  },
+  "actions": {
+    "note.answer": {
+      "label": "답하기"
+    }
+  },
+  "detail": {
+    "collapsed": [
+      "note"
+    ]
   }
 }

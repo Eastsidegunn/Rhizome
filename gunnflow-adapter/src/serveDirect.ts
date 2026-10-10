@@ -29,7 +29,7 @@ import {
   type ExecutionSnapshot,
   type NodeProjection,
 } from '@gunnflow/contract';
-import { detailItems, fetchContextNotes, noteQueryFor, withNotes, type WireDetailBody } from './details.js';
+import { blockedNoteEntry, detailItems, fetchContextNotes, noteDetail, noteQueryFor, withNotes, type WireDetailBody } from './details.js';
 import { executionForWire } from './execution.js';
 import { createRhizomeUpstream, nodesOf } from './upstream.js';
 import type { SigningOptions } from './signing.js';
@@ -131,9 +131,14 @@ export async function startRhizomeDirectServer(options: {
         // exception to "never a further fetch": it is isolated — on any
         // failure the detail is served without note items.
         const query = noteQueryFor(node.kind);
+        // RHZ-132 (FR-RHZ-171): a blocked note's detail is its full text from
+        // its mission's /v1/context bundle; on failure the cause line stays.
+        const noteMission = node.kind === 'note' ? blockedNoteEntry((raw.body ?? {}) as WireDetailBody, nodeId)?.missionId : undefined;
         const detail = query
           ? await withNotes({ revision: raw.revision, items: base }, () => fetchContextNotes(options.rhizomeUrl, query, nodeId))
-          : { revision: raw.revision, items: base };
+          : noteMission
+            ? await noteDetail({ revision: raw.revision, items: base }, nodeId, () => fetchContextNotes(options.rhizomeUrl, 'mission', noteMission))
+            : { revision: raw.revision, items: base };
         if (detail.items.length === 0) return json(res, 404, { reason: 'no detail for this node' });
         // Never put a non-conforming body on the wire (the BFF would 502 it anonymously).
         const check = validateNodeDetail(detail);

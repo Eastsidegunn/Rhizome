@@ -151,6 +151,41 @@ export function toRhizomeFields(kind: string | undefined, fields: Record<string,
   return { ...rest, [target]: decision.text, ...prompt };
 }
 
+/* ---- RHZ-132 (FR-RHZ-171): answering a blocked note ---- */
+
+export const NOTE_ANSWER_ACTION = 'note.answer';
+export const NOTE_ANSWER_TEXT_REQUIRED = 'answer text required';
+export const NOTE_NOT_BLOCKED = 'note is not blocked in adapter snapshot';
+
+/**
+ * The Rhizome intent a cockpit note.answer becomes: note.create of memoryKind
+ * `answer` on the blocked note's own mission (taken from the adapter's raw
+ * snapshot, never from the cockpit), tagged `answer` and `re:<note id>`. The
+ * content is `re: <note id>`, a blank line, then the human's text verbatim:
+ * Rhizome derives a note id from its content alone, so the same short answer
+ * ("확인") to two notes must not collide. Blank text and notes the snapshot
+ * does not list as note_blocked are refused before anything reaches Rhizome.
+ */
+export function noteAnswerIntent(
+  wire: UpstreamProjectionEnvelope,
+  noteId: unknown,
+  decision: unknown,
+): { ok: true; fields: Record<string, unknown> } | { ok: false; reason: string } {
+  const textValue = (decision as { text?: unknown } | null | undefined)?.text;
+  if (typeof textValue !== 'string' || textValue.trim() === '') return { ok: false, reason: NOTE_ANSWER_TEXT_REQUIRED };
+  const listed = (wire.body as { attention?: unknown } | null)?.attention;
+  const entry = (Array.isArray(listed) ? listed : []).find(
+    (a) => typeof a === 'object' && a !== null && (a as { kind?: unknown }).kind === 'note_blocked' && (a as { refId?: unknown }).refId === noteId,
+  ) as { missionId?: unknown } | undefined;
+  if (typeof noteId !== 'string' || !entry || typeof entry.missionId !== 'string' || entry.missionId === '') {
+    return { ok: false, reason: NOTE_NOT_BLOCKED };
+  }
+  return {
+    ok: true,
+    fields: { kind: 'note.create', memoryKind: 'answer', missionId: entry.missionId, tags: ['answer', `re:${noteId}`], content: `re: ${noteId}\n\n${textValue}` },
+  };
+}
+
 /** The upstream's own refusal text from an error response, verbatim when present. */
 async function upstreamReason(res: Response): Promise<string | undefined> {
   const text = (await res.text().catch(() => '')).trim();
@@ -425,6 +460,20 @@ export async function createRhizomeUpstream(
     return f.current;
   }
 
+  async function postIntent(payload: Record<string, unknown>): Promise<UpstreamIntentResult> {
+    const res = await fetch(`${baseUrl}/v1/intent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      return { accepted: false, reason: (await upstreamReason(res)) ?? `rhizome relay error (${res.status})` };
+    }
+    // Go default serialization: {"Accepted":bool,"Reason":string}.
+    const body = (await res.json()) as { Accepted?: boolean; Reason?: string };
+    return { accepted: body.Accepted === true, reason: body.Reason || undefined };
+  }
+
   return {
     snapshot: () => current,
     // RHZ-072 (FR-RHZ-101): the unadapted envelope behind `current`, for the
@@ -441,6 +490,12 @@ export async function createRhizomeUpstream(
     async relayIntent(intent, actor) {
       const refusal = contractRefusal(intent, nodesOf(current));
       if (refusal) return { accepted: false, reason: refusal };
+      if ((intent as { action?: unknown } | null)?.action === NOTE_ANSWER_ACTION) {
+        const i = intent as { nodeId?: unknown; decision?: unknown };
+        const answer = noteAnswerIntent(lastWire, i.nodeId, i.decision);
+        if (!answer.ok) return { accepted: false, reason: answer.reason };
+        return postIntent({ ...answer.fields, actor });
+      }
       const { kind, rest } = toRhizomeAddress((intent ?? {}) as Record<string, unknown>);
       // Only known intent fields travel (the idempotency key is not one yet); kind and actor are set last.
       const fields = toRhizomeFields(kind, Object.fromEntries(Object.entries(rest).filter(([k]) => INTENT_FIELDS.has(k))));
@@ -475,21 +530,7 @@ export async function createRhizomeUpstream(
           }
         }
       }
-      const res = await fetch(`${baseUrl}/v1/intent`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...fields, kind, actor }),
-      });
-      if (!res.ok) {
-        return { accepted: false, reason: (await upstreamReason(res)) ?? `rhizome relay error (${res.status})` };
-      }
-      // Go default serialization: {"Accepted":bool,"Reason":string}.
-      const body = (await res.json()) as { Accepted?: boolean; Reason?: string };
-      const result: UpstreamIntentResult = {
-        accepted: body.Accepted === true,
-        reason: body.Reason || undefined,
-      };
-      return result;
+      return postIntent({ ...fields, kind, actor });
     },
     executionSnapshot: (taskId: string) => execFeed(taskId).current,
     subscribeExecution(taskId, listener) {

@@ -19,6 +19,14 @@ const (
 	Observation Kind = "observation"
 	Hypothesis  Kind = "hypothesis"
 	Reference   Kind = "reference"
+	// RHZ-132 (FR-RHZ-171): coordination kinds. Additive; existing kinds keep
+	// their meaning and unknown kinds are still rejected.
+	Handoff Kind = "handoff"
+	Blocked Kind = "blocked"
+	Done    Kind = "done"
+	Usage   Kind = "usage"
+	Release Kind = "release"
+	Answer  Kind = "answer"
 )
 
 type Memory struct {
@@ -52,7 +60,7 @@ func validate(m Memory) error {
 		return fmt.Errorf("memory id, content and source are required")
 	}
 	switch m.Kind {
-	case Fact, Decision, Preference, Observation, Hypothesis, Reference:
+	case Fact, Decision, Preference, Observation, Hypothesis, Reference, Handoff, Blocked, Done, Usage, Release, Answer:
 	default:
 		return fmt.Errorf("unknown memory kind %q", m.Kind)
 	}

@@ -61,6 +61,8 @@ export interface WireDetailBody {
     closedAt?: string;
   }>;
   counts?: { running?: number; needsYou?: number; blocked?: number };
+  /** RHZ-132 (FR-RHZ-171): note_blocked entries name the blocked notes (refId, cause, missionId). */
+  attention?: Array<{ kind?: string; refId?: string; cause?: string; missionId?: string }>;
 }
 
 /** A Rhizome workspace envelope as GET /v1/workspace (and its SSE frames) emit it. */
@@ -217,9 +219,43 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
     return text('success', mission.success);
   }
 
+  // RHZ-132 (FR-RHZ-171): a blocked note's snapshot detail is its cause line;
+  // serveDirect replaces it with the full text from /v1/context (noteDetail).
+  const note = blockedNoteEntry(body, nodeId);
+  if (note) return text(NOTE_DETAIL_LABEL, note.cause);
+
   // Deliverables: their artifacts are already in the projection — no detail.
   // Anything else: no such node.
   return undefined;
+}
+
+/* ---- RHZ-132 (FR-RHZ-171): blocked note detail ---- */
+
+/** Label of a blocked note's full-text detail item (wiring detail.collapsed names it). */
+export const NOTE_DETAIL_LABEL = 'note';
+
+/** The note_blocked attention entry for a node id, if the snapshot lists one. */
+export function blockedNoteEntry(body: WireDetailBody, nodeId: string): { cause?: string; missionId?: string } | undefined {
+  return (Array.isArray(body.attention) ? body.attention : []).find(
+    (a) => typeof a === 'object' && a !== null && a.kind === 'note_blocked' && a.refId === nodeId,
+  );
+}
+
+/**
+ * The full text of a blocked note: read once from /v1/context?mission= (the
+ * note's mission) and matched by id. Failure isolation as withNotes — a failed
+ * or empty read, or a note missing from the bundle, keeps the snapshot detail
+ * (the cause line), so the node never loses its detail.
+ */
+export async function noteDetail(detail: NodeDetail, noteId: string, fetchNotes: () => Promise<readonly unknown[]>): Promise<NodeDetail> {
+  try {
+    const found = (await fetchNotes()).find(
+      (n): n is ContextNote => isContextNote(n) && (n as ContextNote).id === noteId && n.content !== '',
+    );
+    return found ? { revision: detail.revision, items: [{ label: NOTE_DETAIL_LABEL, text: found.content }] } : detail;
+  } catch {
+    return detail;
+  }
 }
 
 /* ---- RHZ-086 (FR-RHZ-116): about notes on goal/mission detail ---- */

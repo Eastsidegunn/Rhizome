@@ -27,6 +27,17 @@ Retained decisions carry the exact `decidedAt` string as attention `since`,
 and any approved or rejected gate with `decidedAt` shows it as a `결정 시각`
 detail item; `decidedAt` is never added to the closed node shape.
 
+Since FR-RHZ-171, `/v1/workspace` `attention[].kind` also includes
+`gate_pending` (pending internal gate), `request_waiting` (waiting request) and
+`note_blocked` (a `blocked`-kind or `blocked`/`h-request`-tagged note on an
+open mission), and attention entries may carry an optional `missionId`.
+`counts.needsYou` counts these plus waiting missions, once per id. The adapter
+keeps the first two as causes on the existing gate/request nodes and projects
+each `note_blocked` entry as a `note` node (label = first line, state
+`blocked`, `member-of` its mission when visible) with a `note.answer` action;
+its detail is the full note text from `/v1/context?mission=`, and an answer is
+sent as `note.create` with `memoryKind: answer` and tags `answer`, `re:<note id>`.
+
 ## Requirements and install
 
 Node.js 22.12 or newer is required. Both Gunnflow packages,

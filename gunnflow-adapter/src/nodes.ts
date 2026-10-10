@@ -43,6 +43,13 @@ const TASK_ACTIONS = {
 const TEXT_REQUIRED = new Set<string>(['instruct', 'cancel', 'forceReplan']);
 const GATE_ACTIONS = { approve: 'gate.approve', reject: 'gate.reject', requestChanges: 'gate.requestChanges' } as const;
 const REQUEST_ACTIONS = { complete: 'request.complete', unable: 'request.unable' } as const;
+/**
+ * RHZ-132 (FR-RHZ-171): answering a blocked note. The adapter translates it to
+ * Rhizome note.create {memoryKind: answer} (upstream.ts); text is required.
+ */
+export const NOTE_ANSWER = 'note.answer';
+/** State value of a projected blocked note (the only notes on the cockpit). */
+export const NOTE_BLOCKED_STATE = 'blocked';
 
 /**
  * The documented /v1/intent acceptance surface: Rhizome accepts mission.create
@@ -126,7 +133,10 @@ export function projectRhizomeNodes(
     ];
   };
 
+  // RHZ-132 (FR-RHZ-171): blocked notes are nodes too, so their note_blocked attention is not dropped.
   const ids = new Set<string>([...p.missions, ...p.tasks, ...p.gates, ...p.deliverables, ...(p.requests ?? [])].map((n) => n.id));
+  const notesToProject = (p.blockedNotes ?? []).filter((n) => !ids.has(n.id));
+  for (const n of notesToProject) ids.add(n.id);
   let rootId = WORKSPACE_NODE_ID;
   while (ids.has(rootId)) rootId = `~${rootId}`;
 
@@ -225,8 +235,21 @@ export function projectRhizomeNodes(
     state: { value: r.state },
     relations: membership(r.membershipId ?? ''),
     capabilities: levels(p.requestCapabilities?.[r.id], REQUEST_ACTIONS, (k) => k === 'unable'),
-    attention: r.state === 'waiting' ? [{ cause: NEEDS_HUMAN_ACTION, since: r.createdAt }] : [],
+    // RHZ-132 (FR-RHZ-171): Rhizome's own request_waiting entry rides along with the adapter's cause.
+    attention: [...attentionOf(r.id), ...(r.state === 'waiting' ? [{ cause: NEEDS_HUMAN_ACTION, since: r.createdAt }] : [])],
     artifacts: [],
   }));
-  return { nodes: [root, ...missions, ...tasks, ...gates, ...deliverables, ...requests], report };
+  // RHZ-132 (FR-RHZ-171): a blocked note hangs on its mission only while that node is on the wire.
+  const visibleParents = new Set<string>([...p.missions, ...p.tasks].map((n) => n.id));
+  const notes: NodeProjection[] = notesToProject.map((n) => ({
+    id: n.id,
+    kind: 'note',
+    label: n.cause || n.id,
+    state: { value: NOTE_BLOCKED_STATE },
+    relations: n.missionId && visibleParents.has(n.missionId) ? membership(n.missionId) : [],
+    capabilities: [{ action: NOTE_ANSWER, level: 'enabled', decision: { input: { required: true } } }],
+    attention: attentionOf(n.id),
+    artifacts: [],
+  }));
+  return { nodes: [root, ...missions, ...tasks, ...gates, ...deliverables, ...requests, ...notes], report };
 }
