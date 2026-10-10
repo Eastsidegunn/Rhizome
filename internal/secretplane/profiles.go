@@ -94,11 +94,94 @@ func (p Profile) validShape() bool {
 	return true
 }
 
-// ExecutableFile reports whether path is an existing regular file with an
-// execute bit (symlinks are followed, the path is kept as given).
-func ExecutableFile(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
+// ErrProgramUnsafe: the program path fails CheckProgram.
+var ErrProgramUnsafe = errors.New("secretplane: program-unsafe")
+
+// trustedUID is the owner rule of CheckProgram: this user or root. A
+// variable so tests can simulate another owner.
+var trustedUID = func(uid uint32) bool { return uid == 0 || uid == uint32(os.Geteuid()) }
+
+// trustedEntry: owned by a trusted uid and not group- or other-writable.
+func trustedEntry(fi os.FileInfo) bool {
+	uid, ok := ownerUID(fi)
+	return ok && trustedUID(uid) && fi.Mode().Perm()&0o022 == 0
+}
+
+// CheckProgram decides whether path may be exec'd by `run` and returns the
+// path to exec. Symlink policy: symlinks are resolved, not refused.
+//   - path must be absolute and clean;
+//   - every component of path as given is checked with Lstat: a directory
+//     must be owned by this user or root and not group/other-writable (so
+//     sticky world-writable directories such as /tmp fail); a symlink must
+//     be owned by this user or root (its target is checked next);
+//   - path is resolved with filepath.EvalSymlinks and every directory of the
+//     resolved path gets the same directory rule;
+//   - the resolved file is opened with O_NOFOLLOW and checked on the open
+//     descriptor: regular file, an execute bit, owned by this user or root,
+//     not group/other-writable.
+//
+// The caller execs the returned resolved path. It is called at profile-add
+// and again by run immediately before exec.
+func CheckProgram(path string) (string, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.IndexByte(path, 0) >= 0 {
+		return "", ErrProgramUnsafe
+	}
+	if err := checkComponents(path, true); err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return "", ErrProgramUnsafe
+	}
+	if err := checkComponents(resolved, false); err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(resolved, os.O_RDONLY|oNoFollow, 0)
+	if err != nil {
+		return "", ErrProgramUnsafe
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 || !trustedEntry(fi) {
+		return "", ErrProgramUnsafe
+	}
+	return resolved, nil
+}
+
+// checkComponents Lstats "/" and every directory prefix of p (and, when
+// allowLinks, the final component if it is a symlink). Without allowLinks
+// (a resolved path) any symlink is refused.
+func checkComponents(p string, allowLinks bool) error {
+	parts := strings.Split(p, "/")[1:]
+	cur := "/"
+	check := func(name string, final bool) error {
+		fi, err := os.Lstat(name)
+		if err != nil {
+			return ErrProgramUnsafe
+		}
+		switch {
+		case fi.Mode()&os.ModeSymlink != 0:
+			uid, ok := ownerUID(fi)
+			if !allowLinks || !ok || !trustedUID(uid) {
+				return ErrProgramUnsafe
+			}
+		case final:
+			// the file itself is checked on its descriptor
+		case !fi.IsDir() || !trustedEntry(fi):
+			return ErrProgramUnsafe
+		}
+		return nil
+	}
+	if err := check(cur, false); err != nil {
+		return err
+	}
+	for i, part := range parts {
+		cur = filepath.Join(cur, part)
+		if err := check(cur, i == len(parts)-1); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cloneProfile(p Profile) Profile {
@@ -204,12 +287,15 @@ func (pl *Plane) Profiles() ([]Profile, error) {
 }
 
 // AddProfile records a new profile. It must be driven only by the
-// interactive session. The program must be an existing executable; every
+// interactive session. The program must pass CheckProgram; every
 // ref must be a current ref of this plane with a stored value (attested and
 // revoked refs have none: ErrUnknownRef).
 func (pl *Plane) AddProfile(p Profile) error {
 	p = cloneProfile(p)
-	if !p.validShape() || !ExecutableFile(p.Program) {
+	if !p.validShape() {
+		return ErrInvalidInput
+	}
+	if _, err := CheckProgram(p.Program); err != nil {
 		return ErrInvalidInput
 	}
 	pl.mu.Lock()

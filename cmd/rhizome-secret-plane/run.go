@@ -31,6 +31,10 @@ const (
 	runValueMissing = "value-missing"
 	runStateUnsafe  = "state-unsafe"
 	runExecFailed   = "exec-failed"
+	// runProgramUnsafe: the program fails secretplane.CheckProgram at run
+	// time (missing, symlink to an unsafe place, wrong owner, group/other
+	// writable file or directory).
+	runProgramUnsafe = "program-unsafe"
 )
 
 func runFail(e *env, code string) int {
@@ -113,14 +117,17 @@ func runRun(args []string, e *env) int {
 		spec.Wipe()
 		return runFail(e, runExtraRefused)
 	}
-	if !secretplane.ExecutableFile(spec.Program) {
+	// Re-checked immediately before exec; the checked, resolved path is
+	// what is exec'd (argv[0] stays the profile's path).
+	resolved, err := secretplane.CheckProgram(spec.Program)
+	if err != nil {
 		spec.Wipe()
-		return runFail(e, runExecFailed)
+		return runFail(e, runProgramUnsafe)
 	}
 	argv := append(append([]string{spec.Program}, spec.Args...), extra...)
 	envv := buildRunEnv(e.environ(), spec.Env)
-	spec.Wipe()                      // the []byte values this process owns
-	e.exec(spec.Program, argv, envv) // returns only on failure
+	spec.Wipe()                  // the []byte values this process owns
+	e.exec(resolved, argv, envv) // returns only on failure
 	// The env strings cannot be wiped; the caller exits right after this.
 	return runFail(e, runExecFailed)
 }

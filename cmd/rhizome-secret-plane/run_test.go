@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,11 +105,7 @@ func runPlane(t *testing.T, args ...string) runResult {
 // every plane file except values.json.
 func TestRunInjectsValueFRRHZ174(t *testing.T) {
 	s1, s2 := sentinel(t), sentinel(t)
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	self = filepath.Clean(self)
+	self := programCopy(t)
 	dir := filepath.Join(t.TempDir(), "st")
 	pl, err := secretplane.Open(dir, secretplane.Options{})
 	if err != nil {
@@ -134,13 +131,23 @@ func TestRunInjectsValueFRRHZ174(t *testing.T) {
 	env := map[string]string{"HF_TOKEN": r1.Ref, "OTHER_SECRET": r2.Ref}
 	add(secretplane.Profile{Name: "fixed", Program: self, Args: childArgs, Env: env})
 	add(secretplane.Profile{Name: "open", Program: self, Args: childArgs, AllowExtraArgs: true, Env: env})
-	garbage := filepath.Join(t.TempDir(), "noexec")
+	garbage := filepath.Join(safeDir(t), "noexec")
 	os.WriteFile(garbage, []byte("not a program\n"), 0o755)
 	add(secretplane.Profile{Name: "broken", Program: garbage, Env: map[string]string{"HF_TOKEN": r1.Ref}})
-	gone := filepath.Join(t.TempDir(), "gone")
+	gone := filepath.Join(safeDir(t), "gone")
 	os.WriteFile(gone, []byte("#!/bin/sh\n"), 0o755)
 	add(secretplane.Profile{Name: "gone", Program: gone, Env: map[string]string{"HF_TOKEN": r1.Ref}})
 	os.Remove(gone)
+	later := filepath.Join(safeDir(t), "later")
+	os.WriteFile(later, []byte("#!/bin/sh\n"), 0o755)
+	add(secretplane.Profile{Name: "later", Program: later, Env: map[string]string{"HF_TOKEN": r1.Ref}})
+	os.Chmod(later, 0o775) // made group-writable after profile-add
+	gw := filepath.Join(safeDir(t), "gw")
+	os.WriteFile(gw, []byte("#!/bin/sh\n"), 0o755)
+	os.Chmod(gw, 0o775)
+	if err := pl.AddProfile(secretplane.Profile{Name: "gw", Program: gw, Env: map[string]string{"HF_TOKEN": r1.Ref}}); !errors.Is(err, secretplane.ErrInvalidInput) {
+		t.Fatalf("group-writable program accepted at add: %v", err)
+	}
 
 	var outputs []string
 	check := func(r runResult, code int, stdout, stderr string) {
@@ -156,7 +163,8 @@ func TestRunInjectsValueFRRHZ174(t *testing.T) {
 	check(runPlane(t, "run", "-state-dir", dir, s1), 1, "", "rhizome-secret-plane: run: unknown-profile\n")
 	check(runPlane(t, "run", "-state-dir", dir, "Bad/"+s1), 1, "", "rhizome-secret-plane: run: unknown-profile\n")
 	check(runPlane(t, "run", "-state-dir", dir, "broken"), 1, "", "rhizome-secret-plane: run: exec-failed\n")
-	check(runPlane(t, "run", "-state-dir", dir, "gone"), 1, "", "rhizome-secret-plane: run: exec-failed\n")
+	check(runPlane(t, "run", "-state-dir", dir, "gone"), 1, "", "rhizome-secret-plane: run: program-unsafe\n")
+	check(runPlane(t, "run", "-state-dir", dir, "later"), 1, "", "rhizome-secret-plane: run: program-unsafe\n")
 	for _, args := range [][]string{{"run"}, {"run", "-" + s1}, {"run", "-state-dir", dir, "fixed", s1},
 		{"run", "-state-dir", s1, "fixed"}} {
 		check(runPlane(t, args...), 2, "", "rhizome-secret-plane: run: usage\n")
@@ -210,7 +218,7 @@ func TestRunExecFailureFRRHZ174(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prog := filepath.Join(t.TempDir(), "p")
+	prog := filepath.Join(safeDir(t), "p")
 	os.WriteFile(prog, []byte("#!/bin/sh\n"), 0o755)
 	if err := pl.AddProfile(secretplane.Profile{Name: "p", Program: prog, Env: map[string]string{"K": r.Ref}}); err != nil {
 		t.Fatal(err)
@@ -221,7 +229,7 @@ func TestRunExecFailureFRRHZ174(t *testing.T) {
 	e.environ = func() []string { return nil }
 	e.exec = func(argv0 string, argv, envv []string) error {
 		calls++
-		if argv0 != prog || len(argv) != 1 || len(envv) != 1 || envv[0] != "K="+s {
+		if want, _ := filepath.EvalSymlinks(prog); argv0 != want || argv[0] != prog || len(argv) != 1 || len(envv) != 1 || envv[0] != "K="+s {
 			t.Error("exec arguments")
 		}
 		return os.ErrPermission
@@ -239,7 +247,7 @@ func TestRunExecFailureFRRHZ174(t *testing.T) {
 func TestSessionProfilesFRRHZ174(t *testing.T) {
 	s := sentinel(t)
 	u := newUnit(t)
-	prog := filepath.Join(t.TempDir(), "hf")
+	prog := filepath.Join(safeDir(t), "hf")
 	os.WriteFile(prog, []byte("#!/bin/sh\n"), 0o755)
 	u.pw.push(s, s)
 	u.run("register", "hf-token", "provider-key", "", "yes", "attest", "broker", "provider-key", "", "attest")

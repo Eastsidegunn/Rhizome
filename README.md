@@ -404,8 +404,17 @@ and `profile-remove <name>` removes one, both only in the session.
 `run` never prompts and never confirms anything. It prints only
 `rhizome-secret-plane: run: <code>` on failure, with `<code>` one of
 `usage`, `unknown-profile`, `extra-args-refused`, `value-missing`,
-`state-unsafe`, `exec-failed`; profile names, arguments and paths are not
-echoed.
+`state-unsafe`, `program-unsafe`, `exec-failed`; profile names, arguments and
+paths are not echoed.
+
+The program is checked when the profile is added and again right before
+`exec`: the file and every directory on its path, from `/` down, must be
+owned by you or root and must not be group- or other-writable, and the file
+must be a regular executable. Symlinks are resolved: each symlink on the
+given path must be owned by you or root, the resolved path gets the same
+checks, and the resolved path is what runs. A program under a sticky
+world-writable directory such as `/tmp` fails. A failed check at `run` time
+prints `program-unsafe`.
 
 Limits, honestly:
 
@@ -416,6 +425,9 @@ Limits, honestly:
   the profile allows them and why the program path is fixed.
 - The value is in the program's environment, which same-user tools can
   inspect while it runs.
+- Go cannot guarantee that every intermediate copy of a value is cleared
+  (slice growth, `ReadPassword`, base64 decoding); the plane wipes the buffers
+  it owns, which narrows but does not close that window.
 - Nothing is added to the calling shell; the session launcher already strips
   secret-shaped variable names from agent sessions.
 

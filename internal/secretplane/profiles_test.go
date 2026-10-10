@@ -15,7 +15,7 @@ import (
 
 func execFile(t *testing.T) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "prog")
+	p := filepath.Join(safeDir(t), "prog")
 	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -235,3 +235,124 @@ func TestStrictFilesFRRHZ174(t *testing.T) {
 }
 
 func base64Std(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+// safeDir: see cmd/rhizome-secret-plane safeDir (t.TempDir on macOS; a
+// private home directory where the temp dir fails the rule, e.g. Linux /tmp).
+func safeDir(t *testing.T) string {
+	t.Helper()
+	ok := func(d string) bool {
+		p := filepath.Join(d, ".probe")
+		if os.WriteFile(p, []byte("#!/bin/sh\n"), 0o700) != nil {
+			return false
+		}
+		defer os.Remove(p)
+		_, err := CheckProgram(p)
+		return err == nil
+	}
+	if d := t.TempDir(); ok(d) {
+		return d
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if d, err := os.MkdirTemp(home, ".rhz-plane-test-"); err == nil {
+			t.Cleanup(func() { os.RemoveAll(d) })
+			if ok(d) {
+				return d
+			}
+		}
+	}
+	t.Skip("no directory satisfies the program ownership rule")
+	return ""
+}
+
+// TestCheckProgramFRRHZ174: the program and every directory on its path
+// (as given and resolved) must be owned by this user or root and not
+// group/other-writable; symlinks are resolved and the resolved path is
+// returned; /tmp (1777) fails.
+func TestCheckProgramFRRHZ174(t *testing.T) {
+	d := safeDir(t)
+	prog := filepath.Join(d, "prog")
+	os.WriteFile(prog, []byte("#!/bin/sh\n"), 0o755)
+	os.Chmod(prog, 0o755)
+	want, _ := filepath.EvalSymlinks(prog)
+	if got, err := CheckProgram(prog); err != nil || got != want {
+		t.Fatalf("safe program: %q %v", got, err)
+	}
+
+	// group-writable binary
+	os.Chmod(prog, 0o775)
+	if _, err := CheckProgram(prog); !errors.Is(err, ErrProgramUnsafe) {
+		t.Fatal("group-writable binary accepted")
+	}
+	os.Chmod(prog, 0o755)
+	// not executable
+	os.Chmod(prog, 0o644)
+	if _, err := CheckProgram(prog); !errors.Is(err, ErrProgramUnsafe) {
+		t.Fatal("non-executable accepted")
+	}
+	os.Chmod(prog, 0o755)
+
+	// other-writable parent directory
+	sub := filepath.Join(d, "sub")
+	os.Mkdir(sub, 0o755)
+	inner := filepath.Join(sub, "prog")
+	os.WriteFile(inner, []byte("#!/bin/sh\n"), 0o755)
+	os.Chmod(sub, 0o757)
+	if _, err := CheckProgram(inner); !errors.Is(err, ErrProgramUnsafe) {
+		t.Fatal("other-writable parent accepted")
+	}
+	os.Chmod(sub, 0o755)
+	if _, err := CheckProgram(inner); err != nil {
+		t.Fatal(err)
+	}
+
+	// owned by another uid (seam): file and directories no longer trusted
+	saved := trustedUID
+	trustedUID = func(uid uint32) bool { return uid == 0 }
+	if _, err := CheckProgram(prog); !errors.Is(err, ErrProgramUnsafe) {
+		trustedUID = saved
+		t.Fatal("foreign-owned binary accepted")
+	}
+	trustedUID = saved
+
+	// symlinks: resolved; a link to a safe program is accepted and the
+	// resolved path returned; a link into an unsafe directory is refused
+	link := filepath.Join(d, "link")
+	os.Symlink(inner, link)
+	wantInner, _ := filepath.EvalSymlinks(inner)
+	if got, err := CheckProgram(link); err != nil || got != wantInner {
+		t.Fatalf("link: %q %v", got, err)
+	}
+	os.Chmod(sub, 0o775)
+	if _, err := CheckProgram(link); !errors.Is(err, ErrProgramUnsafe) {
+		t.Fatal("link into a group-writable directory accepted")
+	}
+	os.Chmod(sub, 0o755)
+	// a link placed in an unsafe directory is refused (component check)
+	usub := filepath.Join(d, "usub")
+	os.Mkdir(usub, 0o755)
+	ulink := filepath.Join(usub, "link")
+	os.Symlink(prog, ulink)
+	os.Chmod(usub, 0o777)
+	if _, err := CheckProgram(ulink); !errors.Is(err, ErrProgramUnsafe) {
+		t.Fatal("link in a world-writable directory accepted")
+	}
+	os.Chmod(usub, 0o755)
+
+	// /tmp (sticky, world-writable) fails the directory rule
+	if fi, err := os.Stat("/tmp"); err == nil && fi.Mode().Perm()&0o002 != 0 {
+		tp, err := os.CreateTemp("/tmp", "rhzprog")
+		if err == nil {
+			tp.Close()
+			defer os.Remove(tp.Name())
+			os.Chmod(tp.Name(), 0o755)
+			if _, err := CheckProgram(tp.Name()); !errors.Is(err, ErrProgramUnsafe) {
+				t.Fatal("program under /tmp accepted")
+			}
+		}
+	}
+	for _, bad := range []string{"rel/prog", d + "/../" + filepath.Base(d) + "/prog", filepath.Join(d, "missing")} {
+		if _, err := CheckProgram(bad); !errors.Is(err, ErrProgramUnsafe) {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}

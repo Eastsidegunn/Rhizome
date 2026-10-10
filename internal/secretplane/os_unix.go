@@ -24,3 +24,12 @@ func lockDir(f *os.File) error {
 
 // oNoFollow makes an open fail on a symlink (read-only plane file reads).
 const oNoFollow = syscall.O_NOFOLLOW
+
+// ownerUID returns the owner of fi.
+func ownerUID(fi os.FileInfo) (uint32, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
+}

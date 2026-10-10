@@ -159,7 +159,7 @@ func errCode(err error) string {
 		secretplane.ErrInvalidInput, secretplane.ErrInvalidDecision, secretplane.ErrUnknownOp, secretplane.ErrUnknownRef,
 		secretplane.ErrDone, secretplane.ErrOpBusy, secretplane.ErrDisplayOnly, secretplane.ErrFrozen,
 		secretplane.ErrEpochPhase, secretplane.ErrHalted, secretplane.ErrStalePlane, secretplane.ErrProfileExists,
-		secretplane.ErrUnknownProfile, secretplane.ErrValueMissing, secretplane.ErrProfilesCorrupt} {
+		secretplane.ErrUnknownProfile, secretplane.ErrValueMissing, secretplane.ErrProfilesCorrupt, secretplane.ErrProgramUnsafe} {
 		if errors.Is(err, k) {
 			return strings.TrimPrefix(k.Error(), "secretplane: ")
 		}

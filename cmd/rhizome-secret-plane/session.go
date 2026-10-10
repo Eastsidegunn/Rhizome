@@ -575,7 +575,7 @@ func (s *session) profileAdd() {
 		s.say(msgInvalidInput)
 		return
 	}
-	if p.Program, ok = s.readLine("program (absolute path, no PATH lookup): "); !ok || !secretplane.ExecutableFile(p.Program) ||
+	if p.Program, ok = s.readLine("program (absolute path, no PATH lookup): "); !ok || !programOK(p.Program) ||
 		filepath.Clean(p.Program) != p.Program || !filepath.IsAbs(p.Program) {
 		s.say(msgInvalidInput)
 		return
@@ -651,4 +651,9 @@ func (s *session) profileRemove(name string) {
 		return
 	}
 	s.say("profile removed: %s", name)
+}
+
+func programOK(path string) bool {
+	_, err := secretplane.CheckProgram(path)
+	return err == nil
 }

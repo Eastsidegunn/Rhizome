@@ -205,3 +205,57 @@ func revPending(t *testing.T, ref, name, reason string) secretwire.Pending {
 	return secretwire.Pending{OpID: newOpID(t), Op: secretwire.OpRevoke, Ref: ref, Name: name,
 		RefKind: secretwire.RefKindProviderKey, ReasonCode: reason, JournalSeq: 3}
 }
+
+// safeDir is a directory whose whole path passes secretplane.CheckProgram's
+// directory rule (owned by this user or root, not group/other-writable).
+// t.TempDir qualifies on macOS; where it does not (Linux /tmp is 1777) a
+// private directory under the home directory is used, else the test skips.
+func safeDir(t *testing.T) string {
+	t.Helper()
+	ok := func(d string) bool {
+		p := filepath.Join(d, ".probe")
+		if os.WriteFile(p, []byte("#!/bin/sh\n"), 0o700) != nil {
+			return false
+		}
+		defer os.Remove(p)
+		_, err := secretplane.CheckProgram(p)
+		return err == nil
+	}
+	if d := t.TempDir(); ok(d) {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		if d, err := os.MkdirTemp(home, ".rhz-plane-test-"); err == nil {
+			t.Cleanup(func() { os.RemoveAll(d) })
+			if ok(d) {
+				return d
+			}
+		}
+	}
+	t.Skip("no directory satisfies the program ownership rule")
+	return ""
+}
+
+// programCopy returns the test binary itself if it passes CheckProgram,
+// else a copy in safeDir.
+func programCopy(t *testing.T) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	self = filepath.Clean(self)
+	if _, err := secretplane.CheckProgram(self); err == nil {
+		return self
+	}
+	data, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(safeDir(t), "plane.test")
+	if err := os.WriteFile(p, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
