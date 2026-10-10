@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -687,6 +688,11 @@ type Intent struct {
 	// RHZ-124 S1 (FR-RHZ-124-S1): Workdir names a session-launcher
 	// ledger workdir ("" = the ledger default). The JANUS backend rejects it.
 	Workdir string `json:"workdir"`
+	// Refs (RHZ-107 G1, FR-RHZ-140) are mission.start secret refs: each G2,
+	// no duplicates, at most 16, else X7 with zero writes. They become the
+	// provenance approval record (not enforced); no registry lookup. The
+	// wire distinguishes absent from present-but-malformed (see IntentRefs).
+	Refs IntentRefs `json:"refs"`
 	// Verification is decoded strictly by RelayIntentHooks only for gate
 	// decisions. RawMessage preserves exact key casing for the V7 check.
 	Verification json.RawMessage `json:"verification,omitempty"`
@@ -706,6 +712,70 @@ type Intent struct {
 	// requestUnknownField is set only by the HTTP raw-key check. Keeping it
 	// out of JSON lets the request service apply Q11 after Q1-Q10.
 	requestUnknownField bool
+}
+
+// IntentRefs is the mission.start refs wire (FR-RHZ-140). Decoding never
+// fails the outer intent: it records whether the key was present and
+// whether the value was a JSON array of strings, so a present null, a
+// non-array or a non-string element is answered with the fixed X7 reason
+// (zero writes) instead of an "invalid json" error. Absent keeps the zero
+// value and marshals as null, exactly like the former nil slice.
+type IntentRefs struct {
+	present, malformed bool
+	list               []string
+	raw                json.RawMessage
+}
+
+// RefsOf builds present, well-typed refs (callers and tests).
+func RefsOf(refs ...string) IntentRefs {
+	return IntentRefs{present: true, list: append([]string(nil), refs...)}
+}
+
+// UnmarshalJSON implements json.Unmarshaler; it never returns an error.
+func (r *IntentRefs) UnmarshalJSON(b []byte) error {
+	*r = IntentRefs{present: true, raw: append(json.RawMessage(nil), b...)}
+	t := bytes.TrimSpace(b)
+	if len(t) == 0 || t[0] != '[' {
+		r.malformed = true // null, string, number, object, bool
+		return nil
+	}
+	var elems []json.RawMessage
+	if json.Unmarshal(t, &elems) != nil {
+		r.malformed = true
+		return nil
+	}
+	for _, e := range elems {
+		var v string
+		if len(e) == 0 || e[0] != '"' || json.Unmarshal(e, &v) != nil {
+			r.malformed = true
+			return nil
+		}
+		r.list = append(r.list, v)
+	}
+	return nil
+}
+
+// MarshalJSON keeps an absent field as null (the former []string bytes).
+func (r IntentRefs) MarshalJSON() ([]byte, error) {
+	switch {
+	case !r.present:
+		return []byte("null"), nil
+	case r.raw != nil:
+		return r.raw, nil
+	}
+	return json.Marshal(r.list)
+}
+
+// startRefs is the relay's X7 check: absent → nil, ok; anything present
+// must be an array of G2 strings, unique, at most 16 (returned sorted).
+func (r IntentRefs) startRefs() ([]string, bool) {
+	if !r.present {
+		return nil, true
+	}
+	if r.malformed {
+		return nil, false
+	}
+	return execution.StartRefs(r.list)
 }
 
 // BudgetOverride is the per-mission budget request of mission.start; a nil
@@ -943,6 +1013,9 @@ type ExecStartRequest struct {
 	// Actor is the relay's actor, unverified-prefixed like task.progress;
 	// journaled as the intent's provenance actor only (FR-RHZ-124).
 	Actor string
+	// Refs are the validated, sorted mission.start refs (FR-RHZ-140); nil
+	// when the intent named none.
+	Refs []string
 }
 
 // ExecStartPlan is the zero-write preview of a start: the deterministic
@@ -1567,6 +1640,11 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		if in.MissionID == "" {
 			return RelayResult{Reason: "missionId required"}, nil
 		}
+		// FR-RHZ-140 (SCP §5, X7): format only, fixed reason, zero writes.
+		refs, ok := in.Refs.startRefs()
+		if !ok {
+			return RelayResult{Reason: "secret intent: invalid ref"}, nil
+		}
 		log := s.List("mission", in.MissionID)
 		if len(log) == 0 {
 			return RelayResult{Reason: fmt.Sprintf("unknown mission %q", in.MissionID)}, nil
@@ -1594,7 +1672,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		if !authorized && !strings.HasPrefix(who, "unverified-local-operator:") {
 			who = "unverified-local-operator:" + who
 		}
-		req := ExecStartRequest{MissionID: in.MissionID, Instruction: strings.TrimSpace(in.Instruction), SessionMode: in.SessionMode, Workdir: in.Workdir, Actor: who}
+		req := ExecStartRequest{MissionID: in.MissionID, Instruction: strings.TrimSpace(in.Instruction), SessionMode: in.SessionMode, Workdir: in.Workdir, Actor: who, Refs: refs}
 		if req.Instruction == "" {
 			req.Instruction = cur.Description
 		}

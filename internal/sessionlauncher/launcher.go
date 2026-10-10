@@ -54,6 +54,10 @@ type StartRequest struct {
 	Budget  BudgetOverride
 	// Actor is journaled in the intent provenance only, never keyed.
 	Actor string
+	// Refs are the mission.start secret refs (FR-RHZ-140), recorded as
+	// provenance requestedRefs: an approval record (not enforced), never
+	// keyed. This ledger has no refCeiling, so authorizedRefs stays empty.
+	Refs []string
 }
 
 // StartPlan is the zero-write preview of a start.
@@ -195,6 +199,10 @@ func (l *Launcher) spec(req StartRequest) (spec, string) {
 	if req.Budget.MaxDepth != nil {
 		return spec{}, "budget.maxDepth not supported by session launcher"
 	}
+	refs, ok := execution.StartRefs(req.Refs)
+	if !ok {
+		return spec{}, "secret intent: invalid ref"
+	}
 	mode := req.SessionMode
 	if mode == "" {
 		mode = "oneshot"
@@ -241,7 +249,7 @@ func (l *Launcher) spec(req StartRequest) (spec, string) {
 	// can never coincide with a JANUS-backend key.
 	key := hashOf("mission.start", Target, req.MissionID, req.Instruction, wd, fmt.Sprint(eff.Budget), fmt.Sprint(eff.Timeout), mode)
 	digest := c.Digest()
-	prov := execution.Provenance{Ceiling: ceiling, Requested: requested, Effective: eff, ProfileID: Target, ProfileHash: strings.TrimPrefix(digest, "sha256:"), ExecConfigDigest: digest, Actor: req.Actor}
+	prov := execution.Provenance{Ceiling: ceiling, Requested: requested, Effective: eff, ProfileID: Target, ProfileHash: strings.TrimPrefix(digest, "sha256:"), ExecConfigDigest: digest, Actor: req.Actor, RequestedRefs: refs}
 	return spec{key: key, execID: "exec-" + key, requested: requested, ceiling: ceiling, prov: prov, workdir: dir, cents: eff.Budget, timeMs: eff.Timeout, mode: mode, mission: req.MissionID, text: req.Instruction, claimCorr: "mission.start:" + req.MissionID}, ""
 }
 

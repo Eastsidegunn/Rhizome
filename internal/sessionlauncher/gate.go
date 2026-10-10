@@ -421,7 +421,9 @@ func (l *Launcher) resumeSpec(d GateDecision) (spec, string) {
 	}
 	key := strings.TrimPrefix(ResumeExecutionID(d.GateID, d.Decision), "exec-")
 	digestC := c.Digest()
-	prov := execution.Provenance{Ceiling: ceiling, Requested: requested, Effective: eff, ProfileID: Target, ProfileHash: strings.TrimPrefix(digestC, "sha256:"), ExecConfigDigest: digestC, Actor: who}
+	prov := execution.Provenance{Ceiling: ceiling, Requested: requested, Effective: eff, ProfileID: Target, ProfileHash: strings.TrimPrefix(digestC, "sha256:"), ExecConfigDigest: digestC, Actor: who,
+		// FR-RHZ-140: the resume carries the original approval record.
+		RequestedRefs: append([]string(nil), orig.Provenance.RequestedRefs...), AuthorizedRefs: append([]string(nil), orig.Provenance.AuthorizedRefs...)}
 	return spec{key: key, execID: "exec-" + key, requested: requested, ceiling: ceiling, prov: prov, workdir: dir, cents: eff.Budget, timeMs: eff.Timeout, mode: "oneshot",
 		mission: orig.MissionID, text: text, claimCorr: "gate.resume:" + d.GateID, resumeSession: orig.ExternalID, resumeOf: origID, tools: tools}, ""
 }

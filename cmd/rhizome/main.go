@@ -287,7 +287,7 @@ type execStarter struct{ st janusadapter.Starter }
 
 func toStartRequest(r workspace.ExecStartRequest) janusadapter.StartRequest {
 	return janusadapter.StartRequest{MissionID: r.MissionID, Instruction: r.Instruction, SessionMode: r.SessionMode, Workdir: r.Workdir,
-		Budget: janusadapter.BudgetOverride{Tokens: r.Budget.Tokens, TimeMs: r.Budget.TimeMs, MaxDepth: r.Budget.MaxDepth, USD: r.Budget.USD}, Actor: r.Actor}
+		Budget: janusadapter.BudgetOverride{Tokens: r.Budget.Tokens, TimeMs: r.Budget.TimeMs, MaxDepth: r.Budget.MaxDepth, USD: r.Budget.USD}, Actor: r.Actor, Refs: r.Refs}
 }
 func (x execStarter) Prepare(r workspace.ExecStartRequest) (workspace.ExecStartPlan, string, error) {
 	p, reason, err := x.st.Prepare(toStartRequest(r))
@@ -303,7 +303,7 @@ type launcherStarter struct{ l *sessionlauncher.Launcher }
 
 func toLaunchRequest(r workspace.ExecStartRequest) sessionlauncher.StartRequest {
 	return sessionlauncher.StartRequest{MissionID: r.MissionID, Instruction: r.Instruction, SessionMode: r.SessionMode, Workdir: r.Workdir,
-		Budget: sessionlauncher.BudgetOverride{Tokens: r.Budget.Tokens, TimeMs: r.Budget.TimeMs, MaxDepth: r.Budget.MaxDepth, USD: r.Budget.USD}, Actor: r.Actor}
+		Budget: sessionlauncher.BudgetOverride{Tokens: r.Budget.Tokens, TimeMs: r.Budget.TimeMs, MaxDepth: r.Budget.MaxDepth, USD: r.Budget.USD}, Actor: r.Actor, Refs: r.Refs}
 }
 func (x launcherStarter) Prepare(r workspace.ExecStartRequest) (workspace.ExecStartPlan, string, error) {
 	p, reason, err := x.l.Prepare(toLaunchRequest(r))

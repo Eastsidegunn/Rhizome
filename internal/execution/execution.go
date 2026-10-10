@@ -10,6 +10,8 @@ import (
 	"rhizome/internal/events"
 	"rhizome/internal/policy"
 	"rhizome/internal/projector"
+	"rhizome/internal/secretwire"
+	"sort"
 	"strings"
 	"time"
 )
@@ -83,7 +85,107 @@ type Provenance struct {
 	ProfileHash      string        `json:"profileHash"`
 	ExecConfigDigest string        `json:"execConfigDigest"`
 	Actor            string        `json:"actor"`
+	// RHZ-107 G1 (FR-RHZ-140, SCP §5): the secret refs the mission.start
+	// request named (sorted) and the subset inside the ledger's refCeiling.
+	// An approval record (not enforced): nothing reads these to hand out a
+	// value, the registry is never consulted, and neither field feeds the
+	// execution key or the request fingerprint. omitempty keeps every
+	// refs-free intent byte-identical. Unlike the policy fields, Replay
+	// checks their format (see ValidRefRecord).
+	RequestedRefs  []string `json:"requestedRefs,omitempty"`
+	AuthorizedRefs []string `json:"authorizedRefs,omitempty"`
 }
+
+// MaxStartRefs bounds mission.start refs (FR-RHZ-140).
+const MaxStartRefs = 16
+
+// StartRefs validates mission.start refs (each G2, no duplicates, at most
+// MaxStartRefs) and returns a sorted copy (nil when empty). The input slice
+// is never modified. ok=false carries no detail: the caller answers with the
+// fixed X7 reason only.
+func StartRefs(refs []string) ([]string, bool) {
+	if len(refs) == 0 {
+		return nil, true
+	}
+	if len(refs) > MaxStartRefs {
+		return nil, false
+	}
+	out := append([]string(nil), refs...)
+	sort.Strings(out)
+	if !ascendingRefs(out) {
+		return nil, false
+	}
+	return out, true
+}
+
+// AuthorizeRefs is requested ∩ ceiling (allow intersection only; an empty
+// request authorizes nothing, the ceiling is never a default). requested
+// must be sorted; the result keeps its order and is nil when empty.
+func AuthorizeRefs(requested, ceiling []string) []string {
+	in := make(map[string]bool, len(ceiling))
+	for _, c := range ceiling {
+		in[c] = true
+	}
+	var out []string
+	for _, r := range requested {
+		if in[r] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// ValidRefList reports a canonical ref list: every element G2, strictly
+// ascending (sorted, no duplicates).
+func ValidRefList(refs []string) bool { return ascendingRefs(refs) }
+
+func ascendingRefs(refs []string) bool {
+	for i, r := range refs {
+		if !secretwire.ValidRef(r) || (i > 0 && refs[i-1] >= r) {
+			return false
+		}
+	}
+	return true
+}
+
+// omittedOrNonEmpty reports that the payload's provenance ref fields are
+// either absent or non-empty arrays: the writer omits empty lists
+// (omitempty), so an explicit null or [] was never written by it. Key
+// matching is the same as the payload decode.
+func omittedOrNonEmpty(payload []byte) bool {
+	var raw struct {
+		Provenance *struct {
+			RequestedRefs  json.RawMessage `json:"requestedRefs"`
+			AuthorizedRefs json.RawMessage `json:"authorizedRefs"`
+		} `json:"provenance"`
+	}
+	if json.Unmarshal(payload, &raw) != nil {
+		return false
+	}
+	if raw.Provenance == nil {
+		return true
+	}
+	for _, f := range []json.RawMessage{raw.Provenance.RequestedRefs, raw.Provenance.AuthorizedRefs} {
+		if f == nil {
+			continue
+		}
+		var l []json.RawMessage
+		if json.Unmarshal(f, &l) != nil || len(l) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidRefRecord is the format check of the two provenance ref fields
+// (FR-RHZ-140): both canonical lists and authorized ⊆ requested.
+func ValidRefRecord(requested, authorized []string) bool {
+	if !ascendingRefs(requested) || !ascendingRefs(authorized) {
+		return false
+	}
+	return len(AuthorizeRefs(authorized, requested)) == len(authorized)
+}
+
 type Service struct{ Store events.Port }
 type payload struct {
 	MissionID, IdempotencyKey, ExternalID, Cursor, Summary, SourceRef string
@@ -190,7 +292,7 @@ func samePolicy(a, b policy.Policy) bool {
 // that is stored as Policy. The idempotency key and execution id are the
 // caller's key, untouched by provenance.
 func (s Service) IntentWithProvenance(missionID, key string, requested, ceiling policy.Policy, prov Provenance) (Ref, error) {
-	if strings.TrimSpace(prov.ProfileID) == "" || strings.TrimSpace(prov.ProfileHash) == "" || !digestRE.MatchString(prov.ExecConfigDigest) {
+	if strings.TrimSpace(prov.ProfileID) == "" || strings.TrimSpace(prov.ProfileHash) == "" || !digestRE.MatchString(prov.ExecConfigDigest) || !ValidRefRecord(prov.RequestedRefs, prov.AuthorizedRefs) {
 		return Ref{}, fmt.Errorf("invalid provenance")
 	}
 	merged := policy.Merge(requested, ceiling)
@@ -443,6 +545,10 @@ func Replay(log []events.Event) (Ref, error) {
 		if i == 0 {
 			if e.Type != "execution.intent" || raw.State != Intent || raw.Policy == nil || !policy.Valid(*raw.Policy) || len(raw.Policy.Capabilities) == 0 {
 				return Ref{}, fmt.Errorf("invalid intent")
+			}
+			// FR-RHZ-140: the ref record is format-checked on replay too.
+			if raw.Provenance != nil && (!ValidRefRecord(raw.Provenance.RequestedRefs, raw.Provenance.AuthorizedRefs) || !omittedOrNonEmpty(e.Payload)) {
+				return Ref{}, fmt.Errorf("invalid provenance refs")
 			}
 			r.MissionID, r.IdempotencyKey, r.Policy, r.Provenance = raw.MissionID, raw.IdempotencyKey, raw.Policy, raw.Provenance
 			r.State = Intent
