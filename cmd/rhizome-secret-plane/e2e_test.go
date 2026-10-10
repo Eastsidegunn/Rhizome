@@ -63,6 +63,29 @@ func (r *rhz) close() { r.j.Close() }
 
 func (r *rhz) cycle() { r.ch.Cycle(context.Background()) }
 
+// poll runs channel cycles until one is served by the plane through its poll
+// step, so exactly one poll/batch exchange is known to have happened. A cycle
+// can legitimately get error{busy} while the plane's handler of the previous
+// connection is still draining its optional post-batch frame; such a cycle
+// writes nothing on either side and is retried. Bounded; the failure shows
+// the last observed counts.
+func (r *rhz) poll(p *proc) {
+	r.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		before := p.srv.Served()
+		r.cycle()
+		after := p.srv.Served()
+		if after > before {
+			return
+		}
+		if time.Now().After(deadline) {
+			r.t.Fatalf("no cycle served by the plane (served %d before, %d after; reports %v)", before, after, r.reportList())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func (r *rhz) reportList() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -221,21 +244,21 @@ func TestE2EPlaneSessionFRRHZ139(t *testing.T) {
 
 	// register → active(1)
 	_, ref := rz.register("svc", "prod")
-	rz.cycle()
+	rz.poll(pl)
 	if q := pl.srv.Queue(); len(q) != 1 || q[0].Pending.Ref != ref {
 		t.Fatalf("queue %+v", q)
 	}
 	pl.pw.push(s1, s1)
 	pl.do(1, "next", "accept", "yes")
-	rz.cycle()
+	rz.poll(pl)
 	rz.expect(ref, secretref.StateActive, 1)
 
 	// rotate → active(2)
 	rz.rotate(ref)
-	rz.cycle()
+	rz.poll(pl)
 	pl.pw.push(s2, s2)
 	pl.do(1, "next", "accept", "yes")
-	rz.cycle()
+	rz.poll(pl)
 	rz.expect(ref, secretref.StateActive, 2)
 
 	// restart both sides: same planeId, nothing resent or lost
@@ -245,7 +268,7 @@ func TestE2EPlaneSessionFRRHZ139(t *testing.T) {
 	rz.close()
 	pl = startPlane(t, dir, sock, nil)
 	rz = openRhz(t, jpath, sock)
-	rz.cycle()
+	rz.poll(pl)
 	rz.expect(ref, secretref.StateActive, 2)
 	if got := rz.ref(ref); got.LastOutcome == nil || *got.LastOutcome != *planeBefore.LastOutcome {
 		t.Fatal("restart changed the outcome")
@@ -257,16 +280,16 @@ func TestE2EPlaneSessionFRRHZ139(t *testing.T) {
 
 	// revoke → revoked
 	rz.revoke(ref, secretwire.ReasonUnused)
-	rz.cycle()
+	rz.poll(pl)
 	pl.do(1, "next", "accept", "revoke")
-	rz.cycle()
+	rz.poll(pl)
 	rz.expect(ref, secretref.StateRevoked, 2)
 
 	// reject → rejected outcome
 	_, ref4 := rz.register("unwanted")
-	rz.cycle()
+	rz.poll(pl)
 	pl.do(1, "next", "reject", "yes")
-	rz.cycle()
+	rz.poll(pl)
 	if v := rz.ref(ref4); v.State != secretref.StateRegistrationFailed || v.LastOutcome == nil ||
 		v.LastOutcome.Result != secretwire.ResultRejected {
 		t.Fatalf("reject: %+v", v)
@@ -275,20 +298,20 @@ func TestE2EPlaneSessionFRRHZ139(t *testing.T) {
 	// attested (Q2): declare, rotate, revoke; values file untouched
 	vals := readFile(t, filepath.Join(dir, "values.json"))
 	pl.do(1, "attest", "broker", "provider-key", "", "attest")
-	rz.cycle()
+	rz.poll(pl)
 	att := rz.refByName("broker")
 	if att.Origin != secretwire.OriginAttested || att.State != secretref.StateActive || att.Version != 1 {
 		t.Fatalf("attested: %+v", att)
 	}
 	rz.rotate(att.Ref)
-	rz.cycle()
+	rz.poll(pl)
 	pl.do(1, "next", "accept", "rotated externally")
-	rz.cycle()
+	rz.poll(pl)
 	rz.expect(att.Ref, secretref.StateActive, 2)
 	rz.revoke(att.Ref, secretwire.ReasonExposed)
-	rz.cycle()
+	rz.poll(pl)
 	pl.do(1, "next", "accept", "revoke")
-	rz.cycle()
+	rz.poll(pl)
 	rz.expect(att.Ref, secretref.StateRevoked, 2)
 	if string(vals) != string(readFile(t, filepath.Join(dir, "values.json"))) {
 		t.Fatal("attested operations touched the values file")
@@ -299,8 +322,8 @@ func TestE2EPlaneSessionFRRHZ139(t *testing.T) {
 	pl.pw.push(s3, s3)
 	pl.do(1, "register", "late", "other", "", "yes")
 	pl.do(1, "epoch-replace", "replace epoch")
-	rz.cycle() // first poll after freeze: cutoff, quarantine, split
-	rz.cycle() // first poll of P′: epoch-active
+	rz.poll(pl) // first poll after freeze: cutoff, quarantine, split
+	rz.poll(pl) // first poll of P′: epoch-active
 	pl.do(1, "status")
 	pid2, phase := planeID(t, pl)
 	if pid2 == pid1 || phase != "new-epoch-active" {
@@ -420,13 +443,13 @@ func TestE2ECutoffPendingFRRHZ139(t *testing.T) {
 	rz := openRhz(t, filepath.Join(t.TempDir(), "journal.ndjson"), sock)
 
 	_, ref := rz.register("svc")
-	rz.cycle()
+	rz.poll(pl)
 	if q := pl.srv.Queue(); len(q) != 1 || !q[0].Actionable() {
 		t.Fatal("request not queued")
 	}
 	pl.do(1, "epoch-replace", "replace epoch")
 	pid1, _ := planeID(t, pl)
-	rz.cycle() // cutoff poll: old planeId, frozen at entry; splits to P′
+	rz.poll(pl) // cutoff poll: old planeId, frozen at entry; splits to P′
 	for _, it := range pl.srv.Queue() {
 		if it.Actionable() {
 			t.Fatal("cutoff poll made the request actionable")
@@ -440,13 +463,13 @@ func TestE2ECutoffPendingFRRHZ139(t *testing.T) {
 	if pid2 == pid1 || phase != "split-recorded" {
 		t.Fatalf("phase %s", phase)
 	}
-	rz.cycle() // first poll of P′ feeds the queue
+	rz.poll(pl) // first poll of P′ feeds the queue
 	if q := pl.srv.Queue(); len(q) != 1 || !q[0].Actionable() {
 		t.Fatal("P′ poll did not queue the request")
 	}
 	pl.pw.push(s, s)
 	pl.do(1, "next", "accept", "yes")
-	rz.cycle()
+	rz.poll(pl)
 	rz.expect(ref, secretref.StateActive, 1)
 	pl.quit()
 	if reps := rz.reportList(); len(reps) != 0 {
