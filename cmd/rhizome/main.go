@@ -1157,6 +1157,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return gate(args[1:], out, errOut)
 	case "agent":
 		return agentCmd(args[1:], out, errOut)
+	case "secret":
+		return secretCmd(args[1:], out, errOut)
 	default:
 		return 2
 	}

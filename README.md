@@ -315,6 +315,44 @@ its limit: any other process of the same user can impersonate the plane or
 Rhizome, so the plane's local `0600` files are not protected from your own
 processes.
 
+#### `rhizome secret`
+
+A small HTTP client of a running `serve` for the secret registry. It never
+opens the journal and has no way to enter a value: requests only ask the
+plane to act, and the plane prompts for any value itself. Every subcommand
+takes `-addr <host:port>` (default `127.0.0.1:8080`, the `serve` default).
+
+```sh
+./rhizome secret list [-json]
+./rhizome secret register-request -name <name> -kind provider-key|gateway-credential|other [-scope-tag <tag>]...
+./rhizome secret rotate-request -ref <sref-…>
+./rhizome secret revoke-request -ref <sref-…> -reason unused|exposed|rotated-out|other
+```
+
+The three request commands also take `-op-id <op-…>` (default: a fresh random
+id; repeat it to retry the same request safely) and `-actor <name>` (default
+`rhizome-cli`). `-scope-tag` may be repeated; tags are sent sorted and a
+duplicate is a usage error. On success they print `<opId>\t<ref>` and exit 0.
+`list` prints a tab-separated table with the header
+`ref name kind state version origin pending`, one line per ref; `pending` is
+the outstanding operation (`register`, `rotate` or `revoke`) and empty cells
+are `-`. `list -json` prints the `secrets` array of `GET /v1/secrets` (`[]`
+when empty).
+
+| stderr | Exit | When |
+|---|---|---|
+| `secret: usage` | 2 | Unknown subcommand or flag, missing required flag, extra argument, duplicate `-scope-tag`. |
+| `secret: rejected: <reason>` | 1 | `serve` refused the request with a known secret reason, such as `secret intent: name in use`. |
+| `secret: rejected` | 1 | `serve` refused the request with any other reason (not shown). |
+| `secret: serve unreachable` | 1 | No connection to `serve`. |
+| `secret: serve error` | 1 | Non-200 status (redirects are not followed), or a response that is not exactly the expected shape (body not shown). |
+| `secret: unavailable` | 1 | `serve` has no `GET /v1/secrets` route, or no random request id could be generated. |
+
+Error output never echoes extra arguments, flag names or values, the
+address, response bodies or unknown reasons. Successful output prints the
+request's `opId` and `ref`, and `list` prints projection fields only after
+checking each against its fixed format.
+
 ### Gunnflow adapter (optional)
 
 [gunnflow-adapter/](gunnflow-adapter/) serves the Gunnflow direct wire in front
