@@ -18,7 +18,13 @@ var Layers = map[string]string{
 	// codeindex reads git objects and the events port only (RHZ-058/059) —
 	// substrate keeps that minimality enforced via R2.
 	"codeindex": "substrate",
-	"domain":    "exec", "mission": "exec", "projector": "exec", "decision": "exec", "coordinator": "exec",
+	// RHZ-107 G1 (SCP §7): secret wire vocabulary and its fake are substrate
+	// (R8 narrows them further, see edges.go); the secret registry and
+	// channel are exec. internal/secretplane/** is deliberately absent: it is
+	// filtered out before Check and governed by R8 only.
+	"secretwire": "substrate", "secretwiretest": "substrate",
+	"secretref": "exec", "secretchannel": "exec",
+	"domain": "exec", "mission": "exec", "projector": "exec", "decision": "exec", "coordinator": "exec",
 	"wake": "exec", "execution": "exec", "approval": "exec", "gaterequest": "exec", "question": "exec", "request": "exec", "attest": "exec",
 	"janusadapter": "exec", "audit": "exec", "sessionlauncher": "exec",
 	"memory": "knowledge", "source": "knowledge", "knowledge": "knowledge", "relation": "knowledge",
