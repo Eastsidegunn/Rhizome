@@ -646,7 +646,7 @@ type Intent struct {
 	// instruction reuses Instruction (empty = mission description).
 	Budget      *BudgetOverride `json:"budget"`
 	SessionMode string          `json:"sessionMode"`
-	// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): Workdir names a session-launcher
+	// RHZ-124 S1 (FR-RHZ-124-S1): Workdir names a session-launcher
 	// ledger workdir ("" = the ledger default). The JANUS backend rejects it.
 	Workdir string `json:"workdir"`
 	// Verification is decoded strictly by RelayIntentHooks only for gate
@@ -677,7 +677,7 @@ type BudgetOverride struct {
 	TimeMs   *int64 `json:"timeMs"`
 	MaxDepth *int64 `json:"maxDepth"`
 	// USD is the session-launcher spend axis (RHZ-124 S1,
-	// FR-RHZ-TBD(124-S1)); the JANUS backend rejects it.
+	// FR-RHZ-124-S1); the JANUS backend rejects it.
 	USD *float64 `json:"usd"`
 }
 
@@ -933,6 +933,12 @@ type RelayHooks struct {
 	Inject       ExecInjector
 	Start        ExecStarter
 	EnforceJANUS bool
+	// GateDecided is called after an internal gate's approve/reject is
+	// durably recorded, only for gates whose correlation id carries
+	// LauncherGatePrefix (FR-RHZ-124-S2: the session launcher resumes the
+	// denied session). It cannot change the relay result: the decision is
+	// already recorded. requestChanges never calls it (the gate stays open).
+	GateDecided func(GateDecision)
 }
 
 // ExecInjector delivers an instruction text to a running external session
@@ -1678,6 +1684,11 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 			}
 			if _, e = (question.Service{Store: s}).Answer(q.ID, d, in.Reason, actor, in.Digest, verification); e != nil {
 				return RelayResult{Reason: e.Error()}, nil
+			}
+			// FR-RHZ-124-S2: decision durable first; the hook (launcher
+			// resume) runs after and can never un-record it.
+			if hooks.GateDecided != nil && strings.HasPrefix(q.CorrelationID, LauncherGatePrefix) {
+				hooks.GateDecided(GateDecision{GateID: q.ID, CorrelationID: q.CorrelationID, MissionID: q.MissionID, Decision: string(d), Reason: in.Reason, Actor: actor})
 			}
 			return RelayResult{Accepted: true}, nil
 		}

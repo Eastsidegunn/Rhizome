@@ -421,6 +421,9 @@ type HTTPServer struct {
 	// nil = not wired: mission.start is rejected with "execution start
 	// unavailable" and zero writes. Injected by the composition root.
 	ExecStart ExecStarter
+	// ExecGateDecided receives recorded launcher-gate decisions
+	// (FR-RHZ-124-S2, RelayHooks.GateDecided). nil = not wired.
+	ExecGateDecided func(GateDecision)
 	// Blobs serves GET /v1/blob (RHZ-056, FR-RHZ-086), and POST /v1/blob when
 	// the value also implements BlobPutter (RHZ-081, FR-RHZ-112). nil = routes
 	// disabled (404), same 미배선 convention as ExecEvents. Injected by the
@@ -642,7 +645,7 @@ func (h *HTTPServer) Handler() http.Handler {
 				return
 			}
 			in.Intent.requestUnknownField = requestIntentHasUnknownField(raw, in.Kind)
-			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, trust.Authority{}, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart, EnforceJANUS: h.EnforceJANUS})
+			res, e := RelayIntentHooks(h.Store, in.Intent, in.Actor, trust.Authority{}, RelayHooks{Inject: h.ExecInject, Start: h.ExecStart, EnforceJANUS: h.EnforceJANUS, GateDecided: h.ExecGateDecided})
 			if storePoisoned(h.Store) || errors.Is(e, events.ErrPoisoned) {
 				servePoisoned(w)
 				return

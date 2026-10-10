@@ -224,7 +224,7 @@ func (s Starter) spec(req StartRequest) (startSpec, string, error) {
 	if strings.TrimSpace(req.MissionID) == "" || strings.TrimSpace(req.Instruction) == "" {
 		return startSpec{}, "missionId and instruction required", nil
 	}
-	// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): session-launcher fields are refused,
+	// RHZ-124 S1 (FR-RHZ-124-S1): session-launcher fields are refused,
 	// never silently ignored.
 	if req.Budget.USD != nil {
 		return startSpec{}, "budget.usd not supported by janus backend", nil

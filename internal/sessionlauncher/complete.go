@@ -1,11 +1,14 @@
 package sessionlauncher
 
-// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): completion of one launched session.
+// RHZ-124 S1 (FR-RHZ-124-S1): completion of one launched session.
 // Wait (bounded by the effective timeMs or a serve shutdown: stop request →
 // SIGTERM group → grace → SIGKILL group; after every exit the remaining
 // process group is swept the same way), parse the last "result" line of the stream-json
 // log, journal the outcome on the execution, move the mission running →
 // waiting_for_result (never auto-succeeded) and hand the usage to Report.
+// FR-RHZ-124-S2: a session that ended on its own with permission denials
+// raises exactly one internal gate (AskGate) and waits for the human
+// (running → waiting_for_human) instead.
 
 import (
 	"bytes"
@@ -54,6 +57,11 @@ type Outcome struct {
 	PermissionDenials     []Denial
 	PermissionDenialCount int
 	LogDigest             string
+	// ResumeOf is the original execution of a gate resume (FR-RHZ-124-S2);
+	// "" = a mission.start execution.
+	ResumeOf string
+	// GateID is the gate this session raised on its denials ("" = none).
+	GateID string
 }
 
 // MaxDenials bounds the denials carried into the usage note.
@@ -79,6 +87,9 @@ type resultLine struct {
 type rawDenial struct {
 	ToolName  string `json:"tool_name"`
 	ToolUseID string `json:"tool_use_id"`
+	// ToolInput feeds the gate body only (FR-RHZ-124-S2); it never reaches
+	// Outcome or the usage note.
+	ToolInput json.RawMessage `json:"tool_input"`
 }
 
 // parseLog returns the last well-formed "result" line of a stream-json log
@@ -143,9 +154,21 @@ func (l *Launcher) reapGroup(ch *child) {
 func (l *Launcher) complete(ch *child) {
 	defer l.wg.Done()
 	defer func() {
+		// FR-RHZ-124-S2: the slot is free; resumes still owed may run now.
+		l.startMu.Lock()
+		closed := l.closed
+		l.startMu.Unlock()
+		if !closed && l.OnSlotFree != nil {
+			l.OnSlotFree()
+		}
+	}()
+	defer func() {
 		l.mu.Lock()
 		delete(l.running, ch.execID)
 		l.mu.Unlock()
+		if ch.done != nil {
+			close(ch.done)
+		}
 	}()
 	es := execution.Service{Store: l.Store}
 	done := make(chan error, 1)
@@ -185,7 +208,7 @@ func (l *Launcher) finish(ch *child, stopped string) {
 	b, err := os.ReadFile(ch.stdoutPath)
 	l.fault("log", ch.execID, err)
 	res, digest := parseLog(b)
-	o := Outcome{MissionID: ch.missionID, ExecutionID: ch.execID, SessionID: ch.sessionID, Model: l.Cfg.Model, TimedOut: stopped == "timeout", Stopped: stopped, LogDigest: digest, State: execution.Failed}
+	o := Outcome{MissionID: ch.missionID, ExecutionID: ch.execID, SessionID: ch.sessionID, Model: l.Cfg.Model, TimedOut: stopped == "timeout", Stopped: stopped, LogDigest: digest, State: execution.Failed, ResumeOf: ch.resumeOf}
 	summary := "no result line in session log"
 	if res != nil {
 		o.UsageAvailable = true
@@ -207,7 +230,7 @@ func (l *Launcher) finish(ch *child, stopped string) {
 		if res.Result != nil {
 			summary = summarize(*res.Result, 200)
 		} else {
-			summary = "result line without result text"
+			summary = terminalLabel(res)
 		}
 		if res.Result != nil && !res.IsError {
 			o.State = execution.Succeeded
@@ -224,23 +247,63 @@ func (l *Launcher) finish(ch *child, stopped string) {
 		o.State = execution.Cancelled
 		summary = summarize("stopped: serve shutdown; "+summary, 200)
 	}
-	_, err = es.ObserveState(ch.execID, "", summary, digest, o.State)
-	l.fault("observe", ch.execID, err)
-	if err == nil {
+	_, obsErr := es.ObserveState(ch.execID, "", summary, digest, o.State)
+	l.fault("observe", ch.execID, obsErr)
+	if obsErr == nil {
 		// Terminal and durable: the spawn marker has done its job.
 		l.fault("marker", ch.execID, os.Remove(l.markerPath(ch.execID)))
 	}
-	l.fault("mission", ch.missionID, l.toWaiting(ch.missionID))
+	// FR-RHZ-124-S2: execution observed → gate asked → mission transition →
+	// usage note. Only a session that ended on its own raises a gate; a
+	// failed ask falls back to waiting_for_result (never a waiting_for_human
+	// mission without a gate).
+	target := domain.MissionWaitingResult
+	// The gate binds to the journaled log digest: no gate unless the
+	// observation is durable.
+	if stopped == "" && obsErr == nil && res != nil && len(res.RawDenials) > 0 && l.AskGate != nil {
+		gid, gerr := l.AskGate(gateRequest(ch.missionID, ch.execID, res))
+		if gerr == nil && gid == "" {
+			gerr = errors.New("gate id missing")
+		}
+		if gerr != nil {
+			l.fault("gate", ch.execID, fmt.Errorf("denial gate not raised, mission waits for a result instead: %w", gerr))
+		} else {
+			o.GateID = gid
+			target = domain.MissionWaitingHuman
+		}
+	}
+	l.fault("mission", ch.missionID, l.toWaiting(ch.missionID, target))
 	if l.Report != nil {
 		l.Report(o)
 	}
 }
 
-// toWaiting moves the mission running → waiting_for_result. The relay moves
+// terminalLabel is the execution summary of a result line without result
+// text (FR-RHZ-124-S2 3b): the harness's terminal_reason and subtype when
+// present (budget stop: "terminal: budget_exhausted (error_max_budget_usd)").
+func terminalLabel(res *resultLine) string {
+	tr := ""
+	if res.TerminalReason != nil {
+		tr = strings.TrimSpace(*res.TerminalReason)
+	}
+	st := strings.TrimSpace(res.Subtype)
+	switch {
+	case tr != "" && st != "":
+		return summarize("terminal: "+tr+" ("+st+")", 200)
+	case tr != "":
+		return summarize("terminal: "+tr, 200)
+	case st != "":
+		return summarize("terminal: "+st, 200)
+	}
+	return "result line without result text"
+}
+
+// toWaiting moves the mission running → to (waiting_for_result, or
+// waiting_for_human after a denial gate). The relay moves
 // it to running right after Start returns, so a very short session may finish
 // first: a mission still on the way (planned/ready/paused) is polled for a
 // bounded time. Any other state means an operator moved it — skip silently.
-func (l *Launcher) toWaiting(id string) error {
+func (l *Launcher) toWaiting(id string, to domain.MissionState) error {
 	ms := mission.Service{Store: l.Store}
 	wait := l.RunningWait
 	if wait <= 0 {
@@ -254,7 +317,7 @@ func (l *Launcher) toWaiting(id string) error {
 		}
 		switch m.State {
 		case domain.MissionRunning:
-			_, err = ms.Transition(id, m.Revision, domain.MissionWaitingResult)
+			_, err = ms.Transition(id, m.Revision, to)
 			if err == nil || !errors.Is(err, events.ErrRevisionConflict) || attempt > 8 {
 				return err
 			}
@@ -284,16 +347,26 @@ type noteBody struct {
 	PermissionDenialCount *int                       `json:"permissionDenialsCount"`
 	ResumeOf              *string                    `json:"resumeOf"`
 	LogDigest             string                     `json:"logDigest"`
+	// Last resort (FR-RHZ-124-S2 3d): modelUsage too large for the note is
+	// replaced by null plus this explicit marker and its digest.
+	ModelUsageOmitted bool   `json:"modelUsageOmitted,omitempty"`
+	ModelUsageDigest  string `json:"modelUsageDigest,omitempty"`
 }
 
 // NoteContent is the usage note body: one human line plus a fenced JSON
 // block. Unavailable usage is null, never estimated. It stays within the
 // relay's 16KiB note limit: denials are already capped at MaxDenials, and
 // if the note is still too large it is re-rendered compact without the
-// denial list (the count stays; modelUsage is never dropped).
+// denial list (the count stays). Last resort (FR-RHZ-124-S2): modelUsage is
+// replaced by null with modelUsageOmitted:true and modelUsageDigest — never
+// silently; the totals stay.
 func (o Outcome) NoteContent() string {
 	body := noteBody{ExecutionID: o.ExecutionID, SessionID: o.SessionID, Model: o.Model, ModelUsage: o.ModelUsage, TotalCostUSD: o.TotalCostUSD, NumTurns: o.NumTurns,
 		DurationMs: o.DurationMs, TerminalReason: o.TerminalReason, IsError: o.IsError, PermissionDenials: o.PermissionDenials, LogDigest: o.LogDigest}
+	if o.ResumeOf != "" {
+		r := o.ResumeOf
+		body.ResumeOf = &r
+	}
 	if o.UsageAvailable {
 		n := o.PermissionDenialCount
 		if n < len(o.PermissionDenials) {
@@ -313,6 +386,12 @@ func (o Outcome) NoteContent() string {
 		line = fmt.Sprintf("claude-local session usage for %s (model %s): total cost %s USD as reported by the harness, %s turns, is_error=%t, execution %s.", o.MissionID, o.Model, cost, turns, o.IsError != nil && *o.IsError, o.State)
 	} else {
 		line = fmt.Sprintf("claude-local session usage unavailable for %s (model %s): no result line in the session log, execution %s.", o.MissionID, o.Model, o.State)
+	}
+	if o.ResumeOf != "" {
+		line += " Gate resume of " + o.ResumeOf + "."
+	}
+	if o.GateID != "" {
+		line += " Permission denials raised gate " + o.GateID + "."
 	}
 	switch o.Stopped {
 	case "timeout":
@@ -339,6 +418,14 @@ func (o Outcome) NoteContent() string {
 	note := render(body, true)
 	if len(note) > MaxNoteBytes {
 		body.PermissionDenials = nil
+		note = render(body, false)
+	}
+	if len(note) > MaxNoteBytes && body.ModelUsage != nil {
+		b, _ := json.Marshal(body.ModelUsage)
+		sum := sha256.Sum256(b)
+		body.ModelUsage = nil
+		body.ModelUsageOmitted = true
+		body.ModelUsageDigest = "sha256:" + hex.EncodeToString(sum[:])
 		note = render(body, false)
 	}
 	return note

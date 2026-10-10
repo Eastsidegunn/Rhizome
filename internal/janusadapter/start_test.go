@@ -385,7 +385,7 @@ func TestRunRequestSessionModeFRRHZ123(t *testing.T) {
 	}
 }
 
-// RHZ-124 S1 (FR-RHZ-TBD(124-S1)) L2: session-launcher fields reach the
+// RHZ-124 S1 (FR-RHZ-124-S1) L2: session-launcher fields reach the
 // JANUS backend only to be refused — zero writes, no Runner contact.
 func TestStarterRejectsLauncherFieldsFRRHZ124S1(t *testing.T) {
 	s := startStore(t)

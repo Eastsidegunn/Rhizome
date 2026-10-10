@@ -1,6 +1,6 @@
 package sessionlauncher
 
-// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): session launcher — ledger strict decode,
+// RHZ-124 S1 (FR-RHZ-124-S1): session launcher — ledger strict decode,
 // event order, ceiling ∩ request, workdir allowlist, argv, env allowlist,
 // usage outcome, timeout group kill, maxConcurrent, idempotency, spawn
 // failure. A shell-script fake claude only: no real binary, no tokens.
@@ -43,12 +43,34 @@ func newFake(t *testing.T, body string) *fakeEnv {
 		}
 	}
 	f.setBody(t, body)
+	// FR-RHZ-124-S2 (3e): no fake claude (or its process group) outlives the
+	// test, even when the test fails before releasing it.
+	t.Cleanup(func() { f.reap() })
 	return f
+}
+
+// reap releases a blocked fake and SIGKILLs every process group the fake
+// started (each run records its pid = pgid: the launcher spawns with Setpgid)
+// plus a recorded grandchild.
+func (f *fakeEnv) reap() {
+	_ = os.WriteFile(filepath.Join(f.dir, "release"), nil, 0o600)
+	b, _ := os.ReadFile(filepath.Join(f.dir, "pids"))
+	for _, line := range strings.Fields(string(b)) {
+		if pid, err := strconv.Atoi(line); err == nil && pid > 1 {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(f.dir, "grandchild")); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 1 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
 }
 
 func (f *fakeEnv) setBody(t *testing.T, body string) {
 	t.Helper()
-	script := "#!/bin/sh\nD='" + f.dir + "'\n" +
+	script := "#!/bin/sh\nD='" + f.dir + "'\necho $$ >> \"$D/pids\"\n" +
 		"for a in \"$@\"; do printf '%s\\0' \"$a\"; done > \"$D/args\"\n" +
 		"env > \"$D/env\"\npwd -P > \"$D/cwd\"\necho run >> \"$D/count\"\n" + body + "\n"
 	if err := os.WriteFile(f.bin, []byte(script), 0o700); err != nil {
@@ -288,7 +310,7 @@ func TestLedgerStrictDecodeFRRHZ124S1(t *testing.T) {
 	}
 }
 
-// L1 + L5: intent → dispatch_claimed → accepted; the accepted external id
+// FR-RHZ-124-S1-L1 + FR-RHZ-124-S1-L5: intent → dispatch_claimed → accepted; the accepted external id
 // is the --session-id uuid; argv is exact.
 func TestStartEventOrderAndArgvFRRHZ124S1(t *testing.T) {
 	f := newFake(t, blockBody)
@@ -365,7 +387,7 @@ func TestStartEventOrderAndArgvFRRHZ124S1(t *testing.T) {
 	}
 }
 
-// L2 + L3: ceiling ∩ request on usd/timeMs; JANUS axes, other session
+// FR-RHZ-124-S1-L2 + FR-RHZ-124-S1-L3: ceiling ∩ request on usd/timeMs; JANUS axes, other session
 // modes and unknown workdirs are refused — all with zero writes and no spawn.
 func TestBudgetAndWorkdirRejectionsFRRHZ124S1(t *testing.T) {
 	f := newFake(t, blockBody)
@@ -427,7 +449,7 @@ func TestBudgetAndWorkdirRejectionsFRRHZ124S1(t *testing.T) {
 	}
 }
 
-// L6: the child environment is the allowlist only, secrets are never passed
+// FR-RHZ-124-S1-L6: the child environment is the allowlist only, secrets are never passed
 // even when allowlisted, TERM=dumb is set.
 func TestEnvAllowlistFRRHZ124S1(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "TEST-NON-CREDENTIAL")
@@ -471,7 +493,7 @@ func TestEnvAllowlistFRRHZ124S1(t *testing.T) {
 	}
 }
 
-// L4: per-model usage preserved byte-exact (two models), denials recorded
+// FR-RHZ-124-S1-L4: per-model usage preserved byte-exact (two models), denials recorded
 // without tool input; is_error → Failed.
 func TestUsageOutcomeFRRHZ124S1(t *testing.T) {
 	f := newFake(t, emit(`{"type":"assistant","message":{"content":[]}}`, twoModelResult))
@@ -534,7 +556,7 @@ func TestUsageOutcomeFRRHZ124S1(t *testing.T) {
 	}
 }
 
-// L8: no result line → execution Failed, usage unavailable with nulls.
+// FR-RHZ-124-S1-L8: no result line → execution Failed, usage unavailable with nulls.
 func TestNoResultLineFRRHZ124S1(t *testing.T) {
 	f := newFake(t, emit(`{"type":"system","subtype":"init"}`, `not json`)+"\nexit 1")
 	s := launchStore(t)
@@ -564,7 +586,7 @@ func alive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// L9: timeout → durable stop request, then the whole process group dies
+// FR-RHZ-124-S1-L9: timeout → durable stop request, then the whole process group dies
 // (a grandchild that never exits on its own is gone too).
 func TestTimeoutKillsProcessGroupFRRHZ124S1(t *testing.T) {
 	f := newFake(t, `sleep 1000 &
@@ -623,7 +645,7 @@ wait`)
 	}
 }
 
-// L11: maxConcurrent — a new start beyond the limit is refused with zero
+// FR-RHZ-124-S1-L11: maxConcurrent — a new start beyond the limit is refused with zero
 // writes; once the slot frees it starts.
 func TestMaxConcurrentFRRHZ124S1(t *testing.T) {
 	f := newFake(t, blockBody)
@@ -652,7 +674,7 @@ func TestMaxConcurrentFRRHZ124S1(t *testing.T) {
 	l.Wait()
 }
 
-// L12: an identical re-submission finds the same execution: no second
+// FR-RHZ-124-S1-L12: an identical re-submission finds the same execution: no second
 // spawn, no write; after the end it is refused like the JANUS backend.
 func TestIdempotentResubmitFRRHZ124S1(t *testing.T) {
 	f := newFake(t, blockBody)
@@ -703,7 +725,7 @@ func TestIdempotentResubmitFRRHZ124S1(t *testing.T) {
 	l2.Wait()
 }
 
-// L1 (failure half): a spawn failure leaves the execution claimed, never
+// FR-RHZ-124-S1-L1 (failure half): a spawn failure leaves the execution claimed, never
 // accepted; the marker is dropped so the same request converges later.
 func TestSpawnFailureFRRHZ124S1(t *testing.T) {
 	f := newFake(t, blockBody)

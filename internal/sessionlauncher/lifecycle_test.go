@@ -1,6 +1,6 @@
 package sessionlauncher
 
-// RHZ-124 S1 review follow-up (FR-RHZ-TBD(124-S1)): running-wait poll,
+// RHZ-124 S1 review follow-up (FR-RHZ-124-S1): running-wait poll,
 // accept failure, process-group sweeps (timeout and normal exit), Prepare
 // serialized with an in-flight Start, serve shutdown, bounded usage note.
 // Fake claude only.

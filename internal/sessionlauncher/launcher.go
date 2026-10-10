@@ -1,6 +1,6 @@
 package sessionlauncher
 
-// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): mission.start → one local claude -p
+// RHZ-124 S1 (FR-RHZ-124-S1): mission.start → one local claude -p
 // session. Sequence (mirrors janusadapter.Starter): validate against the
 // ledger and look the content-derived key up with zero writes (Prepare);
 // then execution.intent → dispatch_claimed (durable) → spawn → accepted
@@ -70,6 +70,24 @@ type Launcher struct {
 	// Report receives every finished session's outcome (the composition
 	// root records it as a usage note). nil = not reported.
 	Report func(Outcome)
+	// AskGate raises the one internal gate of a session that ended on
+	// permission denials (FR-RHZ-124-S2) and returns its id. The launcher is
+	// exec-layer: the composition root relays question.ask. nil = no gate
+	// (the mission waits for a result as in S1).
+	AskGate func(GateRequest) (string, error)
+	// Note records a mission note (resume refused, STOP rejection) through
+	// the relay (FR-RHZ-124-S2). nil = not recorded.
+	Note func(missionID, content string) error
+	// GateID is the id the gate kernel assigns to a gate request (content-
+	// derived; injected by the composition root, FR-RHZ-124-S2). A decision
+	// resumes a session only if its gate id equals the id recomputed from
+	// the digest-verified original log: a look-alike gate (same correlation,
+	// other content) never resumes. nil = every resume is refused.
+	GateID func(GateRequest) (string, error)
+	// OnSlotFree runs after a session's completion has freed its slot (the
+	// composition root re-scans the journal for resumes still owed,
+	// FR-RHZ-124-S2). nil = nothing.
+	OnSlotFree func()
 	// OnError receives asynchronous faults of the completion path.
 	OnError func(scope, id string, err error)
 	// Environ is the parent environment the child env is filtered from.
@@ -95,11 +113,13 @@ type Launcher struct {
 
 type child struct {
 	execID, missionID, sessionID string
+	resumeOf                     string // original execution of a gate resume
 	cmd                          *exec.Cmd
 	pgid                         int
 	stdoutPath                   string
 	timeout                      time.Duration
 	stop                         chan struct{} // closed by Shutdown
+	done                         chan struct{} // closed once the completion has left running
 	stopOnce                     sync.Once
 }
 
@@ -113,17 +133,27 @@ type spec struct {
 	workdir             string
 	cents, timeMs       int64
 	mode, mission, text string
+	// claimCorr is the dispatch claim correlation.
+	claimCorr string
+	// FR-RHZ-124-S2 gate resume: resumeSession is the original session uuid
+	// (--resume instead of a fresh --session-id), tools the --allowedTools of
+	// this execution only (nil = ledger tools), resumeOf the original
+	// execution id.
+	resumeSession, resumeOf string
+	tools                   []string
 }
 
 // capabilities maps allowedTools into policy capabilities. The execution
 // kernel requires a non-empty capability set, so an empty tool list is the
 // explicit "tool:none".
-func (c Config) capabilities() []string {
-	if len(c.AllowedTools) == 0 {
+func (c Config) capabilities() []string { return toolCapabilities(c.AllowedTools) }
+
+func toolCapabilities(tools []string) []string {
+	if len(tools) == 0 {
 		return []string{"tool:none"}
 	}
-	out := make([]string, 0, len(c.AllowedTools))
-	for _, t := range c.AllowedTools {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
 		out = append(out, "tool:"+t)
 	}
 	return out
@@ -212,7 +242,7 @@ func (l *Launcher) spec(req StartRequest) (spec, string) {
 	key := hashOf("mission.start", Target, req.MissionID, req.Instruction, wd, fmt.Sprint(eff.Budget), fmt.Sprint(eff.Timeout), mode)
 	digest := c.Digest()
 	prov := execution.Provenance{Ceiling: ceiling, Requested: requested, Effective: eff, ProfileID: Target, ProfileHash: strings.TrimPrefix(digest, "sha256:"), ExecConfigDigest: digest, Actor: req.Actor}
-	return spec{key: key, execID: "exec-" + key, requested: requested, ceiling: ceiling, prov: prov, workdir: dir, cents: eff.Budget, timeMs: eff.Timeout, mode: mode, mission: req.MissionID, text: req.Instruction}, ""
+	return spec{key: key, execID: "exec-" + key, requested: requested, ceiling: ceiling, prov: prov, workdir: dir, cents: eff.Budget, timeMs: eff.Timeout, mode: mode, mission: req.MissionID, text: req.Instruction, claimCorr: "mission.start:" + req.MissionID}, ""
 }
 
 func (l *Launcher) existing(execID, key string) (execution.Ref, bool, error) {
@@ -240,6 +270,10 @@ func (l *Launcher) markerPath(execID string) string {
 // existingReason classifies an execution found under the request's key: ""
 // = proceed (accepted/observing → lookup; intent → converge; claimed with no
 // spawn marker → the earlier spawn definitely failed, retry it).
+// FR-RHZ-124-S2 (3c): the marker lives in the logDir of the ledger that
+// claimed the execution. When the ledger changed since (its digest is the
+// claim's ExecConfigDigest), a missing marker proves nothing — the old
+// logDir may hold it — so a retry could double-spawn: ask a human instead.
 func (l *Launcher) existingReason(r execution.Ref) string {
 	switch r.State {
 	case execution.Intent, execution.Accepted, execution.Observing:
@@ -247,6 +281,9 @@ func (l *Launcher) existingReason(r execution.Ref) string {
 	case execution.DispatchClaimed:
 		if _, err := os.Lstat(l.markerPath(r.ID)); err == nil {
 			return "session spawn outcome unknown: human resolution required (" + r.ID + ")"
+		}
+		if r.Provenance == nil || r.Provenance.ExecConfigDigest != l.Cfg.Digest() {
+			return "session launcher ledger changed since the claim (spawn marker may be in another logDir): human resolution required (" + r.ID + ")"
 		}
 		return ""
 	case execution.Unknown:
@@ -317,7 +354,6 @@ func (l *Launcher) Start(req StartRequest) (string, string, error) {
 	if l.closed {
 		return "", "session launcher shutting down", nil
 	}
-	es := execution.Service{Store: l.Store}
 	r, ok, err := l.existing(sp.execID, sp.key)
 	if err != nil {
 		return "", "", err
@@ -333,24 +369,40 @@ func (l *Launcher) Start(req StartRequest) (string, string, error) {
 	if reason := l.busyReason(); reason != "" {
 		return sp.execID, reason, nil
 	}
-	if !ok {
+	sid, _ := newUUID() // "" on failure: launchLocked refuses after the claim
+	id, ch, reason, err := l.launchLocked(sp, r, ok, sid)
+	if err != nil || reason != "" {
+		return id, reason, err
+	}
+	l.track(ch)
+	return id, "", nil
+}
+
+// launchLocked appends execution.intent (unless it exists) and
+// dispatch_claimed, spawns the session as sid (a fresh uuid, or the
+// original one for a resume; "" = uuid generation failed) and appends
+// accepted. The caller holds startMu and has done the existing/busy checks.
+// A non-empty reason is a run-level refusal (the execution stays claimed).
+func (l *Launcher) launchLocked(sp spec, r execution.Ref, exists bool, sid string) (string, *child, string, error) {
+	es := execution.Service{Store: l.Store}
+	var err error
+	if !exists {
 		if r, err = es.IntentWithProvenance(sp.mission, sp.key, sp.requested, sp.ceiling, sp.prov); err != nil {
-			return "", "", err
+			return "", nil, "", err
 		}
 	}
 	id := r.ID
 	if r.State == execution.Intent {
-		if _, err = es.ClaimDispatch(id, Target, "mission.start:"+sp.mission); err != nil {
-			return id, "", err
+		if _, err = es.ClaimDispatch(id, Target, sp.claimCorr); err != nil {
+			return id, nil, "", err
 		}
 	}
-	sid, err := newUUID()
-	if err != nil {
-		return id, "session spawn failed: " + err.Error(), nil
+	if sid == "" {
+		return id, nil, "session spawn failed: no session id", nil
 	}
 	ch, err := l.spawn(sp, sid)
 	if err != nil {
-		return id, "session spawn failed: " + err.Error(), nil
+		return id, nil, "session spawn failed: " + err.Error(), nil
 	}
 	if l.beforeAccept != nil {
 		l.beforeAccept()
@@ -360,17 +412,21 @@ func (l *Launcher) Start(req StartRequest) (string, string, error) {
 		// marker stays, so a re-submission asks for human resolution.
 		ch.signal(syscall.SIGKILL)
 		_ = ch.cmd.Wait()
-		return id, "", err
+		return id, nil, "", err
 	}
+	return id, ch, "", nil
+}
+
+// track registers an accepted child and starts its completion.
+func (l *Launcher) track(ch *child) {
 	l.mu.Lock()
 	if l.running == nil {
 		l.running = map[string]*child{}
 	}
-	l.running[id] = ch
+	l.running[ch.execID] = ch
 	l.mu.Unlock()
 	l.wg.Add(1)
 	go l.complete(ch)
-	return id, "", nil
 }
 
 // Wait blocks until every completion goroutine started so far has finished
@@ -436,10 +492,20 @@ func BoardURLFromAddr(addr string) string {
 
 // Args is the exact claude argv (without argv[0]) for one session.
 func (c Config) Args(prompt, sessionID string, cents int64) []string {
-	a := []string{"-p", prompt, "--output-format", "stream-json", "--verbose", "--session-id", sessionID, "--model", c.Model, "--permission-mode", c.PermissionMode}
-	if len(c.AllowedTools) > 0 {
+	return c.argv(prompt, "--session-id", sessionID, c.AllowedTools, cents)
+}
+
+// ResumeArgs is the claude argv of a gate resume (FR-RHZ-124-S2): the same
+// session continued with --resume and this execution's tool list.
+func (c Config) ResumeArgs(prompt, sessionID string, tools []string, cents int64) []string {
+	return c.argv(prompt, "--resume", sessionID, tools, cents)
+}
+
+func (c Config) argv(prompt, sessionFlag, sessionID string, tools []string, cents int64) []string {
+	a := []string{"-p", prompt, "--output-format", "stream-json", "--verbose", sessionFlag, sessionID, "--model", c.Model, "--permission-mode", c.PermissionMode}
+	if len(tools) > 0 {
 		a = append(a, "--allowedTools")
-		a = append(a, c.AllowedTools...)
+		a = append(a, tools...)
 	}
 	return append(a, "--max-budget-usd", formatUSD(cents))
 }
@@ -517,7 +583,11 @@ func (l *Launcher) spawn(sp spec, sid string) (*child, error) {
 	if l.Environ != nil {
 		environ = l.Environ
 	}
-	cmd := exec.Command(c.ClaudePath, c.Args(Prompt(l.BoardURL, sp.mission, sp.text), sid, sp.cents)...)
+	args := c.Args(Prompt(l.BoardURL, sp.mission, sp.text), sid, sp.cents)
+	if sp.resumeSession != "" {
+		args = c.ResumeArgs(Prompt(l.BoardURL, sp.mission, sp.text), sid, sp.tools, sp.cents)
+	}
+	cmd := exec.Command(c.ClaudePath, args...)
 	cmd.Dir = sp.workdir
 	cmd.Env = BuildEnv(environ(), EnvAllowlist)
 	cmd.Stdin = nil // os/exec connects /dev/null
@@ -529,7 +599,7 @@ func (l *Launcher) spawn(sp spec, sid string) (*child, error) {
 	if err := mf.Truncate(0); err == nil {
 		_, _ = mf.WriteAt([]byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0)
 	}
-	return &child{execID: sp.execID, missionID: sp.mission, sessionID: sid, cmd: cmd, pgid: cmd.Process.Pid, stdoutPath: outPath, timeout: time.Duration(sp.timeMs) * time.Millisecond, stop: make(chan struct{})}, nil
+	return &child{execID: sp.execID, missionID: sp.mission, sessionID: sid, resumeOf: sp.resumeOf, cmd: cmd, pgid: cmd.Process.Pid, stdoutPath: outPath, timeout: time.Duration(sp.timeMs) * time.Millisecond, stop: make(chan struct{}), done: make(chan struct{})}, nil
 }
 
 // signal delivers sig to the child's whole process group.

@@ -18,11 +18,13 @@ import (
 
 	"rhizome/internal/approval"
 	"rhizome/internal/blob"
+	"rhizome/internal/domain"
 	"rhizome/internal/events"
 	"rhizome/internal/execution"
 	"rhizome/internal/janusadapter"
 	"rhizome/internal/journal"
 	"rhizome/internal/memory"
+	"rhizome/internal/projector"
 	"rhizome/internal/question"
 	"rhizome/internal/sessionlauncher"
 	"rhizome/internal/source"
@@ -295,7 +297,7 @@ func (x execStarter) Start(r workspace.ExecStartRequest) (string, string, error)
 }
 
 // launcherStarter adapts sessionlauncher.Launcher to the workspace seam
-// (RHZ-124 S1, FR-RHZ-TBD(124-S1)).
+// (RHZ-124 S1, FR-RHZ-124-S1).
 type launcherStarter struct{ l *sessionlauncher.Launcher }
 
 func toLaunchRequest(r workspace.ExecStartRequest) sessionlauncher.StartRequest {
@@ -339,6 +341,84 @@ func launcherUsageNote(store events.Port, o sessionlauncher.Outcome) error {
 		return fmt.Errorf("usage note rejected: %s", res.Reason)
 	}
 	return nil
+}
+
+// launcherAskGate raises a denied session's one internal gate through the
+// relay (FR-RHZ-124-S2) and returns its id (content-derived, as the kernel
+// assigns it).
+func launcherAskGate(store events.Port, g sessionlauncher.GateRequest) (string, error) {
+	res, err := workspace.RelayIntentHooks(store, workspace.Intent{Kind: "question.ask", Name: g.Name, Body: g.Body, MissionID: g.MissionID, CorrelationID: g.CorrelationID}, sessionlauncher.Actor, trust.Authority{}, workspace.RelayHooks{})
+	if err != nil {
+		return "", err
+	}
+	if !res.Accepted {
+		return "", fmt.Errorf("gate rejected: %s", res.Reason)
+	}
+	id, err := question.IDFor(g.Name, g.Body, "")
+	if err != nil {
+		return "", err
+	}
+	q, err := (question.Service{Store: store}).Get(id)
+	if err != nil {
+		return "", err
+	}
+	if q.CorrelationID != g.CorrelationID || q.MissionID != g.MissionID {
+		return "", fmt.Errorf("gate %s belongs to another execution", id)
+	}
+	// Ask is content-idempotent: an identical question asked earlier by
+	// someone else, or already decided, is never this session's gate.
+	who, err := question.NormalizeActor(sessionlauncher.Actor)
+	if err != nil {
+		return "", err
+	}
+	if q.RequestedBy != who || q.Decision != "" {
+		return "", fmt.Errorf("gate %s was not freshly raised by the session launcher", id)
+	}
+	return id, nil
+}
+
+// launcherMissionNote records a launcher message (resume refused, STOP
+// rejection) as one observation note on the mission (FR-RHZ-124-S2).
+func launcherMissionNote(store events.Port, missionID, content string) error {
+	res, err := workspace.RelayIntentHooks(store, workspace.Intent{Kind: "note.create", MemoryKind: string(memory.Observation), MissionID: missionID, Tags: []string{"session-launcher", "gate-resume"}, Content: content}, sessionlauncher.Actor, trust.Authority{}, workspace.RelayHooks{})
+	if err != nil {
+		return err
+	}
+	if !res.Accepted {
+		return fmt.Errorf("launcher note rejected: %s", res.Reason)
+	}
+	return nil
+}
+
+// launcherRescan retries the gate resumes the journal says are still owed
+// (FR-RHZ-124-S2): an answered launcher gate (approve, or reject whose
+// reason does not start with STOP — the launcher re-checks both and the
+// gate binding) on a mission still waiting_for_human, whose resume
+// execution is missing or never got past its claim. Derived from the
+// journal alone, so it is idempotent and runs at serve start and whenever
+// a session slot frees; the launcher's own idempotency key makes a double
+// delivery a no-op. Refusals go to OnError only.
+func launcherRescan(store events.Port, sl *sessionlauncher.Launcher) {
+	seen := map[string]bool{}
+	for _, e := range store.All() {
+		if e.AggregateType != "question" || seen[e.AggregateID] {
+			continue
+		}
+		seen[e.AggregateID] = true
+		q, err := question.Replay(store.List("question", e.AggregateID))
+		if err != nil || !strings.HasPrefix(q.CorrelationID, sessionlauncher.GatePrefix) || !q.Decision.Terminal() {
+			continue
+		}
+		if m, err := projector.ReplayMission(store.List("mission", q.MissionID)); err != nil || m.State != domain.MissionWaitingHuman {
+			continue
+		}
+		if log := store.List("execution", sessionlauncher.ResumeExecutionID(q.ID, string(q.Decision))); len(log) > 0 {
+			if r, err := execution.Replay(log); err != nil || (r.State != execution.Intent && r.State != execution.DispatchClaimed) {
+				continue
+			}
+		}
+		sl.Retry(sessionlauncher.GateDecision{GateID: q.ID, CorrelationID: q.CorrelationID, MissionID: q.MissionID, Decision: string(q.Decision), Reason: q.Reason, Actor: q.ActorRef})
+	}
 }
 
 // defaultJanusIdleTimeout is the -janus-idle-timeout default.
@@ -465,7 +545,16 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 			h.Broadcast(p)
 		}
 	}
+	// FR-RHZ-124-S2: denial gate out, decision back in.
+	sl.AskGate = func(g sessionlauncher.GateRequest) (string, error) { return launcherAskGate(store, g) }
+	sl.Note = func(missionID, content string) error { return launcherMissionNote(store, missionID, content) }
+	sl.GateID = func(g sessionlauncher.GateRequest) (string, error) { return question.IDFor(g.Name, g.Body, "") }
+	h.ExecGateDecided = func(d workspace.GateDecision) {
+		sl.GateDecided(sessionlauncher.GateDecision{GateID: d.GateID, CorrelationID: d.CorrelationID, MissionID: d.MissionID, Decision: d.Decision, Reason: d.Reason, Actor: d.Actor})
+	}
+	sl.OnSlotFree = func() { launcherRescan(store, sl) }
 	h.ExecStart = launcherStarter{sl}
+	launcherRescan(store, sl)
 }
 
 // assembleServeWith is assembleServe with an optional session launcher.

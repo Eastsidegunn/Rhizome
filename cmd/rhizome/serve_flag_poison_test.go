@@ -50,7 +50,7 @@ const serveHelpGoldenFRRHZ144 = `Usage of serve:
 ` + "    \t\n"
 
 // FR-RHZ-144: help remains byte-for-byte identical to the pre-change binary.
-// RHZ-124 S1 (FR-RHZ-TBD(124-S1)) adds exactly one entry:
+// RHZ-124 S1 (FR-RHZ-124-S1) adds exactly one entry:
 // -session-launcher-config.
 func TestServeHelpLiteralGoldenFRRHZ144(t *testing.T) {
 	for _, arg := range []string{"-h", "-help"} {

@@ -1,5 +1,5 @@
 // Package sessionlauncher starts one local `claude -p` session per
-// mission.start (RHZ-124 S1, FR-RHZ-TBD(124-S1)). It is the second
+// mission.start (RHZ-124 S1, FR-RHZ-124-S1). It is the second
 // execution backend beside janusadapter: same seam (Prepare/Start), same
 // kernel sequence (intent → dispatch_claimed → accepted, durable before the
 // child is contacted), zero writes on every rejection.

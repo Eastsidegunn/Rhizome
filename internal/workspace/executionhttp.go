@@ -45,14 +45,28 @@ type LimitAxes struct{ Tokens, TimeMs, MaxDepth int64 }
 // SessionLimits are the configured ceiling and the effective (ceiling ∩ request)
 // limits of one execution. Only numbers cross the wire: profile identity,
 // hashes and the ledger digest stay in the journal (minimal projection).
-type SessionLimits struct{ Ceiling, Effective LimitAxes }
+type SessionLimits struct {
+	Ceiling, Effective LimitAxes
+	// BudgetUnits names the unit of the budget axis when it is not tokens
+	// (FR-RHZ-124-S2: the session launcher journals Units "usd_cents", so
+	// the wire "tokens" number is USD cents). "" = tokens / legacy: the wire
+	// shape is then byte-identical to FR-RHZ-124.
+	BudgetUnits string
+}
+
+// tokenUnits are the policy Units whose budget axis is a token count.
+var tokenUnits = map[string]bool{"": true, "tokens-ms-v1": true}
 
 func limitsOf(r execution.Ref) *SessionLimits {
 	if r.Provenance == nil {
 		return nil
 	}
 	c, e := r.Provenance.Ceiling, r.Provenance.Effective
-	return &SessionLimits{Ceiling: LimitAxes{c.Budget, c.Timeout, c.MaxDepth}, Effective: LimitAxes{e.Budget, e.Timeout, e.MaxDepth}}
+	l := &SessionLimits{Ceiling: LimitAxes{c.Budget, c.Timeout, c.MaxDepth}, Effective: LimitAxes{e.Budget, e.Timeout, e.MaxDepth}}
+	if !tokenUnits[e.Units] {
+		l.BudgetUnits = e.Units
+	}
+	return l
 }
 
 // SessionStatus is derived at request time, purely from the projected JANUS
@@ -246,6 +260,9 @@ type limitAxesDTO struct {
 type executionLimitsDTO struct {
 	Ceiling   limitAxesDTO `json:"ceiling"`
 	Effective limitAxesDTO `json:"effective"`
+	// Additive (FR-RHZ-124-S2): the budget axis unit when it is not tokens
+	// ("usd_cents" for the session launcher); absent = tokens.
+	BudgetUnits string `json:"budgetUnits,omitempty"`
 }
 
 // executionEventDTO is the wire shape of one projected JANUS session event
@@ -282,7 +299,7 @@ func toExecutionDTO(p ExecutionProjection) executionBodyDTO {
 			dto.JanusState, dto.UsageInTotal, dto.UsageOutTotal, dto.LastActivityTS = s.Status.JanusState, &in, &out, &ts
 		}
 		if l := s.Limits; l != nil {
-			dto.Limits = &executionLimitsDTO{Ceiling: limitAxesDTO(l.Ceiling), Effective: limitAxesDTO(l.Effective)}
+			dto.Limits = &executionLimitsDTO{Ceiling: limitAxesDTO(l.Ceiling), Effective: limitAxesDTO(l.Effective), BudgetUnits: l.BudgetUnits}
 		}
 		d.Sessions = append(d.Sessions, dto)
 	}

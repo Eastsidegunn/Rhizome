@@ -1,6 +1,6 @@
 package main
 
-// RHZ-124 S1 (FR-RHZ-TBD(124-S1)): -session-launcher-config flag (exclusive
+// RHZ-124 S1 (FR-RHZ-124-S1): -session-launcher-config flag (exclusive
 // with -janus-exec-config, invalid ledger = exit 2) and the serve assembly:
 // mission.start through POST /v1/intent spawns a fake claude, the mission
 // reaches running only after accepted, the finished session lands exactly one
@@ -52,7 +52,7 @@ func slFake(t *testing.T, body string) slFakeEnv {
 			t.Fatal(err)
 		}
 	}
-	script := "#!/bin/sh\nD='" + f.dir + "'\necho run >> \"$D/count\"\n" + body + "\n"
+	script := "#!/bin/sh\nD='" + f.dir + "'\necho $$ >> \"$D/pids\"\necho run >> \"$D/count\"\n" + body + "\n"
 	if err := os.WriteFile(f.bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,28 @@ func slFake(t *testing.T, body string) slFakeEnv {
 	if err := os.WriteFile(f.cfg, ledger, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// FR-RHZ-124-S2 (3e): no fake claude (or its process group) outlives the
+	// test, even when the test fails before releasing it.
+	t.Cleanup(f.reap)
 	return f
+}
+
+// reap releases a blocked fake and SIGKILLs every process group it started
+// (pid = pgid: the launcher spawns with Setpgid) and a recorded grandchild.
+func (f slFakeEnv) reap() {
+	_ = os.WriteFile(filepath.Join(f.dir, "release"), nil, 0o600)
+	b, _ := os.ReadFile(filepath.Join(f.dir, "pids"))
+	for _, line := range strings.Fields(string(b)) {
+		if pid, err := strconv.Atoi(line); err == nil && pid > 1 {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(f.dir, "gc")); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 1 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
 }
 
 const slResult = `{"type":"result","subtype":"success","is_error":false,"result":"finished","total_cost_usd":0.987654321098765432,"num_turns":4,"duration_ms":1200,"terminal_reason":"completed","permission_denials":[],"modelUsage":{"claude-opus-5-5":{"inputTokens":100,"outputTokens":200,"cacheReadInputTokens":300,"cacheCreationInputTokens":400,"costUSD":0.9000000000000000111},"claude-haiku-4-5":{"inputTokens":5,"outputTokens":6,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.087654321098765432}}}`
@@ -104,7 +125,7 @@ func missionState(t *testing.T, s events.Port, id string) string {
 	return string(m.State)
 }
 
-// L10: both backends → exit 2; an invalid ledger or a non-executable
+// FR-RHZ-124-S1-L10: both backends → exit 2; an invalid ledger or a non-executable
 // claudePath → exit 2; absent flag = backend off.
 func TestServeSessionLauncherFlagsFRRHZ124S1(t *testing.T) {
 	f := slFake(t, "")
@@ -130,7 +151,7 @@ func TestServeSessionLauncherFlagsFRRHZ124S1(t *testing.T) {
 	}
 }
 
-// L1 + L4 + L12 through the relay: intent → claimed → accepted strictly
+// FR-RHZ-124-S1-L1 + FR-RHZ-124-S1-L4 + FR-RHZ-124-S1-L12 through the relay: intent → claimed → accepted strictly
 // before the mission's running transition; idempotent re-submission; one
 // usage note with both models' numbers; mission ends waiting_for_result.
 func TestServeSessionLauncherRelayFRRHZ124S1(t *testing.T) {
@@ -165,12 +186,12 @@ func TestServeSessionLauncherRelayFRRHZ124S1(t *testing.T) {
 	if r.Provenance == nil || r.Provenance.Effective.Budget != 200 || r.Provenance.ProfileID != "claude-local" || !strings.HasPrefix(r.Provenance.Actor, "unverified-local-operator:") {
 		t.Fatalf("%+v", r.Provenance)
 	}
-	// L12: same request → same execution, zero writes, no second spawn.
+	// FR-RHZ-124-S1-L12: same request → same execution, zero writes, no second spawn.
 	before = len(s.All())
 	if out := postIntent(t, srv.URL, `{"kind":"mission.start","missionId":"mission-1","budget":{"usd":2}}`); out["Accepted"] != true || out["executionId"] != id || len(s.All()) != before {
 		t.Fatalf("%v writes=%d", out, len(s.All())-before)
 	}
-	// L2: JANUS axes are refused by the launcher with zero writes.
+	// FR-RHZ-124-S1-L2: JANUS axes are refused by the launcher with zero writes.
 	if out := postIntent(t, srv.URL, `{"kind":"mission.start","missionId":"mission-1","instruction":"other","budget":{"tokens":10}}`); out["Accepted"] != false || out["Reason"] != "budget.tokens not supported by session launcher" || len(s.All()) != before {
 		t.Fatalf("%v", out)
 	}
@@ -202,7 +223,7 @@ func TestServeSessionLauncherRelayFRRHZ124S1(t *testing.T) {
 	}
 }
 
-// L1 (failure half) through the relay: a spawn failure is a refusal with the
+// FR-RHZ-124-S1-L1 (failure half) through the relay: a spawn failure is a refusal with the
 // execution id; the mission state is untouched and no execution is accepted.
 func TestServeSessionLauncherSpawnFailureFRRHZ124S1(t *testing.T) {
 	s := rhz092Store(t)
@@ -224,7 +245,7 @@ func TestServeSessionLauncherSpawnFailureFRRHZ124S1(t *testing.T) {
 	if r, _ := execution.Replay(s.List("execution", out["executionId"].(string))); r.State != execution.DispatchClaimed {
 		t.Fatalf("%+v", r)
 	}
-	// Unknown workdir: refused before any write (L3 via the wire).
+	// Unknown workdir: refused before any write (FR-RHZ-124-S1-L3 via the wire).
 	before := len(s.All())
 	if out := postIntent(t, srv.URL, `{"kind":"mission.start","missionId":"mission-1","workdir":"elsewhere"}`); out["Accepted"] != false || !strings.HasPrefix(out["Reason"].(string), "POLICY_DENIED: workdir") || len(s.All()) != before {
 		t.Fatalf("%v", out)
@@ -242,7 +263,7 @@ func getWorkspace(t *testing.T, url string) []byte {
 	return b
 }
 
-// R1: a full launch on an NDJSON journal survives Close → Open with the same
+// FR-RHZ-124-S1-R1: a full launch on an NDJSON journal survives Close → Open with the same
 // event count and byte-identical /v1/workspace.
 func TestServeSessionLauncherJournalRoundTripFRRHZ124S1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "j.ndjson")
