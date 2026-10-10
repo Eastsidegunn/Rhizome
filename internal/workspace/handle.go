@@ -161,12 +161,15 @@ func handleShape(x string) bool {
 // IDs.
 func resolveHandles(s events.Port, in Intent) Intent {
 	// ParentGoalID joins the set for goal.create (RHZ-077, FR-RHZ-105).
-	if !(handleShape(in.MissionID) || handleShape(in.GoalID) || handleShape(in.GateID) || handleShape(in.TaskID) || handleShape(in.ParentGoalID) || handleShape(in.RequestID)) {
+	// Re (RHZ-134, FR-RHZ-175) joins so note.create may name a gate by its
+	// handle; note ids are never handle-shaped and pass through.
+	if !(handleShape(in.MissionID) || handleShape(in.GoalID) || handleShape(in.GateID) || handleShape(in.TaskID) || handleShape(in.ParentGoalID) || handleShape(in.RequestID) || handleShape(in.Re)) {
 		return in
 	}
 	hi := buildHandleIndex(s.All())
 	in.MissionID, in.GoalID, in.GateID, in.TaskID = hi.resolve(in.MissionID), hi.resolve(in.GoalID), hi.resolve(in.GateID), hi.resolve(in.TaskID)
 	in.ParentGoalID = hi.resolve(in.ParentGoalID)
 	in.RequestID = hi.resolve(in.RequestID)
+	in.Re = hi.resolve(in.Re)
 	return in
 }

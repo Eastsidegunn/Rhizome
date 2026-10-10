@@ -17,7 +17,7 @@
 import type { DetailItem, NodeDetail } from '@gunnflow/contract';
 import { parseGateBodySections } from './gateBody.js';
 import { WORKSPACE_NODE_ID } from './nodes.js';
-import { isGateVerification, unverifiedDecidedGates, type GateVerification } from './workspaceWire.js';
+import { gateCardOf, isGateVerification, unverifiedDecidedGates, type GateCard, type GateVerification } from './workspaceWire.js';
 
 /** The slice of Rhizome's /v1/workspace body (workspace/http.go DTOs) the detail reads. */
 export interface WireDetailBody {
@@ -45,6 +45,14 @@ export interface WireDetailBody {
     verification?: GateVerification;
     missionId?: string;
     goalId?: string;
+    /** RHZ-134 (FR-RHZ-175): card and thread keys, read tolerantly by gateCardOf. */
+    risk?: unknown;
+    ifSkipped?: unknown;
+    whyHuman?: unknown;
+    options?: unknown;
+    rollback?: unknown;
+    context?: unknown;
+    thread?: unknown;
   }>;
   deliverables?: Array<{ id: string }>;
   requests?: Array<{
@@ -179,7 +187,9 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
     const labels = signerLabels();
     const verified = validVerification?.status === 'verified' ? validVerification : undefined;
     const attested = validVerification?.status === 'attested' ? validVerification : undefined;
+    const card = gateCardOf(gate);
     return [
+      ...cardItems(card),
       ...(structuredBody
         ? [
             ...parsedBody.sections.map(({ label, text: sectionText }) => ({ label, text: truncateDetailText(sectionText) })),
@@ -194,6 +204,7 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
       ...(verified ? text('submittedBy', gate.decidedBy) : []),
       ...(attested ? [{ label: 'attested by', text: keyDisplay(attested.keyId!, labels) }] : []),
       ...text('digest', gate.requestDigest),
+      ...threadItems(card),
     ];
   }
 
@@ -227,6 +238,50 @@ export function detailItems(body: WireDetailBody, nodeId: string, rootId: string
   // Deliverables: their artifacts are already in the projection — no detail.
   // Anything else: no such node.
   return undefined;
+}
+
+/* ---- RHZ-134 (FR-RHZ-175): the question card and gate thread ---- */
+
+/** Detail labels of the card items, in display order. */
+export const CARD_LABELS = {
+  risk: '위험',
+  ifSkipped: '안 하면',
+  whyHuman: '왜 사람이',
+  option: '선택지',
+  rollback: '되돌림',
+  context: '맥락',
+} as const;
+/** Detail labels of thread entries (plus ` · <at>` when the time is known). */
+export const THREAD_LABELS = { question: '질문', answer: '답' } as const;
+
+/**
+ * The card as detail items, FIRST in a gate's detail (before the RHZ-104 body
+ * sections, which stay as 보조): risk (`level — line`), ifSkipped, whyHuman,
+ * one item per option (label, then meaning / consequence lines), rollback,
+ * context (`project · what · state`). Absent parts yield nothing.
+ */
+export function cardItems(card: GateCard): DetailItem[] {
+  return [
+    ...(card.risk ? [{ label: CARD_LABELS.risk, text: `${card.risk.level} — ${card.risk.line}` }] : []),
+    ...text(CARD_LABELS.ifSkipped, card.ifSkipped),
+    ...text(CARD_LABELS.whyHuman, card.whyHuman),
+    ...(card.options ?? []).map((o) => ({
+      label: CARD_LABELS.option,
+      text: [o.label, ...(o.meaning ? [`의미: ${o.meaning}`] : []), ...(o.consequence ? [`결과: ${o.consequence}`] : [])].join('\n'),
+    })),
+    ...text(CARD_LABELS.rollback, card.rollback),
+    ...(card.context
+      ? text(CARD_LABELS.context, [card.context.project, card.context.what, card.context.state].filter((v) => v).join(' · '))
+      : []),
+  ];
+}
+
+/** The gate thread as detail items, oldest first (Rhizome's order), contents cut like notes. */
+export function threadItems(card: GateCard): DetailItem[] {
+  return (card.thread ?? []).map((e) => ({
+    label: e.at ? `${THREAD_LABELS[e.kind]} · ${e.at}` : THREAD_LABELS[e.kind],
+    text: truncateDetailText(e.content),
+  }));
 }
 
 /* ---- RHZ-132 (FR-RHZ-171): blocked note detail ---- */

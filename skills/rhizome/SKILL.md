@@ -36,12 +36,21 @@ If `rhizome` is not on PATH, build it from the repository root:
    `rhizome agent blocked <mission> "one line why" [--body-file details.md]`,
    then stop or switch to other unblocked work. Never wait silently.
 4. **Needs a decision** (choice between options, scope change):
-   `rhizome agent ask <mission> "short title" --body-file q.md --recommendation "your pick"`.
+   `rhizome agent ask <mission> "short title" --body-file q.md --recommendation "your pick" [--card-file card.json]`.
+   The optional card is a JSON object with only these keys: `risk`
+   `{level: low|medium|high, line}`, `ifSkipped`, `whyHuman`, `options`
+   `[{key, label, meaning, consequence}]`, `rollback`, `context`
+   `{project, what, state}`. The board shows it before the body.
 5. **Finish**: `rhizome agent done <mission> "one line result" [--body-file summary.md]`,
    then `rhizome agent usage <mission> --model <model> --in N --out N [--cache-read N] [--cache-write N]`.
    `done` does not close the mission; a human does that after review.
 
 Other notes: `rhizome agent note <mission> "line" [--kind decision|fact|handoff|...] [--tag T]`.
+A follow-up question or answer about a gate or note:
+`rhizome agent note <mission> "line" --kind question|answer --re <gate or note id>`
+(`--re` is required for `question`; it shows in the gate's thread).
+Do not post an `answer` re: a blocked note or h-request: an answer clears that
+note from the human's attention, so answering is the human's (or ops') move.
 
 ## Rules
 

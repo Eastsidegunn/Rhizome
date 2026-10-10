@@ -231,6 +231,14 @@ interface WireGate extends Liveness {
   superseded: boolean;
   verification?: GateVerification;
   decidedAt?: string;
+  /** RHZ-134 (FR-RHZ-175): question card + thread, internal gates only; read through gateCardOf. */
+  risk?: unknown;
+  ifSkipped?: unknown;
+  whyHuman?: unknown;
+  options?: unknown;
+  rollback?: unknown;
+  context?: unknown;
+  thread?: unknown;
 }
 interface WireDeliverable extends Liveness {
   id: string;
@@ -582,4 +590,86 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       : {}),
     effects: (body.effects as WorkspaceProjection['effects'] | undefined) ?? [],
   };
+}
+
+/* ---- RHZ-134 (FR-RHZ-175): the question card and gate thread ---- */
+
+export interface GateCardRisk {
+  level: string;
+  line: string;
+}
+export interface GateCardOption {
+  key: string;
+  label: string;
+  meaning?: string;
+  consequence?: string;
+}
+export interface GateCardContext {
+  project?: string;
+  what?: string;
+  state?: string;
+}
+export interface GateThreadEntry {
+  id: string;
+  kind: 'question' | 'answer';
+  content: string;
+  at?: string;
+}
+/** The card and thread keys Rhizome may add to an internal gate (all optional, omitempty upstream). */
+export interface GateCard {
+  risk?: GateCardRisk;
+  ifSkipped?: string;
+  whyHuman?: string;
+  options?: GateCardOption[];
+  rollback?: string;
+  context?: GateCardContext;
+  thread?: GateThreadEntry[];
+}
+
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const optionalText = (v: unknown): string | undefined => (nonEmpty(v) ? v : undefined);
+
+/**
+ * Tolerant reader of a raw gate's card and thread (FR-RHZ-175): every key is
+ * optional; a malformed value (wrong type, missing required part) is dropped
+ * on its own and never fails the snapshot. Elements of options / thread are
+ * kept or dropped one by one. A gate without the keys yields `{}`.
+ */
+export function gateCardOf(raw: unknown): GateCard {
+  if (!isObject(raw)) return {};
+  const out: GateCard = {};
+  const risk = raw.risk;
+  if (isObject(risk) && nonEmpty(risk.level) && nonEmpty(risk.line)) out.risk = { level: risk.level, line: risk.line };
+  const ifSkipped = optionalText(raw.ifSkipped);
+  if (ifSkipped !== undefined) out.ifSkipped = ifSkipped;
+  const whyHuman = optionalText(raw.whyHuman);
+  if (whyHuman !== undefined) out.whyHuman = whyHuman;
+  if (Array.isArray(raw.options)) {
+    const options = raw.options.flatMap((o): GateCardOption[] => {
+      if (!isObject(o) || !nonEmpty(o.key) || !nonEmpty(o.label)) return [];
+      const meaning = optionalText(o.meaning);
+      const consequence = optionalText(o.consequence);
+      return [{ key: o.key, label: o.label, ...(meaning !== undefined ? { meaning } : {}), ...(consequence !== undefined ? { consequence } : {}) }];
+    });
+    if (options.length > 0) out.options = options;
+  }
+  const rollback = optionalText(raw.rollback);
+  if (rollback !== undefined) out.rollback = rollback;
+  if (isObject(raw.context)) {
+    const context: GateCardContext = {};
+    for (const k of ['project', 'what', 'state'] as const) {
+      const v = optionalText(raw.context[k]);
+      if (v !== undefined) context[k] = v;
+    }
+    if (Object.keys(context).length > 0) out.context = context;
+  }
+  if (Array.isArray(raw.thread)) {
+    const thread = raw.thread.flatMap((e): GateThreadEntry[] => {
+      if (!isObject(e) || !nonEmpty(e.id) || (e.kind !== 'question' && e.kind !== 'answer') || typeof e.content !== 'string') return [];
+      return [{ id: e.id, kind: e.kind, content: e.content, ...(nonEmpty(e.at) ? { at: e.at } : {}) }];
+    });
+    if (thread.length > 0) out.thread = thread;
+  }
+  return out;
 }

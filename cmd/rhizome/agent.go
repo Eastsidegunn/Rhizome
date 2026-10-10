@@ -56,8 +56,15 @@ verbs:
   blocked  <mission> LINE [--body-file F] [--tag T]...
   done     <mission> LINE [--body-file F] [--tag T]...
   usage    <mission> --model M --in N --out N [--cache-read N] [--cache-write N]
-  note     <mission> LINE [--kind K] [--body-file F] [--tag T]...
+  note     <mission> LINE [--kind K] [--re ID] [--body-file F] [--tag T]...
+           K = observation (default), answer, question, ...; --re names the
+           gate (q-… id or handle) or note the question/answer is about
+           (required for --kind question)
   ask      <mission> TITLE (--body TEXT | --body-file F) [--recommendation TEXT]
+           [--card-file F]
+           F = JSON object with only these keys: risk {level,line},
+           ifSkipped, whyHuman, options [{key,label,meaning,consequence}],
+           rollback, context {project,what,state}
 
 common flags:
   --board URL     board base URL (env RHIZOME_BOARD, default ` + agentDefaultBoard + `)
@@ -563,17 +570,23 @@ func agentProgress(args []string, out, errOut io.Writer, deps agentDeps) int {
 // ---- blocked / done / note -------------------------------------------------
 
 func agentNote(verb string, args []string, out, errOut io.Writer, deps agentDeps) int {
-	var bodyFile, kind string
+	var bodyFile, kind, re string
 	var tags agentStrings
 	c, code := newAgentCLI(verb, args, out, errOut, deps, 1, func(f *flag.FlagSet) {
 		f.StringVar(&bodyFile, "body-file", "", "")
 		f.Var(&tags, "tag", "")
 		if verb == "note" {
 			f.StringVar(&kind, "kind", "observation", "")
+			// RHZ-134 (FR-RHZ-175): the gate or note this note is about.
+			f.StringVar(&re, "re", "", "")
 		}
 	})
 	if c == nil {
 		return code
+	}
+	re = strings.TrimSpace(re)
+	if kind == "question" && re == "" {
+		return agentUsageErr(errOut, "--re required for --kind question")
 	}
 	line := c.pos[0]
 	if strings.ContainsAny(line, "\r\n") {
@@ -590,7 +603,11 @@ func agentNote(verb string, args []string, out, errOut io.Writer, deps agentDeps
 		allTags = append(allTags, verb)
 	}
 	allTags = append(allTags, tags...)
-	if err := c.intent("note.create", map[string]any{"memoryKind": kind, "missionId": c.mission, "content": content, "tags": allTags}); err != nil {
+	noteFields := map[string]any{"memoryKind": kind, "missionId": c.mission, "content": content, "tags": allTags}
+	if re != "" {
+		noteFields["re"] = re
+	}
+	if err := c.intent("note.create", noteFields); err != nil {
 		return c.report(err)
 	}
 	fmt.Fprintln(out, "note: ok")
@@ -660,11 +677,12 @@ func agentUsageReport(args []string, out, errOut io.Writer, deps agentDeps) int 
 // ---- ask -------------------------------------------------------------------
 
 func agentAsk(args []string, out, errOut io.Writer, deps agentDeps) int {
-	var body, bodyFile, rec string
+	var body, bodyFile, rec, cardFile string
 	c, code := newAgentCLI("ask", args, out, errOut, deps, 1, func(f *flag.FlagSet) {
 		f.StringVar(&body, "body", "", "")
 		f.StringVar(&bodyFile, "body-file", "", "")
 		f.StringVar(&rec, "recommendation", "", "")
+		f.StringVar(&cardFile, "card-file", "", "")
 	})
 	if c == nil {
 		return code
@@ -690,9 +708,47 @@ func agentAsk(args []string, out, errOut io.Writer, deps agentDeps) int {
 	if rec != "" {
 		fields["recommendation"] = rec
 	}
+	if c.set["card-file"] {
+		card, code := c.readCard(cardFile)
+		if code != 0 {
+			return code
+		}
+		for k, v := range card {
+			fields[k] = v
+		}
+	}
 	if err := c.intent("question.ask", fields); err != nil {
 		return c.report(err)
 	}
 	fmt.Fprintln(out, "ok")
 	return 0
+}
+
+// agentCardKeys are the only keys a --card-file may hold (RHZ-134,
+// FR-RHZ-175): the question.ask card wire. Values are passed through
+// verbatim; the board validates them.
+var agentCardKeys = map[string]bool{"risk": true, "ifSkipped": true, "whyHuman": true, "options": true, "rollback": true, "context": true}
+
+// readCard reads a --card-file JSON object. Anything but an object with
+// known keys is a usage error, reported before any network call.
+func (c *agentCLI) readCard(path string) (map[string]json.RawMessage, int) {
+	b, err := c.deps.readFile(path)
+	if err != nil {
+		return nil, agentUsageErr(c.errOut, fmt.Sprintf("card file: %v", err))
+	}
+	var card map[string]json.RawMessage
+	if json.Unmarshal(b, &card) != nil || card == nil {
+		return nil, agentUsageErr(c.errOut, "card file: want a JSON object")
+	}
+	keys := make([]string, 0, len(card))
+	for k := range card {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !agentCardKeys[k] {
+			return nil, agentUsageErr(c.errOut, fmt.Sprintf("card file: unknown key %q (allowed: risk, ifSkipped, whyHuman, options, rollback, context)", k))
+		}
+	}
+	return card, 0
 }

@@ -140,7 +140,57 @@ type gateDTO struct {
 	// own event. Absent when unknown.
 	ChangedAtRevision uint64 `json:"changedAtRevision,omitempty"`
 	LastActivityTs    int64  `json:"lastActivityTs,omitempty"`
+	// RHZ-134 (FR-RHZ-175, additive, omitempty, internal gates only): the
+	// question card and the re:-linked question/answer thread (cap 50,
+	// latest kept). A gate without them serializes exactly as before.
+	Risk      *gateRiskDTO    `json:"risk,omitempty"`
+	IfSkipped string          `json:"ifSkipped,omitempty"`
+	WhyHuman  string          `json:"whyHuman,omitempty"`
+	Options   []gateOptionDTO `json:"options,omitempty"`
+	Rollback  string          `json:"rollback,omitempty"`
+	Context   *gateContextDTO `json:"context,omitempty"`
+	Thread    []gateThreadDTO `json:"thread,omitempty"`
 }
+type gateRiskDTO struct {
+	Level string `json:"level"`
+	Line  string `json:"line"`
+}
+type gateOptionDTO struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Meaning     string `json:"meaning,omitempty"`
+	Consequence string `json:"consequence,omitempty"`
+}
+type gateContextDTO struct {
+	Project string `json:"project,omitempty"`
+	What    string `json:"what,omitempty"`
+	State   string `json:"state,omitempty"`
+}
+type gateThreadDTO struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Content string `json:"content"`
+	At      string `json:"at,omitempty"`
+}
+
+// cardDTO fills the RHZ-134 (FR-RHZ-175) card and thread keys of a gate DTO.
+func cardDTO(d *gateDTO, g Gate) {
+	c := g.Card
+	if c.Risk != nil {
+		d.Risk = &gateRiskDTO{Level: c.Risk.Level, Line: c.Risk.Line}
+	}
+	d.IfSkipped, d.WhyHuman, d.Rollback = c.IfSkipped, c.WhyHuman, c.Rollback
+	for _, o := range c.Options {
+		d.Options = append(d.Options, gateOptionDTO{Key: o.Key, Label: o.Label, Meaning: o.Meaning, Consequence: o.Consequence})
+	}
+	if c.Context != nil {
+		d.Context = &gateContextDTO{Project: c.Context.Project, What: c.Context.What, State: c.Context.State}
+	}
+	for _, x := range g.Thread {
+		d.Thread = append(d.Thread, gateThreadDTO{ID: x.ID, Kind: x.Kind, Content: x.Content, At: x.At})
+	}
+}
+
 type verificationDTO struct {
 	Status        string `json:"status"`
 	ClaimKind     string `json:"claimKind,omitempty"`
@@ -309,7 +359,9 @@ func toDTO(p Projection) dto {
 		if g.Verification != nil {
 			verification = &verificationDTO{Status: g.Verification.Status, ClaimKind: g.Verification.ClaimKind, Assurance: g.Verification.Assurance, KeyID: g.Verification.KeyID, KeyRevokedNow: g.Verification.KeyRevokedNow}
 		}
-		d.Gates = append(d.Gates, gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, DecidedAt: g.DecidedAt, Handle: p.handles.of(gateHandleTag(g.Source), g.ID), Verification: verification, ChangedAtRevision: g.ChangedAtRevision, LastActivityTs: g.LastActivityTs})
+		gd := gateDTO{ID: g.ID, State: g.State, HumanDecision: g.HumanDecision, JanusDecision: g.JanusDecision, Superseded: g.Superseded, MissionID: g.MissionID, GoalID: g.GoalID, Name: g.Name, RequestDigest: g.RequestDigest, DisplaySummary: g.DisplaySummary, ExpiresAt: g.ExpiresAt, Source: g.Source, Body: g.Body, Recommendation: g.Recommendation, DecisionReason: g.DecisionReason, DecidedBy: g.DecidedBy, DecidedAt: g.DecidedAt, Handle: p.handles.of(gateHandleTag(g.Source), g.ID), Verification: verification, ChangedAtRevision: g.ChangedAtRevision, LastActivityTs: g.LastActivityTs}
+		cardDTO(&gd, g)
+		d.Gates = append(d.Gates, gd)
 	}
 	for _, a := range p.Attention {
 		d.Attention = append(d.Attention, attentionDTO{a.Kind, a.RefID, a.Cause, a.SourceRef, a.IncidentRef, a.MissionID})

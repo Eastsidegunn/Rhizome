@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"rhizome/internal/domain"
 	"rhizome/internal/events"
@@ -51,12 +52,30 @@ type Ref struct {
 	Reason, ActorRef string
 	Verification     *Verification
 	Revision         uint64
+	// Card is the structured question card (RHZ-134, FR-RHZ-175); nil for
+	// questions asked without one (and for every legacy journal). A pointer
+	// (like Verification) keeps Ref comparable.
+	Card *Card
 }
+
+// CardValue returns the card, or the zero Card when there is none.
+func (r Ref) CardValue() Card {
+	if r.Card == nil {
+		return Card{}
+	}
+	return *r.Card
+}
+
 type Service struct{ Store events.Port }
 
 type asked struct {
 	Title, Body, Recommendation, MissionID, RequestedBy, CorrelationID, Digest string
 	GoalID                                                                     string `json:",omitempty"` // RHZ-075 (FR-RHZ-108), additive; omitted when empty so mission-bound payloads stay byte-identical to pre-075 journals.
+	// Card (RHZ-134, FR-RHZ-175) is embedded so its omitempty Go-name keys
+	// (Risk, IfSkipped, WhyHuman, Options, Rollback, Context) sit at the top
+	// level of the payload, after GoalID; a card-less payload is
+	// byte-identical to pre-134 journals.
+	Card
 }
 type answered struct {
 	Decision, Reason, ActorRef, Digest string
@@ -362,6 +381,19 @@ func validateActor(actor string) error {
 // entrance so kernel callers keep today's permissiveness. Replay rules are
 // unchanged — binding is validated only here, never on replay.
 func (s Service) Ask(title, body, recommendation, missionID, goalID, requestedBy, correlationID string) (Ref, error) {
+	return s.AskCard(title, body, recommendation, missionID, goalID, requestedBy, correlationID, Card{})
+}
+
+// ErrCardConflict is returned when a re-ask (same digest, hence same id)
+// carries a card that differs from the stored one (RHZ-134, FR-RHZ-175).
+var ErrCardConflict = errors.New("question metadata conflicts with existing gate")
+
+// AskCard is Ask with a structured card (RHZ-134, FR-RHZ-175). The card is
+// validated and normalized (NormalizeCard) before anything else is read or
+// written; it does not enter the digest or the id. A re-ask of an existing
+// id returns the existing Ref only when the stored card equals the
+// normalized requested card (absent == absent); otherwise ErrCardConflict.
+func (s Service) AskCard(title, body, recommendation, missionID, goalID, requestedBy, correlationID string, card Card) (Ref, error) {
 	if s.Store == nil {
 		return Ref{}, fmt.Errorf("nil store")
 	}
@@ -372,13 +404,24 @@ func (s Service) Ask(title, body, recommendation, missionID, goalID, requestedBy
 	if err != nil {
 		return Ref{}, err
 	}
+	card, err = NormalizeCard(card)
+	if err != nil {
+		return Ref{}, err
+	}
 	d := Digest(title, body, recommendation)
 	id, err := IDForDigest(d)
 	if err != nil {
 		return Ref{}, err
 	}
 	if log := s.Store.List("question", id); len(log) > 0 {
-		return Replay(log)
+		r, err := Replay(log)
+		if err != nil {
+			return Ref{}, err
+		}
+		if !reflect.DeepEqual(r.CardValue(), card) {
+			return Ref{}, ErrCardConflict
+		}
+		return r, nil
 	}
 	if missionID != "" && goalID != "" {
 		return Ref{}, fmt.Errorf("both missionId and goalId given")
@@ -403,7 +446,7 @@ func (s Service) Ask(title, body, recommendation, missionID, goalID, requestedBy
 			return Ref{}, fmt.Errorf("goal is terminal")
 		}
 	}
-	p, _ := json.Marshal(asked{Title: title, Body: body, Recommendation: recommendation, MissionID: missionID, GoalID: goalID, RequestedBy: requestedBy, CorrelationID: correlationID, Digest: d})
+	p, _ := json.Marshal(asked{Title: title, Body: body, Recommendation: recommendation, MissionID: missionID, GoalID: goalID, RequestedBy: requestedBy, CorrelationID: correlationID, Digest: d, Card: card})
 	e := events.Event{AggregateType: "question", AggregateID: id, Revision: 1, Type: "question.asked", Payload: p, CorrelationID: correlationID, CreatedAt: time.Now().UTC()}
 	if err := s.Store.Append(0, e); err != nil {
 		return Ref{}, err
@@ -502,7 +545,16 @@ func Replay(log []events.Event) (Ref, error) {
 			if err != nil || id != e.AggregateID {
 				return Ref{}, ErrDigestMismatch
 			}
+			// RHZ-134 (FR-RHZ-175): a stored card must be one the writer
+			// could have produced (validated and already normalized).
+			if err := replayCard(p.Card); err != nil {
+				return Ref{}, err
+			}
 			r = Ref{ID: e.AggregateID, Title: p.Title, Body: p.Body, Recommendation: p.Recommendation, MissionID: p.MissionID, GoalID: p.GoalID, RequestedBy: p.RequestedBy, CorrelationID: p.CorrelationID, Digest: p.Digest, Revision: 1}
+			if !p.Card.Empty() {
+				c := p.Card
+				r.Card = &c
+			}
 		} else {
 			if e.Type != "question.answered" {
 				return Ref{}, fmt.Errorf("invalid answered")

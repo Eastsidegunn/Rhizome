@@ -27,6 +27,9 @@ const (
 	Usage   Kind = "usage"
 	Release Kind = "release"
 	Answer  Kind = "answer"
+	// Question (RHZ-134, FR-RHZ-175) is a question note about a gate or
+	// another note (linked by the tag re:<id>).
+	Question Kind = "question"
 )
 
 type Memory struct {
@@ -60,7 +63,7 @@ func validate(m Memory) error {
 		return fmt.Errorf("memory id, content and source are required")
 	}
 	switch m.Kind {
-	case Fact, Decision, Preference, Observation, Hypothesis, Reference, Handoff, Blocked, Done, Usage, Release, Answer:
+	case Fact, Decision, Preference, Observation, Hypothesis, Reference, Handoff, Blocked, Done, Usage, Release, Answer, Question:
 	default:
 		return fmt.Errorf("unknown memory kind %q", m.Kind)
 	}

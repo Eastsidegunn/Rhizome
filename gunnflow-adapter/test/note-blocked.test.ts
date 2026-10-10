@@ -91,7 +91,8 @@ describe('note.answer translation FR-RHZ-171', () => {
   it('FR-RHZ-171 maps decision.text to note.create {memoryKind: answer} on the note mission', () => {
     expect(noteAnswerIntent(wire, 'note-a', { text: '키는 금고에' })).toEqual({
       ok: true,
-      fields: { kind: 'note.create', memoryKind: 'answer', missionId: 'task', tags: ['answer', 're:note-a'], content: 're: note-a\n\n키는 금고에' },
+      // RHZ-134 (FR-RHZ-175): the re field rides along with the legacy tag.
+      fields: { kind: 'note.create', memoryKind: 'answer', re: 'note-a', missionId: 'task', tags: ['answer', 're:note-a'], content: 're: note-a\n\n키는 금고에' },
     });
   });
 
@@ -175,7 +176,7 @@ describe('note detail and answer over the wire FR-RHZ-171', () => {
     );
     expect(ok).toEqual({ accepted: true, reason: undefined });
     expect(received.at(-1)).toEqual({
-      kind: 'note.create', memoryKind: 'answer', missionId: 'task', tags: ['answer', 're:note-a'], content: 're: note-a\n\n키는 금고에', actor: 'fake-actor:h',
+      kind: 'note.create', memoryKind: 'answer', re: 'note-a', missionId: 'task', tags: ['answer', 're:note-a'], content: 're: note-a\n\n키는 금고에', actor: 'fake-actor:h',
     });
     const before = received.length;
     const empty = await upstream.relayIntent(
