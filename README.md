@@ -84,7 +84,7 @@ from replay. The `/v1/workspace` projection
 uses the vocabulary of the cockpit UI it serves, so a Rhizome goal appears under
 `missions` and a Rhizome mission appears under `tasks`.
 
-Other subcommands: `ingest`, `memories`, `index`, `graph` (see
+Other subcommands: `ingest`, `memories`, `index`, `graph`, `agent` (see
 [cmd/rhizome/main.go](cmd/rhizome/main.go)). Only one process may write a
 journal at a time: while `serve` runs, send writes through `POST /v1/intent`.
 
@@ -95,7 +95,7 @@ Main HTTP routes:
 | `GET /v1/workspace` | Project the operator board; `/v1/workspace/stream` is its SSE requery signal. |
 | `POST /v1/intent` | Relay one direct, local-trust write intent. |
 | `GET /v1/knowledge` | Project `{notes,items,relations}` from one revision; each relation is `{id,type,from,to,sourceMemoryIds,confidence}` in that order; `items` lists every knowledge item including superseded ones (tell them apart by `status` and `supersedes`). `kind` filters notes by memory kind; `itemKind` filters items by the knowledge-kind vocabulary and an unknown value returns `400 invalid knowledge kind`; `tag` filters both notes and items. When `itemKind` or `tag` is present, relations survive only when both endpoint items survive; without either item filter, all relations are returned. `about=<memoryId>` retains the separate reverse-about response. |
-| `GET /v1/context` | Project task handoff context, or note context with `goal` / `mission`. |
+| `GET /v1/context` | Project task handoff context (`include=prompt` adds the mission prompt as `task.prompt`), or note context with `goal` / `mission`. |
 | `GET /v1/execution/{missionId}` | Project execution output; `/stream` is the streaming form. |
 | `POST /v1/blob`, `GET /v1/blob/{id}` | Store and read content-addressed blobs. |
 | `GET /v1/codeindex` | Read the derived code index. |
@@ -111,6 +111,40 @@ Direct intent kinds are implemented in
 | `relation.create` | Create a typed knowledge relation from lowerCamel `{from,to,relationType,sourceMemoryIds,confidence,actor}`. `actor` and all graph fields are required; a zero/omitted confidence defaults to `0.5`. Resubmitting an identical relation is idempotent. |
 | `edge.declare`, `edge.rewire`, `deliverable.register` | Link operational nodes and register outputs. |
 | `request.create`, `request.complete`, `request.unable`, `request.cancel`, `attest.create` | Record human work and signed attestations. |
+
+## Agent onboarding
+
+Agent sessions (Claude Code, pi, Codex, ...) working a board mission write to
+the board with `rhizome agent <verb>` instead of raw HTTP. It is a thin client
+over `POST /v1/intent` and `GET /v1/context` of a running board.
+
+```sh
+go build -o rhizome ./cmd/rhizome
+export RHIZOME_BOARD=http://127.0.0.1:8790   # default when unset
+export RHIZOME_SESSION=my-session            # actor on every intent (required)
+export RHIZOME_MISSION=m-0000abcd            # mission id or handle (or pass it positionally)
+./rhizome agent context                      # read the mission and record the start
+```
+
+| Verb | Writes |
+|---|---|
+| `context <mission> [--no-record]` | Reads the mission, its prompt, notes and steps; records the start (`task.resume` if queued/paused, then `mission.progress`). |
+| `start <mission>` | Records the start explicitly. |
+| `progress <mission> --action TEXT [--pct N]` | `mission.progress` (`N` is 0-100). |
+| `blocked <mission> LINE [--body-file F] [--tag T]` | A `blocked` note (surfaces as `note_blocked` attention) plus a display-only blocked reason. |
+| `done <mission> LINE [--body-file F] [--tag T]` | A `done` note plus progress 100%. Never closes the mission; that is the operator's call. |
+| `usage <mission> --model M --in N --out N [--cache-read N] [--cache-write N]` | A `usage` note. |
+| `note <mission> LINE [--kind K] [--body-file F] [--tag T]` | A note of kind `K` (default `observation`). |
+| `ask <mission> TITLE (--body TEXT \| --body-file F) [--recommendation TEXT]` | `question.ask`: a gate for a human decision. |
+
+Exit codes: `0` accepted, `1` rejected (stderr: `rejected: <board reason>`) or
+HTTP/network error, `2` usage error. Notes written by `blocked`, `done` and
+`note` end with an `actor=… mission=… at=…` trailer, so each report is a
+distinct note. `context` shows notes about the mission; when the mission name
+carries an `RHZ-<n>` code, notes on its goal are shown only if tagged with that
+code, otherwise all of the goal's notes appear (latest first, handoff first).
+The turn routine for agents is in
+[skills/rhizome/SKILL.md](skills/rhizome/SKILL.md).
 
 ## Data location
 
@@ -338,10 +372,11 @@ authoritative record.
 
 | Path | What |
 |---|---|
-| `cmd/rhizome` | the `rhizome` binary (serve, ingest, memories, index, graph) |
+| `cmd/rhizome` | the `rhizome` binary (serve, ingest, memories, index, graph, agent) |
 | `internal/` | all Go packages, layered as above |
 | `internal/archtest` | the architecture test that enforces the layer rules |
 | `gunnflow-adapter/` | TypeScript adapter from Rhizome's HTTP surface to the Gunnflow wire contract |
+| `skills/rhizome/` | agent skill: the turn routine for `rhizome agent` |
 | `docs/release/` | release notes |
 
 Contributions and changes are described in [CONTRIBUTING.md](CONTRIBUTING.md).

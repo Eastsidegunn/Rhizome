@@ -15,3 +15,7 @@
 # local agent working rules (not published)
 /AGENTS.md
 /CLAUDE.md
+
+# Claude Code local permission settings (private, never published)
+.claude/settings.local.json
+.claude/worktrees/
