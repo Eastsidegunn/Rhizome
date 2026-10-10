@@ -32,7 +32,8 @@ import (
 
 func validKind(k memory.Kind) bool {
 	switch k {
-	case memory.Fact, memory.Decision, memory.Preference, memory.Observation, memory.Hypothesis, memory.Reference:
+	case memory.Fact, memory.Decision, memory.Preference, memory.Observation, memory.Hypothesis, memory.Reference,
+		memory.Handoff, memory.Blocked, memory.Done, memory.Usage, memory.Release, memory.Answer:
 		return true
 	}
 	return false

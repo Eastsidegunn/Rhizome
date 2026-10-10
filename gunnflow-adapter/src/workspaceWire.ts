@@ -110,6 +110,40 @@ export interface RequestProjection {
   membershipId?: string;
   createdAt: string;
 }
+/**
+ * RHZ-132 (FR-RHZ-171): a blocked note Rhizome lists as a `note_blocked`
+ * attention entry (refId = note id, cause = first content line, missionId =
+ * the open mission it is bound to). Carried verbatim from the wire's
+ * attention list; nodes.ts projects each as a `note` node.
+ */
+export interface BlockedNoteProjection {
+  kind: 'note';
+  id: string;
+  cause: string;
+  missionId?: string;
+}
+/** Attention kind Rhizome emits for a blocked note on an open mission (FR-RHZ-171). */
+export const NOTE_BLOCKED = 'note_blocked';
+
+/** The note_blocked entries of a raw /v1/workspace body; malformed entries are skipped, first refId wins. */
+export function blockedNotesOf(raw: unknown): BlockedNoteProjection[] {
+  const listed = (raw as { attention?: unknown } | null)?.attention;
+  const seen = new Set<string>();
+  const out: BlockedNoteProjection[] = [];
+  for (const a of Array.isArray(listed) ? listed : []) {
+    const x = a as { kind?: unknown; refId?: unknown; cause?: unknown; missionId?: unknown } | null;
+    if (typeof x !== 'object' || x === null || x.kind !== NOTE_BLOCKED) continue;
+    if (typeof x.refId !== 'string' || x.refId === '' || seen.has(x.refId)) continue;
+    seen.add(x.refId);
+    out.push({
+      kind: 'note',
+      id: x.refId,
+      cause: typeof x.cause === 'string' ? x.cause : '',
+      ...(typeof x.missionId === 'string' && x.missionId !== '' ? { missionId: x.missionId } : {}),
+    });
+  }
+  return out;
+}
 type TaskCapabilities = Partial<Record<'pause' | 'resume' | 'instruct' | 'cancel' | 'forceReplan', CapabilityLevel>>;
 type RequestCapabilities = Partial<Record<'complete' | 'unable', CapabilityLevel>>;
 export interface WorkspaceProjection {
@@ -121,6 +155,8 @@ export interface WorkspaceProjection {
   edges: EdgeProjection[];
   /** Absent when Rhizome omitted requests, preserving request-free bodies. */
   requests?: RequestProjection[];
+  /** RHZ-132 (FR-RHZ-171): present only when the wire lists note_blocked attention. */
+  blockedNotes?: BlockedNoteProjection[];
   /**
    * RHZ-076 (FR-RHZ-104): ids that are the target of a `contains` edge anywhere
    * in the raw snapshot, whether or not both ends survive the cockpit's live
@@ -481,6 +517,8 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
     ...new Set(allEdges.filter((e) => e.edgeKind === 'contains' && !supersededEdgeIds.has(e.id)).map((e) => e.to)),
   ];
 
+  const blockedNotes = blockedNotesOf(body);
+
   return {
     revision: (body.revision as number | undefined) ?? 0,
     missions: liveMissions,
@@ -489,6 +527,7 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
     deliverables: liveDeliverables,
     edges: liveEdges,
     ...(Object.prototype.hasOwnProperty.call(body, 'requests') ? { requests: liveRequests } : {}),
+    ...(blockedNotes.length > 0 ? { blockedNotes } : {}),
     containedIds,
     counts: (body.counts as WorkspaceProjection['counts'] | undefined) ?? { running: 0, needsYou: 0, blocked: 0 },
     activities: (body.activities as WorkspaceProjection['activities'] | undefined) ?? [],
