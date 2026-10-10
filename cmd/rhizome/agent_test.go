@@ -760,3 +760,121 @@ func TestFRRHZ172_SameSummaryTwoMissionsRealBoard(t *testing.T) {
 		t.Fatalf("FR-RHZ-172: want 2 distinct notes, got %d", notes)
 	}
 }
+
+// ---- RHZ-134 (FR-RHZ-175) --------------------------------------------------
+
+func TestFRRHZ175_AskCardFileMergedIntoIntent(t *testing.T) {
+	fb, srv := newFakeBoard172(t)
+	card := `{"risk":{"level":"high","line":"l"},"ifSkipped":"s","whyHuman":"w","options":[{"key":"a","label":"A"}],"rollback":"rb","context":{"project":"p"}}`
+	d := deps172(env172(srv.URL), map[string]string{"card.json": card})
+	code, out, errOut := run172(t, d, "ask", "mission-1", "Title", "--body", "B", "--card-file", "card.json")
+	if code != 0 || out != "ok\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	m := fb.intent(0)
+	if m["kind"] != "question.ask" || m["name"] != "Title" || m["body"] != "B" || m["ifSkipped"] != "s" || m["whyHuman"] != "w" || m["rollback"] != "rb" {
+		t.Fatalf("intent: %+v", m)
+	}
+	risk, _ := m["risk"].(map[string]any)
+	ctx, _ := m["context"].(map[string]any)
+	opts, _ := m["options"].([]any)
+	if risk["level"] != "high" || ctx["project"] != "p" || len(opts) != 1 {
+		t.Fatalf("nested: %+v", m)
+	}
+}
+
+func TestFRRHZ175_AskCardFileErrorsBeforeNetwork(t *testing.T) {
+	fb, srv := newFakeBoard172(t)
+	files := map[string]string{"bad.json": `{"risk":{"level":"low","line":"l"},"owner":"x"}`, "arr.json": `[1]`, "junk.json": `nope`}
+	d := deps172(env172(srv.URL), files)
+	for _, f := range []string{"bad.json", "arr.json", "junk.json", "missing.json"} {
+		code, _, errOut := run172(t, d, "ask", "mission-1", "Title", "--body", "B", "--card-file", f)
+		if code != 2 || !strings.Contains(errOut, "card file") {
+			t.Fatalf("%s: code=%d err=%q", f, code, errOut)
+		}
+	}
+	if _, _, errOut := run172(t, d, "ask", "mission-1", "T", "--body", "B", "--card-file", "bad.json"); !strings.Contains(errOut, `"owner"`) {
+		t.Fatalf("unknown key not named: %q", errOut)
+	}
+	if n := len(fb.kinds()); n != 0 {
+		t.Fatalf("network calls: %d", n)
+	}
+}
+
+func TestFRRHZ175_NoteReAndQuestionKind(t *testing.T) {
+	fb, srv := newFakeBoard172(t)
+	d := deps172(env172(srv.URL), nil)
+	if code, _, errOut := run172(t, d, "note", "mission-1", "why?", "--kind", "question", "--re", "q-abc"); code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	m := fb.intent(0)
+	if m["kind"] != "note.create" || m["memoryKind"] != "question" || m["re"] != "q-abc" {
+		t.Fatalf("intent: %+v", m)
+	}
+	if code, _, _ := run172(t, d, "note", "mission-1", "plain"); code != 0 {
+		t.Fatal("plain note")
+	}
+	if _, ok := fb.intent(1)["re"]; ok {
+		t.Fatalf("re sent without --re: %+v", fb.intent(1))
+	}
+	if code, _, errOut := run172(t, d, "note", "mission-1", "why?", "--kind", "question"); code != 2 || !strings.Contains(errOut, "--re required") {
+		t.Fatalf("question without re: code=%d err=%q", code, errOut)
+	}
+	if n := len(fb.kinds()); n != 2 {
+		t.Fatalf("intents: %d", n)
+	}
+}
+
+// End to end against a real in-memory board: ask with a card, then a
+// question note re: the gate; the workspace gate carries card and thread.
+func TestFRRHZ175_CardAndThreadAgainstRealBoard(t *testing.T) {
+	store := &events.Store{}
+	srv := httptest.NewServer(workspace.NewHTTP(store).Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Post(srv.URL+"/v1/intent", "application/json", strings.NewReader(`{"kind":"mission.create","name":"m174","prompt":"p","actor":"ops"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	const mid = "mission-m174"
+	d := deps172(env172(srv.URL), map[string]string{"card.json": `{"risk":{"level":"low","line":"safe"},"whyHuman":"policy"}`})
+	if code, _, errOut := run172(t, d, "ask", mid, "T", "--body", "B", "--card-file", "card.json"); code != 0 {
+		t.Fatalf("ask: %d %q", code, errOut)
+	}
+	var ws struct {
+		Body struct {
+			Gates []struct {
+				ID       string `json:"id"`
+				WhyHuman string `json:"whyHuman"`
+				Risk     struct{ Level, Line string }
+				Thread   []struct{ Kind string }
+			} `json:"gates"`
+		} `json:"body"`
+	}
+	get := func() {
+		t.Helper()
+		r, err := http.Get(srv.URL + "/v1/workspace")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&ws); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get()
+	if len(ws.Body.Gates) != 1 || ws.Body.Gates[0].WhyHuman != "policy" || ws.Body.Gates[0].Risk.Level != "low" {
+		t.Fatalf("gate: %+v", ws.Body.Gates)
+	}
+	gid := ws.Body.Gates[0].ID
+	if code, _, errOut := run172(t, d, "note", mid, "which env?", "--kind", "question", "--re", gid); code != 0 {
+		t.Fatalf("note: %d %q", code, errOut)
+	}
+	if code, _, errOut := run172(t, d, "note", mid, "x", "--kind", "question", "--re", "q-000000000000000000000000"); code != 1 || !strings.Contains(errOut, "rejected: unknown re target") {
+		t.Fatalf("unknown re: %d %q", code, errOut)
+	}
+	get()
+	if th := ws.Body.Gates[0].Thread; len(th) != 1 || th[0].Kind != "question" {
+		t.Fatalf("thread: %+v", th)
+	}
+}

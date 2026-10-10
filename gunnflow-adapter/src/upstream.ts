@@ -160,7 +160,9 @@ export const NOTE_NOT_BLOCKED = 'note is not blocked in adapter snapshot';
 /**
  * The Rhizome intent a cockpit note.answer becomes: note.create of memoryKind
  * `answer` on the blocked note's own mission (taken from the adapter's raw
- * snapshot, never from the cockpit), tagged `answer` and `re:<note id>`. The
+ * snapshot, never from the cockpit), tagged `answer` and `re:<note id>`, and
+ * (RHZ-134, FR-RHZ-175) carrying the `re` field so Rhizome checks the target
+ * exists; the tag stays for compatibility (Rhizome does not duplicate it). The
  * content is `re: <note id>`, a blank line, then the human's text verbatim:
  * Rhizome derives a note id from its content alone, so the same short answer
  * ("확인") to two notes must not collide. Blank text and notes the snapshot
@@ -182,7 +184,45 @@ export function noteAnswerIntent(
   }
   return {
     ok: true,
-    fields: { kind: 'note.create', memoryKind: 'answer', missionId: entry.missionId, tags: ['answer', `re:${noteId}`], content: `re: ${noteId}\n\n${textValue}` },
+    fields: { kind: 'note.create', memoryKind: 'answer', re: noteId, missionId: entry.missionId, tags: ['answer', `re:${noteId}`], content: `re: ${noteId}\n\n${textValue}` },
+  };
+}
+
+/* ---- RHZ-134 (FR-RHZ-175): a follow-up question on a gate ---- */
+
+export const GATE_ASK_ACTION = 'gate.ask';
+export const GATE_ASK_TEXT_REQUIRED = 'question text required';
+export const GATE_NOT_INTERNAL = 'gate is not an internal gate in adapter snapshot';
+
+/**
+ * The Rhizome intent a cockpit gate.ask becomes: note.create of memoryKind
+ * `question`, `re: <gate id>`, bound to the gate's own mission or goal (taken
+ * from the adapter's raw snapshot, never from the cockpit), tagged
+ * `question`. Content is `re: <gate id>`, a blank line, then the text
+ * verbatim (content-addressed note ids must not collide across gates).
+ * Blank text, and gates the snapshot does not list as internal (or that
+ * carry no binding), are refused before anything reaches Rhizome.
+ */
+export function gateAskIntent(
+  wire: UpstreamProjectionEnvelope,
+  gateId: unknown,
+  decision: unknown,
+): { ok: true; fields: Record<string, unknown> } | { ok: false; reason: string } {
+  const textValue = (decision as { text?: unknown } | null | undefined)?.text;
+  if (typeof textValue !== 'string' || textValue.trim() === '') return { ok: false, reason: GATE_ASK_TEXT_REQUIRED };
+  const gates = (wire.body as { gates?: unknown } | null)?.gates;
+  const gate = (Array.isArray(gates) ? gates : []).find(
+    (g) => typeof g === 'object' && g !== null && (g as { id?: unknown }).id === gateId,
+  ) as { source?: unknown; missionId?: unknown; goalId?: unknown } | undefined;
+  if (typeof gateId !== 'string' || !gate || gate.source !== 'internal') return { ok: false, reason: GATE_NOT_INTERNAL };
+  const binding =
+    typeof gate.missionId === 'string' && gate.missionId !== '' ? { missionId: gate.missionId }
+    : typeof gate.goalId === 'string' && gate.goalId !== '' ? { goalId: gate.goalId }
+    : undefined;
+  if (!binding) return { ok: false, reason: GATE_NOT_INTERNAL };
+  return {
+    ok: true,
+    fields: { kind: 'note.create', memoryKind: 'question', re: gateId, ...binding, tags: ['question'], content: `re: ${gateId}\n\n${textValue}` },
   };
 }
 
@@ -501,6 +541,12 @@ export async function createRhizomeUpstream(
         const answer = noteAnswerIntent(lastWire, i.nodeId, i.decision);
         if (!answer.ok) return { accepted: false, reason: answer.reason };
         return postIntent({ ...answer.fields, actor });
+      }
+      if ((intent as { action?: unknown } | null)?.action === GATE_ASK_ACTION) {
+        const i = intent as { nodeId?: unknown; decision?: unknown };
+        const ask = gateAskIntent(lastWire, i.nodeId, i.decision);
+        if (!ask.ok) return { accepted: false, reason: ask.reason };
+        return postIntent({ ...ask.fields, actor });
       }
       const { kind, rest } = toRhizomeAddress((intent ?? {}) as Record<string, unknown>);
       // Only known intent fields travel (the idempotency key is not one yet); kind and actor are set last.

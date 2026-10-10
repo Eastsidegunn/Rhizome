@@ -82,6 +82,10 @@ type Gate struct {
 	Verification *GateVerification
 	// RHZ-133 (FR-RHZ-173): activity over the stream(s) the gate replays from.
 	Activity
+	// RHZ-134 (FR-RHZ-175): the question card (internal gates only) and the
+	// re:-linked question/answer thread (thread.go). Zero for JANUS gates.
+	Card   question.Card
+	Thread []ThreadEntry
 }
 type GateVerification struct {
 	Status, ClaimKind, Assurance, KeyID string
@@ -324,7 +328,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		if er != nil {
 			return p, er
 		}
-		g := Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: verification, Activity: act.of(aggKey{"question", id})}
+		g := Gate{ID: q.ID, State: st, MissionID: q.MissionID, GoalID: q.GoalID, Name: q.Title, RequestDigest: q.Digest, Source: "internal", Body: q.Body, Recommendation: q.Recommendation, DecisionReason: q.Reason, DecidedBy: q.ActorRef, Verification: verification, Activity: act.of(aggKey{"question", id}), Card: q.CardValue()}
 		if st == "approved" || st == "rejected" {
 			g.DecidedAt = latestEventCreatedAt(s.List("question", id), "question.answered")
 		}
@@ -423,9 +427,12 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 	}
 	// RHZ-132 (FR-RHZ-171): human-owned attention kinds and the deduplicated
 	// counts.needsYou (attention.go).
-	if err := applyHumanAttention(s, all, &p); err != nil {
+	notes := buildNoteIndex(all)
+	if err := applyHumanAttentionNotes(s, notes, &p); err != nil {
 		return p, err
 	}
+	// RHZ-134 (FR-RHZ-175): gate threads from re: links (thread.go).
+	applyThreads(notes, &p)
 	sort.Slice(p.Attention, func(i, j int) bool {
 		if p.Attention[i].Kind != p.Attention[j].Kind {
 			return p.Attention[i].Kind < p.Attention[j].Kind
@@ -719,6 +726,18 @@ type Intent struct {
 	After     string   `json:"after"`
 	Rollback  string   `json:"rollback"`
 	Memo      string   `json:"memo"`
+	// RHZ-134 (FR-RHZ-175) question.ask card wire. Risk, Options and
+	// CardContext stay raw so the question kernel decodes them strictly
+	// (exact keys, string values; question.DecodeIntentCard). rollback
+	// reuses Rollback above.
+	Risk        json.RawMessage `json:"risk,omitempty"`
+	IfSkipped   string          `json:"ifSkipped,omitempty"`
+	WhyHuman    string          `json:"whyHuman,omitempty"`
+	Options     json.RawMessage `json:"options,omitempty"`
+	CardContext json.RawMessage `json:"context,omitempty"`
+	// Re (RHZ-134, FR-RHZ-175) links a note.create of kind question/answer
+	// to the question gate or note it is about; stored as the tag re:<id>.
+	Re string `json:"re,omitempty"`
 	// requestUnknownField is set only by the HTTP raw-key check. Keeping it
 	// out of JSON lets the request service apply Q11 after Q1-Q10.
 	requestUnknownField bool
@@ -1305,6 +1324,25 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		if !validMemoryKind(kind) {
 			return RelayResult{Reason: fmt.Sprintf("unknown memory kind %q", in.MemoryKind)}, nil
 		}
+		// RHZ-134 (FR-RHZ-175): re links a question/answer note to an
+		// existing question gate or note; stored as the tag re:<id> (no new
+		// payload field). Checked before any read-or-write of the note.
+		tags := append([]string(nil), in.Tags...)
+		re := strings.TrimSpace(in.Re)
+		switch {
+		case kind == memory.Question && re == "":
+			return RelayResult{Reason: "re required for a question note"}, nil
+		case re != "" && kind != memory.Question && kind != memory.Answer:
+			return RelayResult{Reason: "re is only allowed on question and answer notes"}, nil
+		}
+		if re != "" {
+			if !reTargetExists(s, re) {
+				return RelayResult{Reason: fmt.Sprintf("unknown re target %q", re)}, nil
+			}
+			if tag := rePrefix + re; !containsString(tags, tag) {
+				tags = append(tags, tag)
+			}
+		}
 		sum := sha256.Sum256([]byte(in.Content))
 		id := "note-" + hex.EncodeToString(sum[:])
 		if existing := s.List("memory", id); len(existing) > 0 {
@@ -1312,7 +1350,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 			if er != nil {
 				return RelayResult{Reason: er.Error()}, nil
 			}
-			if old.Content == in.Content && old.Kind == kind && sameStrings(old.Tags, in.Tags) && old.GoalID == in.GoalID && old.MissionID == in.MissionID {
+			if old.Content == in.Content && old.Kind == kind && sameStrings(old.Tags, tags) && old.GoalID == in.GoalID && old.MissionID == in.MissionID {
 				// RHZ-057: this idempotent early-return is the primary guard
 				// against duplicate about edges — it precedes the dual-write.
 				// The deterministic edge id + revision-0 append guard is only a
@@ -1339,7 +1377,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		if err != nil {
 			return RelayResult{Reason: err.Error()}, nil
 		}
-		m2 := memory.Memory{ID: id, Kind: kind, Content: in.Content, SourceType: "blob", SourceID: src.BlobID, Confidence: 1, GoalID: in.GoalID, MissionID: in.MissionID, Tags: append([]string(nil), in.Tags...)}
+		m2 := memory.Memory{ID: id, Kind: kind, Content: in.Content, SourceType: "blob", SourceID: src.BlobID, Confidence: 1, GoalID: in.GoalID, MissionID: in.MissionID, Tags: tags}
 		if _, err := (memory.Service{Store: s}).Create(m2); err != nil {
 			return RelayResult{Reason: err.Error()}, nil
 		}
@@ -1807,7 +1845,13 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		} else if _, e := projector.ReplayGoal(s.List("goal", gid)); e != nil {
 			return RelayResult{Reason: "goal not found"}, nil
 		}
-		q, e := (question.Service{Store: s}).Ask(in.Name, in.Body, in.Recommendation, mid, gid, actor, in.CorrelationID)
+		// RHZ-134 (FR-RHZ-175): the card is decoded strictly and validated
+		// by the question kernel before any write.
+		card, e := question.DecodeIntentCard(in.Risk, in.Options, in.CardContext, in.IfSkipped, in.WhyHuman, in.Rollback)
+		if e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		q, e := (question.Service{Store: s}).AskCard(in.Name, in.Body, in.Recommendation, mid, gid, actor, in.CorrelationID, card)
 		if e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}

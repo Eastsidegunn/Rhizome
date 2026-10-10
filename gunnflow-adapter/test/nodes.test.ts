@@ -119,7 +119,8 @@ describe('Rhizome generic nodes', () => {
       { action: 'gate.reject', level: 'enabled', decision: { input: { required: true } } },
       { action: 'gate.requestChanges', level: 'enabled', decision: { input: { required: true } } },
     ];
-    expect(gateById('question-1').capabilities).toEqual(expected);
+    // RHZ-134 (FR-RHZ-175): a pending internal gate also offers gate.ask; JANUS gates never do.
+    expect(gateById('question-1').capabilities).toEqual([...expected, { action: 'gate.ask', level: 'enabled', decision: { input: { required: true } } }]);
     expect(gateById('approval-1').capabilities).toEqual(expected);
     expect(gateById('decided-1').capabilities).toEqual([]);
   });

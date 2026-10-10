@@ -6,7 +6,7 @@
  * and named as such.
  */
 import { WORKSPACE_ROOT_KIND, type ArtifactRef, type Capability, type CapabilityLevel, type NodeProjection } from '@gunnflow/contract';
-import { isUnverifiedDecidedGate, type WorkspaceProjection } from './workspaceWire.js';
+import { gateCardOf, isUnverifiedDecidedGate, type WorkspaceProjection } from './workspaceWire.js';
 
 /** State value for a node whose Rhizome shape carries no state (missions, deliverables, the root). */
 export const UNSTATED = 'unstated';
@@ -48,6 +48,17 @@ const REQUEST_ACTIONS = { complete: 'request.complete', unable: 'request.unable'
  * Rhizome note.create {memoryKind: answer} (upstream.ts); text is required.
  */
 export const NOTE_ANSWER = 'note.answer';
+/**
+ * RHZ-134 (FR-RHZ-175): asking a follow-up question on an internal gate that
+ * still awaits a decision (waiting / changes_requested). The adapter
+ * translates it to Rhizome note.create {memoryKind: question, re: <gate>}
+ * (upstream.ts); text is required. Capability actions are opaque strings in
+ * the contract (types.ts: "Vocabulary fields ... action ... are opaque"), the
+ * same footing note.answer took live under 0.5, so it is not flag-gated.
+ */
+export const GATE_ASK = 'gate.ask';
+/** Gate projection states in which gate.ask is offered. */
+const GATE_ASK_STATES = new Set<string>(['waiting', 'changes_requested']);
 /** State value of a projected blocked note (the only notes on the cockpit). */
 export const NOTE_BLOCKED_STATE = 'blocked';
 
@@ -151,6 +162,17 @@ export function summaryOf(text: unknown): string | undefined {
   if (line === '') return undefined;
   const cps = codePoints(line);
   return cps.length > SUMMARY_MAX ? `${cps.slice(0, SUMMARY_MAX - 1).join('')}…` : line;
+}
+
+/**
+ * RHZ-134 (FR-RHZ-175): a gate with a card risk summarises as
+ * `<level> · <ifSkipped or risk.line>` (summaryOf makes it one line, ≤200);
+ * without a risk, the first non-empty body line as before.
+ */
+function gateSummary(raw: Record<string, unknown> | undefined): string | undefined {
+  const card = gateCardOf(raw);
+  if (card.risk) return `${card.risk.level} · ${card.ifSkipped ?? card.risk.line}`;
+  return firstLine(raw?.body);
 }
 
 /** First non-empty line of a gate body. */
@@ -287,6 +309,12 @@ export function projectRhizomeNodes(
     attention: attentionOf(t.id, t.attention),
     artifacts: [],
   }));
+  // RHZ-134 (FR-RHZ-175): internal-ness is Rhizome's raw `source`, not carried by the projection.
+  const rawGateById = rawById(raw, 'gates');
+  const gateAsk = (id: string, state: string): Capability[] =>
+    rawGateById.get(id)?.source === 'internal' && GATE_ASK_STATES.has(state)
+      ? [{ action: GATE_ASK, level: 'enabled', decision: { input: { required: true } } }]
+      : [];
   const gates: NodeProjection[] = p.gates.map((g) => ({
     id: g.id,
     kind: 'gate',
@@ -299,7 +327,10 @@ export function projectRhizomeNodes(
     // Approved/rejected gates are retained only for provenance review and are no longer actionable.
     capabilities: isUnverifiedDecidedGate(g)
       ? []
-      : levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'reject' || k === 'requestChanges' ? true : undefined),
+      : [
+          ...levels(p.gateCapabilities[g.id], GATE_ACTIONS, (k) => k === 'reject' || k === 'requestChanges' ? true : undefined),
+          ...gateAsk(g.id, g.state),
+        ],
     // A waiting gate pulls the human: it is a pending decision by definition. A
     // changes_requested gate (RHZ-078, FR-RHZ-109) passes through as its own state
     // value; the ball is with the worker, so no needs_human is added for it.
@@ -356,13 +387,13 @@ export function projectRhizomeNodes(
   // (validated) plus shortName (from the label) and a one-line summary.
   const revision = options.revision ?? p.revision;
   const rawMissions = rawById(raw, 'missions');
-  const rawGates = rawById(raw, 'gates');
+  const rawGates = rawGateById;
   const rawDeliverables = rawById(raw, 'deliverables');
   const rawRequests = rawById(raw, 'requests');
   const facts = new Map<string, Facts06>();
   for (const m of p.missions) facts.set(m.id, { ...m, summary: rawMissions.get(m.id)?.success });
   for (const t of p.tasks) facts.set(t.id, { ...t, summary: summaryOf(t.currentAction) ?? t.blockedReason });
-  for (const g of p.gates) facts.set(g.id, { ...g, summary: firstLine(rawGates.get(g.id)?.body) });
+  for (const g of p.gates) facts.set(g.id, { ...g, summary: gateSummary(rawGates.get(g.id)) });
   for (const d of p.deliverables) facts.set(d.id, { ...d, summary: rawDeliverables.get(d.id)?.summary });
   for (const r of p.requests ?? []) facts.set(r.id, { ...r, summary: rawRequests.get(r.id)?.why });
   const kindOf = new Map<string, string>([

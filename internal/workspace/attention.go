@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"sort"
 	"strings"
 
 	"rhizome/internal/domain"
@@ -33,11 +32,19 @@ const (
 //   - note_blocked: memory notes of kind "blocked" or tagged "blocked" /
 //     "h-request" that are bound to an existing, non-terminal mission. Notes
 //     bound only to a goal, unbound notes, and originals replaced by a
-//     superseding note are excluded. Resolution = mission terminal.
+//     superseding note are excluded. Resolution = mission terminal OR an
+//     answer re: the note (RHZ-134, FR-RHZ-175): a live (non-superseded)
+//     memory note of kind answer tagged re:<blocked note id>.
 //
 // It reads p (already projected from the same snapshot) and the memory
 // streams in all; it never writes to the journal.
 func applyHumanAttention(s events.Port, all []events.Event, p *Projection) error {
+	return applyHumanAttentionNotes(s, buildNoteIndex(all), p)
+}
+
+// applyHumanAttentionNotes is applyHumanAttention over memory streams already
+// replayed (Snapshot shares one noteIndex with the gate threads).
+func applyHumanAttentionNotes(s events.Port, notes noteIndex, p *Projection) error {
 	needs := map[string]bool{}
 	for _, t := range p.Tasks {
 		if t.Attention { // Attention ⇔ MissionWaitingHuman (Snapshot)
@@ -58,11 +65,11 @@ func applyHumanAttention(s events.Port, all []events.Event, p *Projection) error
 		needs[r.ID] = true
 		p.Attention = append(p.Attention, AttentionItem{Kind: attentionRequestWaiting, RefID: r.ID, Cause: r.Name, MissionID: r.MissionID})
 	}
-	notes, err := blockedNotes(s, all)
+	blocked, err := blockedNotes(s, notes)
 	if err != nil {
 		return err
 	}
-	for _, n := range notes {
+	for _, n := range blocked {
 		needs[n.ID] = true
 		p.Attention = append(p.Attention, AttentionItem{Kind: attentionNoteBlocked, RefID: n.ID, Cause: noteCause(n.Content), MissionID: n.MissionID})
 	}
@@ -71,41 +78,14 @@ func applyHumanAttention(s events.Port, all []events.Event, p *Projection) error
 }
 
 // blockedNotes returns the note_blocked candidates ordered by note id.
-func blockedNotes(s events.Port, all []events.Event) ([]memory.Memory, error) {
-	streams := map[string][]events.Event{}
-	for _, e := range all {
-		if e.AggregateType == "memory" {
-			streams[e.AggregateID] = append(streams[e.AggregateID], e)
-		}
-	}
-	if len(streams) == 0 {
-		return nil, nil
-	}
-	ids := make([]string, 0, len(streams))
-	for id := range streams {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	mems := make([]memory.Memory, 0, len(ids))
-	superseded := map[string]bool{}
-	for _, id := range ids {
-		m, err := memory.Replay(streams[id])
-		if err != nil {
-			// A note stream this binary cannot replay (corrupt, or a kind
-			// from a newer binary) is left out of attention only; it must not
-			// take /v1/workspace down — /v1/knowledge still reports it.
-			continue
-		}
-		mems = append(mems, m)
-		if m.Supersedes != "" {
-			superseded[m.Supersedes] = true
-		}
-	}
+// Unreplayable note streams are already left out of notes (buildNoteIndex).
+func blockedNotes(s events.Port, notes noteIndex) ([]memory.Memory, error) {
 	open := map[string]bool{}
 	checked := map[string]bool{}
 	var out []memory.Memory
-	for _, m := range mems {
-		if superseded[m.ID] || m.MissionID == "" || !isBlockedNote(m) {
+	for _, n := range notes.notes {
+		m := n.Memory
+		if notes.superseded[m.ID] || m.MissionID == "" || !isBlockedNote(m) || notes.answered(m.ID) {
 			continue
 		}
 		if !checked[m.MissionID] {
