@@ -25,6 +25,7 @@ import (
 	"rhizome/internal/question"
 	"rhizome/internal/relation"
 	requestagg "rhizome/internal/request"
+	"rhizome/internal/secretref"
 	"rhizome/internal/source"
 	"rhizome/internal/surface"
 	"rhizome/internal/trust"
@@ -693,6 +694,15 @@ type Intent struct {
 	// provenance approval record (not enforced); no registry lookup. The
 	// wire distinguishes absent from present-but-malformed (see IntentRefs).
 	Refs IntentRefs `json:"refs"`
+	// RHZ-107 G1 (FR-RHZ-135, SCP §2.1) secret request wire: the
+	// secret.register/rotate/revoke.request fields (name reuses Name). There
+	// is no value field. A nil ScopeTags means the key was omitted. The HTTP
+	// decoder fills these only from the strict (V-J/V-K) decode.
+	OpID       string   `json:"opId"`
+	RefKind    string   `json:"refKind"`
+	ScopeTags  []string `json:"scopeTags"`
+	Ref        string   `json:"ref"`
+	ReasonCode string   `json:"reasonCode"`
 	// Verification is decoded strictly by RelayIntentHooks only for gate
 	// decisions. RawMessage preserves exact key casing for the V7 check.
 	Verification json.RawMessage `json:"verification,omitempty"`
@@ -1001,6 +1011,10 @@ type RelayResult struct {
 	// was started, found (idempotent re-submission) or left behind by a
 	// run-level failure. Empty for every other intent.
 	ExecutionID string `json:"executionId,omitempty"`
+	// OpID and Ref are set only when a secret request intent is Accepted
+	// (FR-RHZ-135, SCP §2.1); every other result omits them.
+	OpID string `json:"opId,omitempty"`
+	Ref  string `json:"ref,omitempty"`
 }
 
 // ExecStartRequest is one mission.start after the relay resolved the mission
@@ -1050,6 +1064,10 @@ type RelayHooks struct {
 	// denied session). It cannot change the relay result: the decision is
 	// already recorded. requestChanges never calls it (the gate stays open).
 	GateDecided func(GateDecision)
+	// Secrets is the single secret writer shared with the secret channel
+	// (FR-RHZ-135). nil = not wired: secret request intents are refused
+	// with X15 and zero writes.
+	Secrets *secretref.Service
 }
 
 // ExecInjector delivers an instruction text to a running external session
@@ -1112,6 +1130,12 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 			err = events.ErrPoisoned
 		}
 	}()
+	// FR-RHZ-135 (SCP §2.2): every "secret." kind is decided here, before
+	// any other check or the default branch. I0 refuses non-request kinds
+	// (X1); the rest goes to the single secret writer.
+	if strings.HasPrefix(in.Kind, secretKindPrefix) {
+		return relaySecret(hooks.Secrets, in, actor)
+	}
 	var verification *question.Verification
 	if len(in.Trust) != 0 && in.Kind != "trust.key.add" && in.Kind != "trust.key.revoke" {
 		return RelayResult{Reason: "invalid trust"}, nil

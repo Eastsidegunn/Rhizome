@@ -26,6 +26,7 @@ import (
 	"rhizome/internal/memory"
 	"rhizome/internal/projector"
 	"rhizome/internal/question"
+	"rhizome/internal/secretref"
 	"rhizome/internal/sessionlauncher"
 	"rhizome/internal/source"
 	"rhizome/internal/trust"
@@ -558,9 +559,18 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 	launcherRescan(store, sl)
 }
 
-// assembleServeWith is assembleServe with an optional session launcher.
+// assembleServeWith is assembleServe with an optional session launcher and
+// its own secret writer over store.
 func assembleServeWith(store events.Port, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, sl *sessionlauncher.Launcher, errOut io.Writer, enforceAll bool, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
+	return assembleServeShared(store, secretref.New(store), blobs, indexRepo, indexOut, jc, sl, errOut, enforceAll, verifiers...)
+}
+
+// assembleServeShared wires the given single secret writer (FR-RHZ-135) into
+// the HTTP relay and GET /v1/secrets; the caller owns the pointer so the
+// secret channel can share it.
+func assembleServeShared(store events.Port, secrets *secretref.Service, blobs workspace.BlobGetter, indexRepo, indexOut string, jc *janusServeConfig, sl *sessionlauncher.Launcher, errOut io.Writer, enforceAll bool, verifiers ...*trust.Verifier) (http.Handler, *janusadapter.Loop) {
 	h := workspace.NewHTTP(store)
+	h.Secrets = secrets
 	h.EnforceJANUS = enforceAll
 	if len(verifiers) > 0 && verifiers[0] != nil {
 		h.Trust = verifiers[0]
@@ -826,7 +836,10 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		// no kill, no re-run (S2/ops). Only children of this process are tracked.
 		sl = &sessionlauncher.Launcher{Cfg: slCfg, BoardURL: sessionlauncher.BoardURLFromAddr(*addr)}
 	}
-	handler, loop := assembleServeWith(j, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, sl, errOut, enforceAll, verifier)
+	// The one secret writer of this process (FR-RHZ-134 §1.5): shared with
+	// the secret channel (S4), which must receive this same pointer.
+	secrets := secretref.New(j)
+	handler, loop := assembleServeShared(j, secrets, blobStoreFromFlag(*bp), *idxRepo, *idxOut, jc, sl, errOut, enforceAll, verifier)
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
 	}
