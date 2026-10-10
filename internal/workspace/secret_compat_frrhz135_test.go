@@ -3,7 +3,8 @@ package workspace
 // RHZ-107 G1 (FR-RHZ-135, SCP §4.3): a journal without secret events keeps
 // /v1/workspace, the workspace SSE, /v1/context and non-secret /v1/intent
 // responses (and the decoded/recorded payloads) byte-identical. The goldens
-// below were captured from the tree before the secret intents existed.
+// below were captured from the tree just before the secret intents existed
+// (rebased onto RHZ-133, which added node liveness fields).
 
 import (
 	"bufio"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -141,18 +143,22 @@ func compatTranscriptFRRHZ135(t *testing.T) string {
 }
 
 func TestSecretFreeJournalSurfacesByteIdenticalFRRHZ135(t *testing.T) {
-	got := compatTranscriptFRRHZ135(t)
+	// lastActivityTs (RHZ-133) is the wall-clock CreatedAt of the in-memory
+	// fixture, so its digits are normalized; every other byte is literal.
+	got := activityTsRE.ReplaceAllString(compatTranscriptFRRHZ135(t), `"lastActivityTs":<ts>`)
 	if got != compatGoldenFRRHZ135 {
 		t.Fatalf("§4.3 byte compatibility broken:\n%s", got)
 	}
 }
 
+var activityTsRE = regexp.MustCompile(`"lastActivityTs":[0-9]+`)
+
 const compatGoldenFRRHZ135 = `== workspace OK
-{"revision":14,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1"}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0"}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
+{"revision":14,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1","changedAtRevision":1,"lastActivityTs":<ts>,"steps":{"done":0,"total":1}}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0","changedAtRevision":2,"lastActivityTs":<ts>,"active":false}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
 
 == sse snapshot
 event: snapshot
-data: {"revision":14,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1"}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0"}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
+data: {"revision":14,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1","changedAtRevision":1,"lastActivityTs":<ts>,"steps":{"done":0,"total":1}}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0","changedAtRevision":2,"lastActivityTs":<ts>,"active":false}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
 == context OK
 {"task":{"id":"mission-x","name":"dev mission","state":"queued","hasProgress":false},"goal":{"id":"goal-g","description":"dev goal","state":"active"},"memories":[{"id":"mem-a","kind":"fact","content":"content of mem-a","sourceId":"n-mem-a","tags":["dev"],"seq":3},{"id":"mem-b","kind":"fact","content":"content of mem-b","sourceId":"n-mem-b","tags":["dev"],"seq":4}],"knowledge":[{"id":"k-1","kind":"claim","statement":"statement k-1","sourceMemoryId":"mem-a","confidence":0.8},{"id":"k-2","kind":"claim","statement":"statement k-2","sourceMemoryId":"mem-a","confidence":0.8},{"id":"k-3","kind":"claim","statement":"statement k-3","sourceMemoryId":"mem-c","confidence":0.8}],"relations":[{"id":"rel-1","type":"supports","from":"k-1","to":"k-3"}],"steps":[]}
 
@@ -188,7 +194,7 @@ invalid json
 
 == sse after intents
 event: projection
-data: {"revision":16,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1"},{"id":"goal-g2","name":"g2","attention":false,"state":"active","success":"done","handle":"g-f520d785"}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0"}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
+data: {"revision":16,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1","changedAtRevision":1,"lastActivityTs":<ts>,"steps":{"done":0,"total":1}},{"id":"goal-g2","name":"g2","attention":false,"state":"active","success":"done","handle":"g-f520d785","changedAtRevision":16,"lastActivityTs":<ts>}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0","changedAtRevision":2,"lastActivityTs":<ts>,"active":false}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
 == recorded
 goal|goal-g2|goal.created|{"ID":"goal-g2","Description":"g2","Success":"done","PolicyRef":""}
 source|sha256:2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6|source.registered|{"blob_id":"sha256:2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6","content_hash":"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6","media_type":"text/markdown","size_bytes":1,"source_uri":"note://ui"}
@@ -197,6 +203,6 @@ edge|edge-about-2e7d2c03a950-mission-x|edge.declared|{"ID":"edge-about-2e7d2c03a
 goal|goal-g3|goal.created|{"ID":"goal-g3","Description":"g3","Success":"s","PolicyRef":""}
 goal|goal-g4|goal.created|{"ID":"goal-g4","Description":"g4","Success":"s","PolicyRef":""}
 == workspace after OK
-{"revision":21,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1"},{"id":"goal-g2","name":"g2","attention":false,"state":"active","success":"done","handle":"g-f520d785"},{"id":"goal-g3","name":"g3","attention":false,"state":"active","success":"s","handle":"g-fbf2b1a3"},{"id":"goal-g4","name":"g4","attention":false,"state":"active","success":"s","handle":"g-148cd708"}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0"}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"edge-about-2e7d2c03a950-mission-x","from":{"id":"note-2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:op","correlation":"relay"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
+{"revision":21,"body":{"missions":[{"id":"goal-g","name":"dev goal","attention":false,"state":"active","success":"done","handle":"g-6b36d8a1","changedAtRevision":1,"lastActivityTs":<ts>,"steps":{"done":0,"total":1}},{"id":"goal-g2","name":"g2","attention":false,"state":"active","success":"done","handle":"g-f520d785","changedAtRevision":16,"lastActivityTs":<ts>},{"id":"goal-g3","name":"g3","attention":false,"state":"active","success":"s","handle":"g-fbf2b1a3","changedAtRevision":20,"lastActivityTs":<ts>},{"id":"goal-g4","name":"g4","attention":false,"state":"active","success":"s","handle":"g-148cd708","changedAtRevision":21,"lastActivityTs":<ts>}],"tasks":[{"id":"mission-x","missionId":"goal-g","name":"dev mission","state":"queued","hasProgress":false,"attention":false,"handle":"m-cf10b7f0","changedAtRevision":2,"lastActivityTs":<ts>,"active":false}],"gates":[],"deliverables":[],"edges":[{"id":"e-about-g","from":{"id":"mem-b","type":"memory"},"to":{"id":"goal-g","type":"goal"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"e-about-m","from":{"id":"mem-a","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:tester","correlation":"test"},{"id":"edge-about-2e7d2c03a950-mission-x","from":{"id":"note-2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6","type":"memory"},"to":{"id":"mission-x","type":"mission"},"edgeKind":"about","actor":"unverified-local-operator:op","correlation":"relay"}],"counts":{"running":0,"needsYou":0,"blocked":0},"attention":[],"capabilities":{"mission-x":{"pause":"disabled","resume":"enabled","instruct":"enabled"}},"gateCapabilities":{}}}
 
 `
