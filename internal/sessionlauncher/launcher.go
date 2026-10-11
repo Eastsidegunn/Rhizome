@@ -112,6 +112,9 @@ type Launcher struct {
 
 	startMu sync.Mutex // serializes Prepare/Start/Shutdown: one spawn per key
 	closed  bool       // set by Shutdown under startMu: no new spawns
+	// launching holds the executions of in-flight claude --bg launches
+	// (RHZ-143): their slot is reserved under startMu, the spawn runs outside.
+	launching map[string]bool
 	// beforeAccept, when set (tests only), runs between spawn and accept.
 	beforeAccept func()
 	mu           sync.Mutex // guards running
@@ -336,6 +339,9 @@ func (l *Launcher) Prepare(req StartRequest) (StartPlan, string, error) {
 		return StartPlan{}, "", err
 	}
 	plan := StartPlan{ExecutionID: sp.execID}
+	if l.launching[sp.execID] {
+		return plan, launchingReason(sp.execID), nil
+	}
 	if ok {
 		plan.Existing = string(r.State)
 		if reason := l.existingReason(r); reason != "" {
@@ -345,7 +351,11 @@ func (l *Launcher) Prepare(req StartRequest) (StartPlan, string, error) {
 			return plan, "", nil
 		}
 	}
-	if reason := l.busyReason(); reason != "" {
+	busy := l.busyReason
+	if sp.mode == ModeInteractive {
+		busy = l.interactiveBusyReason
+	}
+	if reason := busy(); reason != "" {
 		return plan, reason, nil
 	}
 	return plan, "", nil
@@ -360,6 +370,9 @@ func (l *Launcher) Start(req StartRequest) (string, string, error) {
 	sp, reason := l.spec(req)
 	if reason != "" {
 		return "", reason, nil
+	}
+	if sp.mode == ModeInteractive {
+		return l.startInteractive(sp)
 	}
 	l.startMu.Lock()
 	defer l.startMu.Unlock()
@@ -382,9 +395,6 @@ func (l *Launcher) Start(req StartRequest) (string, string, error) {
 		return sp.execID, reason, nil
 	}
 	sid, _ := newUUID() // "" on failure: launchLocked refuses after the claim
-	if sp.mode == ModeInteractive {
-		return l.launchInteractiveLocked(sp, r, ok, sid)
-	}
 	id, ch, reason, err := l.launchLocked(sp, r, ok, sid)
 	if err != nil || reason != "" {
 		return id, reason, err

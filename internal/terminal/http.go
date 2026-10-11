@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"rhizome/internal/session"
 )
 
 const maxBody = 1 << 20
@@ -53,7 +55,9 @@ type openDTO struct {
 }
 
 type sessionTargetDTO struct {
-	SessionID string `json:"sessionId"`
+	// SessionID is "" for an observed interactive session (RHZ-143: claude
+	// reports it by pid only and it is not in the registry).
+	SessionID string `json:"sessionId,omitempty"`
 	Name      string `json:"name"`
 	MissionID string `json:"missionId,omitempty"`
 	Mode      string `json:"mode"`
@@ -64,6 +68,7 @@ type sessionTargetDTO struct {
 	Attachable bool   `json:"attachable"`
 	Kind       string `json:"kind,omitempty"`
 	Status     string `json:"status,omitempty"`
+	Pid        int    `json:"pid,omitempty"`
 }
 
 type listDTO struct {
@@ -191,6 +196,11 @@ func (h *Host) serveList(w http.ResponseWriter) {
 			d.Status = h.Status(s.SessionID)
 		}
 		out.Sessions = append(out.Sessions, d)
+	}
+	if h.Interactive != nil {
+		for _, a := range h.Interactive() {
+			out.Sessions = append(out.Sessions, sessionTargetDTO{Name: a.Name, Mode: session.Interactive, Cwd: a.Cwd, Kind: a.Kind, Status: a.StatusText(), Pid: a.Pid})
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -4,10 +4,12 @@ package session
 // --json` on an interval and reconciles the registry with it, through
 // session.opened / session.closed only: an unchanged observation writes
 // nothing. A claude background session (a pty daemon) is attachable by its
-// short id; an interactive one runs in some other terminal and is listed
-// only (attachable=false). An observed session that disappears is closed.
-// Launcher -p sessions (no Kind) are never touched here: their completion
-// closes them.
+// short id. An interactive one runs in some other terminal and `claude agents`
+// reports it without ids ({name, kind, status, cwd, pid}): RHZ-143 keeps it
+// out of the journal, in the observer's memory only, keyed by pid, and
+// /v1/terminals lists it not attachable. An observed session that disappears
+// is closed. Launcher -p sessions (no Kind) are never touched here: their
+// completion closes them.
 
 import (
 	"bytes"
@@ -35,6 +37,9 @@ const (
 const (
 	ReasonGone    = "observed: session ended"
 	ReasonChanged = "observed: session changed"
+	// ReasonCeilingTime closes a launched --bg session the launcher stopped
+	// at its ceiling time (RHZ-143); the observation never reopens it.
+	ReasonCeilingTime = "ceiling-time"
 )
 
 // AgentsTimeout bounds one `claude agents --json` run.
@@ -68,16 +73,17 @@ func (a Agent) StatusText() string {
 	return a.State
 }
 
-// ListAgents runs `claudePath agents --json` and parses its array. Entries
-// without a sessionId are dropped.
-func ListAgents(claudePath string, timeout time.Duration) ([]Agent, error) {
+// ListAgents runs `claudePath agents --json` and parses its array. Kept: a
+// background entry with a sessionId, an interactive entry with a pid (it has
+// no ids); everything else is dropped.
+func ListAgents(ctx context.Context, claudePath string, timeout time.Duration) ([]Agent, error) {
 	if claudePath == "" {
 		return nil, ErrAgents
 	}
 	if timeout <= 0 {
 		timeout = AgentsTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, claudePath, "agents", "--json")
 	cmd.Stderr = io.Discard
@@ -92,7 +98,7 @@ func ListAgents(claudePath string, timeout time.Duration) ([]Agent, error) {
 	}
 	res := make([]Agent, 0, len(all))
 	for _, a := range all {
-		if strings.TrimSpace(a.SessionID) != "" {
+		if (a.Kind == KindBackground && strings.TrimSpace(a.SessionID) != "") || (a.Kind == KindInteractive && a.Pid > 0) {
 			res = append(res, a)
 		}
 	}
@@ -102,7 +108,7 @@ func ListAgents(claudePath string, timeout time.Duration) ([]Agent, error) {
 // FindAgent returns the agents entry of one session id.
 func FindAgent(agents []Agent, sessionID string) (Agent, bool) {
 	for _, a := range agents {
-		if a.SessionID == sessionID {
+		if sessionID != "" && a.SessionID == sessionID {
 			return a, true
 		}
 	}
@@ -155,11 +161,13 @@ func observed(a Agent, prev *Session) Opened {
 }
 
 // Reconcile applies one agents observation to the registry and returns the
-// number of events written. Rules: an unknown or closed session is opened;
-// an open one whose kind or attach id differs is closed and reopened with
-// the observed values; an open observed session (Kind set) missing from the
-// observation is closed. Entries with a non-absolute cwd or an unknown kind
-// are skipped (and so, if open and observed before, closed).
+// number of events written. Only background entries are journaled. Rules: an
+// unknown or closed session is opened (except one closed at its ceiling
+// time); an open one whose kind or attach id differs is closed and reopened
+// with the observed values; an open observed session (Kind set) missing from
+// the observation is closed. Entries with a non-absolute cwd, no sessionId or
+// another kind are skipped (and so, if open and observed before, closed: an
+// interactive session journaled by RHZ-142 closes on the first tick).
 func (s Service) Reconcile(agents []Agent) (int, error) {
 	if s.Store == nil {
 		return 0, errors.New("nil store")
@@ -184,7 +192,7 @@ func (s Service) Reconcile(agents []Agent) (int, error) {
 	}
 	sort.Slice(agents, func(i, j int) bool { return agents[i].SessionID < agents[j].SessionID })
 	for _, a := range agents {
-		if seen[a.SessionID] || !filepath.IsAbs(a.Cwd) || (a.Kind != KindBackground && a.Kind != KindInteractive) {
+		if a.SessionID == "" || seen[a.SessionID] || !filepath.IsAbs(a.Cwd) || a.Kind != KindBackground {
 			continue
 		}
 		seen[a.SessionID] = true
@@ -192,6 +200,8 @@ func (s Service) Reconcile(agents []Agent) (int, error) {
 		switch {
 		case prev != nil && prev.State == Open && prev.Kind == "":
 			// a launcher -p session: its completion owns the stream
+		case prev != nil && prev.State == Closed && prev.Reason == ReasonCeilingTime:
+			// stopped at its ceiling; a daemon still winding down stays closed
 		case prev == nil || prev.State != Open:
 			_, err := s.Open(observed(a, prev))
 			keep(err)
@@ -251,8 +261,30 @@ func (s Service) Adopt(p Opened) (Session, error) {
 	return s.Open(p)
 }
 
+// Retire closes an open session in the order of Reconcile and Adopt (the
+// launcher's ceiling stop, RHZ-143). stop (nil = none) runs first under the
+// same lock, so no observation can close the session as gone meanwhile; a
+// failed stop or a session no longer open writes nothing.
+func (s Service) Retire(id, reason string, stop func() error) (bool, error) {
+	reconcileMu.Lock()
+	defer reconcileMu.Unlock()
+	cur, err := s.Get(id)
+	if err != nil || cur.State != Open {
+		return false, err
+	}
+	if stop != nil {
+		if err := stop(); err != nil {
+			return false, err
+		}
+	}
+	if _, err := s.Close(id, reason); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Observer runs the agents observation for serve and keeps the latest
-// statuses in memory (status changes are not journaled).
+// statuses and interactive sessions in memory (neither is journaled).
 type Observer struct {
 	Store      events.Port
 	ClaudePath string
@@ -265,26 +297,39 @@ type Observer struct {
 	// list overrides ListAgents (tests only).
 	list func() ([]Agent, error)
 
-	mu     sync.Mutex
-	status map[string]string
+	mu          sync.Mutex
+	status      map[string]string
+	interactive []Agent
 }
 
-// Tick runs one observation: a failed agents run writes nothing.
-func (o *Observer) Tick() (int, error) {
+// Tick runs one observation: a failed agents run writes nothing and keeps
+// the last view.
+func (o *Observer) Tick(ctx context.Context) (int, error) {
 	list := o.list
 	if list == nil {
-		list = func() ([]Agent, error) { return ListAgents(o.ClaudePath, o.Timeout) }
+		list = func() ([]Agent, error) { return ListAgents(ctx, o.ClaudePath, o.Timeout) }
 	}
 	agents, err := list()
 	if err != nil {
 		return 0, err
 	}
 	st := map[string]string{}
+	byPid := map[int]Agent{}
 	for _, a := range agents {
-		st[a.SessionID] = a.StatusText()
+		switch {
+		case a.Kind == KindInteractive && a.Pid > 0 && filepath.IsAbs(a.Cwd):
+			byPid[a.Pid] = a
+		case a.SessionID != "":
+			st[a.SessionID] = a.StatusText()
+		}
 	}
+	it := make([]Agent, 0, len(byPid))
+	for _, a := range byPid {
+		it = append(it, a)
+	}
+	sort.Slice(it, func(i, j int) bool { return it[i].Pid < it[j].Pid })
 	o.mu.Lock()
-	o.status = st
+	o.status, o.interactive = st, it
 	o.mu.Unlock()
 	n, err := (Service{Store: o.Store}).Reconcile(agents)
 	if n > 0 && o.OnWrite != nil {
@@ -303,12 +348,23 @@ func (o *Observer) Status(sessionID string) string {
 	return o.status[sessionID]
 }
 
+// Interactive is the last observed claude interactive sessions, by pid
+// (memory only: they have no ids and are never journaled).
+func (o *Observer) Interactive() []Agent {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]Agent(nil), o.interactive...)
+}
+
 // Run ticks every interval until ctx ends; the first tick is immediate.
 func (o *Observer) Run(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
-		if _, err := o.Tick(); err != nil && o.OnError != nil {
+		if _, err := o.Tick(ctx); err != nil && ctx.Err() == nil && o.OnError != nil {
 			o.OnError("session observe: " + err.Error())
 		}
 		select {

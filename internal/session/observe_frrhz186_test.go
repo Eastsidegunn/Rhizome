@@ -6,6 +6,7 @@ package session
 // observation. The fake claude is written into t.TempDir.
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,24 +24,21 @@ func TestReconcileAgentsFRRHZ186(t *testing.T) {
 	}
 	agents := []Agent{
 		{ID: "a1", SessionID: "A", Name: "alpha", Kind: KindBackground, Status: "idle", Cwd: "/tmp"},
-		{ID: "b1", SessionID: "B", Kind: KindInteractive, State: "busy", Cwd: "/tmp"},
+		{Name: "b", Kind: KindInteractive, Status: "busy", Cwd: "/tmp", Pid: 7}, // claude's real interactive shape: no ids
 		{ID: "c1", SessionID: "C", Kind: KindBackground, Cwd: "rel"},
 		{ID: "d1", SessionID: "D", Kind: "weird", Cwd: "/tmp"},
 		{ID: "l1", SessionID: "L", Kind: KindBackground, Cwd: "/tmp"},
 	}
+	// RHZ-143: interactive entries are never journaled
 	n, err := svc.Reconcile(agents)
-	if err != nil || n != 2 || s.Len() != 3 {
+	if err != nil || n != 1 || s.Len() != 2 {
 		t.Fatalf("first reconcile wrote %d (%d events) %v", n, s.Len(), err)
 	}
 	a, _ := svc.Get("A")
 	if a.State != Open || a.Mode != Interactive || a.Kind != KindBackground || a.AttachID != "a1" || a.Name != "alpha" || a.MissionID != "" {
 		t.Fatalf("A = %+v", a)
 	}
-	b, _ := svc.Get("B")
-	if b.Kind != KindInteractive || b.AttachID != "" || b.Name != "b1" {
-		t.Fatalf("B = %+v", b)
-	}
-	for _, id := range []string{"C", "D"} {
+	for _, id := range []string{"", "C", "D"} {
 		if len(s.List(AggregateType, id)) != 0 {
 			t.Fatalf("%s registered", id)
 		}
@@ -49,16 +47,13 @@ func TestReconcileAgentsFRRHZ186(t *testing.T) {
 		t.Fatalf("launcher session touched: %+v", l)
 	}
 	// unchanged observation: zero writes
-	if n, err := svc.Reconcile(agents); err != nil || n != 0 || s.Len() != 3 {
+	if n, err := svc.Reconcile(agents); err != nil || n != 0 || s.Len() != 2 {
 		t.Fatalf("unchanged reconcile wrote %d %v", n, err)
 	}
-	// B gone, A loses its short id → B closed, A closed and reopened
+	// A loses its short id → closed and reopened
 	n, err = svc.Reconcile([]Agent{{SessionID: "A", Kind: KindBackground, Cwd: "/tmp"}})
-	if err != nil || n != 3 {
+	if err != nil || n != 2 {
 		t.Fatalf("change reconcile wrote %d %v", n, err)
-	}
-	if b, _ := svc.Get("B"); b.State != Closed || b.Reason != ReasonGone {
-		t.Fatalf("B = %+v", b)
 	}
 	if a, _ := svc.Get("A"); a.State != Open || a.AttachID != "" || a.Name != "alpha" || a.Revision != 3 {
 		t.Fatalf("A = %+v", a)
@@ -66,8 +61,14 @@ func TestReconcileAgentsFRRHZ186(t *testing.T) {
 	if l, _ := svc.Get("L"); l.State != Open || l.Revision != 1 {
 		t.Fatalf("launcher session closed by absence: %+v", l)
 	}
-	// a gone session that returns is reopened
-	if n, _ := svc.Reconcile([]Agent{{ID: "a1", SessionID: "A", Kind: KindBackground, Cwd: "/tmp"}, {ID: "b1", SessionID: "B", Kind: KindInteractive, Cwd: "/tmp"}}); n != 3 {
+	// A gone → closed; a gone session that returns is reopened
+	if n, _ := svc.Reconcile(nil); n != 1 {
+		t.Fatalf("gone reconcile wrote %d", n)
+	}
+	if a, _ := svc.Get("A"); a.State != Closed || a.Reason != ReasonGone {
+		t.Fatalf("A = %+v", a)
+	}
+	if n, _ := svc.Reconcile([]Agent{{ID: "a1", SessionID: "A", Kind: KindBackground, Cwd: "/tmp"}}); n != 1 {
 		t.Fatalf("return reconcile wrote %d", n)
 	}
 }
@@ -106,7 +107,7 @@ func fakeClaude(t *testing.T, body string) string {
 
 func TestListAgentsAndObserverFRRHZ186(t *testing.T) {
 	ok := fakeClaude(t, `echo '[{"id":"a1","sessionId":"A","name":"n","kind":"background","state":"idle","cwd":"/tmp","pid":42,"startedAt":"2026-10-11T00:00:00Z"},{"id":"x","kind":"background","cwd":"/tmp"}]'`)
-	got, err := ListAgents(ok, 0)
+	got, err := ListAgents(context.Background(), ok, 0)
 	if err != nil || len(got) != 1 || got[0].ID != "a1" || got[0].StatusText() != "idle" || !got[0].Attachable() {
 		t.Fatalf("agents = %+v %v", got, err)
 	}
@@ -116,22 +117,23 @@ func TestListAgentsAndObserverFRRHZ186(t *testing.T) {
 		"object":   fakeClaude(t, `echo '{"agents":[]}'`),
 		"none":     "",
 	} {
-		if _, err := ListAgents(path, 0); !errors.Is(err, ErrAgents) {
+		if _, err := ListAgents(context.Background(), path, 0); !errors.Is(err, ErrAgents) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
 	s := &events.Store{}
 	writes := 0
 	o := &Observer{Store: s, ClaudePath: ok, OnWrite: func() { writes++ }}
-	if n, err := o.Tick(); err != nil || n != 1 || writes != 1 || o.Status("A") != "idle" {
+	ctx := context.Background()
+	if n, err := o.Tick(ctx); err != nil || n != 1 || writes != 1 || o.Status("A") != "idle" {
 		t.Fatalf("tick %d %v writes=%d status=%q", n, err, writes, o.Status("A"))
 	}
-	if n, _ := o.Tick(); n != 0 || writes != 1 || s.Len() != 1 {
+	if n, _ := o.Tick(ctx); n != 0 || writes != 1 || s.Len() != 1 {
 		t.Fatalf("second tick wrote %d", n)
 	}
 	// a failed run writes nothing (the open session is not closed)
 	o.ClaudePath = fakeClaude(t, "exit 1")
-	if n, err := o.Tick(); !errors.Is(err, ErrAgents) || n != 0 || s.Len() != 1 {
+	if n, err := o.Tick(ctx); !errors.Is(err, ErrAgents) || n != 0 || s.Len() != 1 {
 		t.Fatalf("failed tick %d %v", n, err)
 	}
 	var nilObs *Observer

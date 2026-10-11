@@ -930,6 +930,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			},
 			OnError: func(msg string) { fmt.Fprintln(errOut, msg) }}
 		terms.Status = observer.Status
+		terms.Interactive = observer.Interactive
 	}
 	handler = withTerminals(handler, terms.Handler(terminal.LoopbackAddr(*addr)))
 	if serveHandlerWrap != nil {
@@ -956,6 +957,19 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if observer != nil {
 		wg.Add(1)
 		go func() { defer wg.Done(); observer.Run(ctx, *sessObserve) }()
+	}
+	if sl != nil {
+		// RHZ-143 (FR-RHZ-187): the time ceiling of claude --bg sessions
+		// (they have no --max-budget-usd).
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sl.RunCeilings(ctx, sessionlauncher.CeilingInterval, func() {
+				if p, e := workspace.Snapshot(j, h.Trust); e == nil {
+					h.Broadcast(p)
+				}
+			})
+		}()
 	}
 	// Request contexts end with ctx, so long-lived SSE handlers (which exit
 	// only on r.Context()) release their connections instead of stalling

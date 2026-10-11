@@ -331,12 +331,13 @@ func TestNonLoopback501FRRHZ184(t *testing.T) {
 }
 
 // TestSessionTargetFRRHZ184: open registry sessions are listed and attach
-// runs claudePath attach <sessionId>; closed/unknown sessions are 404 and a
-// missing claudePath is 409, both with zero writes.
+// runs claudePath attach <attachId> (RHZ-143: only a session with a short id
+// attaches); closed/unknown sessions are 404 and a missing claudePath is
+// 409, both with zero writes.
 func TestSessionTargetFRRHZ184(t *testing.T) {
 	store := &events.Store{}
 	cwd := t.TempDir()
-	if _, err := (session.Service{Store: store}).Open(session.Opened{SessionID: "sid-1", Name: "work", MissionID: "m-1", Mode: session.Background, Cwd: cwd}); err != nil {
+	if _, err := (session.Service{Store: store}).Open(session.Opened{SessionID: "sid-1", Name: "work", MissionID: "m-1", Mode: session.Interactive, Cwd: cwd, Kind: session.KindBackground, AttachID: "ab-1"}); err != nil {
 		t.Fatal(err)
 	}
 	// a stand-in claude: prints its argv and waits like an attached client.
@@ -375,7 +376,7 @@ func TestSessionTargetFRRHZ184(t *testing.T) {
 	var r struct{ TerminalID string }
 	json.Unmarshal([]byte(out), &r)
 	s := subscribe(t, srv, r.TerminalID)
-	s.waitFor(t, "attach sid-1")
+	s.waitFor(t, "attach ab-1")
 	if l := h.List(); len(l) != 1 || l[0].Kind != KindSession || l[0].SessionID != "sid-1" || l[0].Cwd != cwd {
 		t.Fatalf("list %+v", l)
 	}

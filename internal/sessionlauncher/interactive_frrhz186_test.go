@@ -7,6 +7,7 @@ package sessionlauncher
 // nothing and drops its spawn marker.
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,7 +70,7 @@ func TestInteractiveLaunchFRRHZ186(t *testing.T) {
 		t.Fatalf("resubmit %s %q %v", id2, reason, err)
 	}
 	// the observation of the same session writes nothing
-	agents, err := session.ListAgents(f.bin, 0)
+	agents, err := session.ListAgents(context.Background(), f.bin, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

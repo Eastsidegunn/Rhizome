@@ -4,7 +4,9 @@ package terminal
 
 // RHZ-142 (FR-RHZ-186): the list exposes attachable·kind·status; an
 // observed background session attaches by its short id; a claude
-// interactive session (another terminal) is 409 with zero writes.
+// interactive session (another terminal) is 409 with zero writes. RHZ-143
+// (FR-RHZ-187) narrows the journaled interactive stream to a legacy one:
+// observed interactive sessions now live in memory (terminal_frrhz187_test).
 
 import (
 	"encoding/json"
@@ -23,8 +25,11 @@ func TestObservedSessionTargetFRRHZ186(t *testing.T) {
 	svc := session.Service{Store: store}
 	if _, err := svc.Reconcile([]session.Agent{
 		{ID: "ab12", SessionID: "uuid-bg", Name: "bg", Kind: session.KindBackground, Status: "idle", Cwd: cwd},
-		{ID: "cd34", SessionID: "uuid-it", Name: "it", Kind: session.KindInteractive, Status: "busy", Cwd: cwd},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	// a RHZ-142 journal may still hold an interactive stream
+	if _, err := svc.Open(session.Opened{SessionID: "uuid-it", Name: "it", Mode: session.Interactive, Cwd: cwd, Kind: session.KindInteractive}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Open(session.Opened{SessionID: "uuid-p", Name: "p", Mode: session.Background, Cwd: cwd}); err != nil {

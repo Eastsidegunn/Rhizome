@@ -30,9 +30,14 @@ serve runs `claudePath agents --json` every `-session-observe-interval`
 `session.opened`/`session.closed` only — an unchanged observation writes
 nothing, a failed run writes nothing:
 
-- an unknown or closed session is opened (`mode interactive`, no mission
-  unless the stream already had one); a claude `background` session gets its
-  `attachId`, an `interactive` one (another terminal) does not;
+- only claude `background` entries are journaled. A claude `interactive`
+  entry (a session in some other terminal) carries no ids — `claude agents
+  --json` reports it as `{name, kind, status, cwd, pid}` — so serve keeps it
+  in memory only, keyed by pid, and never writes it (RHZ-143); an
+  interactive stream journaled by RHZ-142 is closed on the first tick;
+- an unknown or closed background session is opened (`mode interactive`, no
+  mission unless the stream already had one) with its `attachId`, except one
+  closed `ceiling-time`, which stays closed;
 - an open session whose `kind`/`attachId` changed is closed
   (`observed: session changed`) and reopened with the observed values, links
   kept;
@@ -47,9 +52,31 @@ waits for it to exit, then records the session with the short id found in
 `claude agents --json`. No child is tracked and no outcome journaled: the
 session ends when a human ends it and the observation closes it.
 
+Ceilings of an interactive launch (RHZ-143, FR-RHZ-187):
+
+- **Dollars are not enforced.** `--max-budget-usd` is a `claude -p` flag;
+  `claude --bg` has none, so `ceiling.usd` / `budget.usd` bound only the
+  recorded policy of an interactive execution, never its spend.
+- **Time is.** Every 15s serve checks the open launched sessions (registry
+  `kind background` with an `executionId`); one whose acceptance is older
+  than its effective `timeMs` is stopped with `claudePath stop <attachId>`
+  and closed `{reason: "ceiling-time"}`. A failed stop writes nothing and is
+  retried. The check reads the journal, so it survives a serve restart.
+- **Count.** The ledger's optional `maxInteractive` (default 2) caps the open
+  launched sessions plus in-flight launches; at the cap a start is refused
+  (`session launcher busy: N interactive open (maxInteractive M)`, zero
+  writes). `maxConcurrent` counts `-p` children only.
+- The start lock covers the checks, intent/claim and the slot reservation;
+  `claude --bg`, the acceptance and `claude agents` run outside it. An
+  identical start meanwhile is refused `session launch in progress (<id>)`.
+
 `GET /v1/terminals` lists `sessions[]{…, attachable, kind, status}`
-(`status` = last observed, not journaled); a session target attaches by
-`attachId` when present; a claude `interactive` session is 409.
+(`status` = last observed, not journaled) and, after the registry sessions,
+the observed interactive ones as `{name, mode, cwd, kind: "interactive",
+status, pid, attachable: false}` with no `sessionId`. A session target
+attaches by `attachId`; every session without one (a launcher `-p` run, an
+interactive stream) is 409 — the same answer the list's `attachable: false`
+gives.
 
 ## Terminal driver
 
