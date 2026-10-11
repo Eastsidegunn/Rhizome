@@ -272,7 +272,7 @@ func TestApproveResumesSameSessionFRRHZ124S2(t *testing.T) {
 	if v := flagValues(args, "--max-budget-usd"); len(v) != 1 || v[0] != "2.50" {
 		t.Fatalf("budget %v", v)
 	}
-	if !strings.Contains(args[1], "승인됨: ok, push allowed") || !strings.Contains(args[1], "/v1/context?task=m1") || !strings.Contains(args[1], "git push 금지") {
+	if !strings.Contains(args[1], "승인됨: ok, push allowed") || !strings.Contains(args[1], "rhizome agent context") || !strings.Contains(args[1], "git push 금지") {
 		t.Fatalf("prompt %q", args[1])
 	}
 	if st := missionOf(t, l, "m1"); st != domain.MissionRunning {
