@@ -286,16 +286,16 @@
       "label": "승인"
     },
     "gate.reject": {
-      "label": "거절"
+      "label": "거부"
     },
     "gate.requestChanges": {
       "label": "수정 요청"
     },
     "request.complete": {
-      "label": "했음"
+      "label": "완료 알림"
     },
     "request.unable": {
-      "label": "못 함"
+      "label": "못 함 알림"
     },
     "mission.create": {
       "label": "새 미션"
