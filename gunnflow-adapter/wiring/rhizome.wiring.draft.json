@@ -208,6 +208,19 @@
           "id": "state",
           "part": "label",
           "source": "state"
+        },
+        {
+          "id": "ask",
+          "part": "text",
+          "action": "gate.ask"
+        },
+        {
+          "id": "send-ask",
+          "part": "send",
+          "action": "gate.ask",
+          "requires": [
+            "ask"
+          ]
         }
       ]
     },
@@ -250,6 +263,21 @@
   "actions": {
     "note.answer": {
       "label": "답하기"
+    },
+    "gate.ask": {
+      "label": "되묻기"
+    },
+    "task.instruct": {
+      "label": "지시 보내기"
+    },
+    "task.pause": {
+      "label": "멈추기"
+    },
+    "task.resume": {
+      "label": "다시 시작"
+    },
+    "mission.create": {
+      "label": "새 미션"
     }
   },
   "detail": {
