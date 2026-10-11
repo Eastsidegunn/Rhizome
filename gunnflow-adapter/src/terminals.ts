@@ -7,7 +7,7 @@
  *                                   (id = Rhizome session id) + live terminals
  *   POST   /terminals               {target:{attach:id}|{shell:{cwd}}, cols, rows}
  *                                   → {terminalId}; Rhizome refusals → 422 {reason}
- *   GET    /terminals/{id}/stream   SSE snapshot·data·exit{code}
+ *   GET    /terminals/{id}/stream   SSE snapshot·data (data: = base64 itself)·exit{code}
  *   POST   /terminals/{id}/input    {data} → 204
  *   POST   /terminals/{id}/resize   {cols, rows} → 204
  *   DELETE /terminals/{id}          → 204
@@ -79,6 +79,20 @@ export function openBody(input: unknown): { body: unknown } | { reason: string }
   const cwd = t.shell?.cwd;
   if (typeof cwd !== 'string' || !cwd) return { reason: 'target.shell.cwd required' };
   return { body: { target: { shell: { cwd } }, cols, rows } };
+}
+
+/**
+ * RHZ-147 (FR-RHZ-191): one Rhizome stream event as a wire frame, or null for
+ * an event name the wire does not carry. Rhizome sends snapshot·output as JSON
+ * {data: base64} and exit as {exitCode}; the wire's snapshot·data `data:` line
+ * is the base64 string itself (empty output = empty line), exit's is {code}.
+ * Unparseable JSON throws, which ends the stream (the cockpit resyncs).
+ */
+export function wireFrame(e: { event: string; data: string }): { event: 'snapshot' | 'data' | 'exit'; data: string } | null {
+  if (e.event !== 'snapshot' && e.event !== 'output' && e.event !== 'exit') return null;
+  const d = JSON.parse(e.data) as { data?: unknown; exitCode?: unknown };
+  if (e.event === 'exit') return { event: 'exit', data: JSON.stringify({ code: Number.isInteger(d.exitCode) ? d.exitCode : null }) };
+  return { event: e.event === 'output' ? 'data' : 'snapshot', data: typeof d.data === 'string' ? d.data : '' };
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
@@ -164,7 +178,7 @@ export function createTerminalRelay(rhizomeUrl: string) {
         return true;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-      const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      const send = (event: string, data: string) => res.write(`event: ${event}\ndata: ${data}\n\n`);
       const reader = up.body.getReader();
       const decoder = new SseDecoder();
       const text = new TextDecoder();
@@ -173,13 +187,10 @@ export function createTerminalRelay(rhizomeUrl: string) {
           const { value, done } = await reader.read();
           if (done) break;
           for (const e of decoder.push(text.decode(value, { stream: true }))) {
-            const d = JSON.parse(e.data) as { data?: string; exitCode?: number };
-            if (e.event === 'snapshot') send('snapshot', { data: d.data });
-            else if (e.event === 'output') send('data', { data: d.data });
-            else if (e.event === 'exit') {
-              markEnded(id);
-              send('exit', { code: d.exitCode });
-            }
+            const frame = wireFrame(e);
+            if (!frame) continue;
+            if (frame.event === 'exit') markEnded(id);
+            send(frame.event, frame.data);
           }
         }
       } catch {

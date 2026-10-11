@@ -9,6 +9,7 @@ import Fastify, { type FastifyReply } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { WiringConfig } from '@gunnflow/contract/wiring';
 import { startRhizomeDirectServer } from '../src/serveDirect.js';
+import { wireFrame } from '../src/terminals.js';
 import { adaptWithReport, nodesOf, SseDecoder } from '../src/upstream.js';
 
 const SNAPSHOT = Buffer.from([0x1b, 0x5b, 0x33, 0x31, 0x6d, 0x00, 0x07, 0x0d, 0x0a, ...Buffer.from('한글 ✓ '), 0xff, 0xfe, 0x1b, 0x5b, 0x30, 0x6d]);
@@ -16,7 +17,54 @@ const OUTPUT = Buffer.from([0x08, 0x7f, 0x1b, 0x5d, 0x30, 0x3b, ...Buffer.from('
 const INPUT = Buffer.from([0x03, 0x1b, 0x5b, 0x41, ...Buffer.from('ls ü→'), 0x0d, 0x80]);
 const b64 = (b: Buffer) => b.toString('base64');
 
-const workspaceBody = { missions: [], tasks: [], gates: [], deliverables: [], edges: [], counts: { running: 0, needsYou: 0, blocked: 0 }, attention: [], capabilities: {}, gateCapabilities: {} };
+// FR-RHZ-191: the Gunnflow BFF's frame rules, copied from @gunnflow/contract
+// wire.ts isWireBase64 and apps/bff/src/direct-terminals.ts eventOf. A frame
+// they reject (null) drops the cockpit's connection — the 'connecting' bug.
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+const isWireBase64 = (s: unknown): s is string => typeof s === 'string' && s.length % 4 === 0 && BASE64.test(s);
+function bffEventOf(frame: { event: string; data: string }) {
+  if (frame.event === 'snapshot' || frame.event === 'data') {
+    if (!isWireBase64(frame.data)) return null;
+    return { type: frame.event, bytesBase64: frame.data };
+  }
+  if (frame.event === 'exit') {
+    try {
+      const code = (JSON.parse(frame.data) as { code?: unknown }).code;
+      if (code === null || Number.isInteger(code)) return { type: 'exit', code: code as number | null };
+    } catch {
+      // broken JSON breaks the wire
+    }
+    return null;
+  }
+  return 'ignore';
+}
+
+describe('Rhizome stream events as wire frames FR-RHZ-191', () => {
+  it('FR-RHZ-191 the old JSON-wrapped data line is what the BFF rejects (the parser copy is not vacuous)', () => {
+    expect(bffEventOf({ event: 'snapshot', data: JSON.stringify({ data: b64(SNAPSHOT) }) })).toBeNull();
+    expect(bffEventOf({ event: 'exit', data: JSON.stringify({ exitCode: 1 }) })).toBeNull();
+  });
+
+  it('FR-RHZ-191 snapshot→snapshot, output→data with the base64 itself, exit{exitCode}→exit{code}, other names dropped', () => {
+    const cases: Array<[{ event: string; data: string }, ReturnType<typeof wireFrame>]> = [
+      [{ event: 'snapshot', data: JSON.stringify({ data: b64(SNAPSHOT) }) }, { event: 'snapshot', data: b64(SNAPSHOT) }],
+      [{ event: 'snapshot', data: JSON.stringify({ data: '' }) }, { event: 'snapshot', data: '' }],
+      [{ event: 'output', data: JSON.stringify({ data: b64(OUTPUT) }) }, { event: 'data', data: b64(OUTPUT) }],
+      [{ event: 'exit', data: JSON.stringify({ exitCode: 130 }) }, { event: 'exit', data: '{"code":130}' }],
+      [{ event: 'exit', data: JSON.stringify({ exitCode: -1 }) }, { event: 'exit', data: '{"code":-1}' }],
+      [{ event: 'exit', data: '{}' }, { event: 'exit', data: '{"code":null}' }],
+      [{ event: 'data', data: JSON.stringify({ data: 'eA==' }) }, null],
+      [{ event: 'future', data: '{}' }, null],
+    ];
+    for (const [input, want] of cases) {
+      const got = wireFrame(input);
+      expect(got, input.event).toEqual(want);
+      if (got) expect(bffEventOf(got), `${input.event} passes the BFF`).not.toBeNull();
+    }
+  });
+});
+
+const workspaceBody ={ missions: [], tasks: [], gates: [], deliverables: [], edges: [], counts: { running: 0, needsYou: 0, blocked: 0 }, attention: [], capabilities: {}, gateCapabilities: {} };
 
 describe('terminal routes on the direct wire FR-RHZ-185', () => {
   const mock = Fastify({ logger: false });
@@ -27,7 +75,7 @@ describe('terminal routes on the direct wire FR-RHZ-185', () => {
 
   beforeEach(() => {
     disabled = false;
-    live = new Set(['t-live', 't-del', 't-sess']);
+    live = new Set(['t-live', 't-del', 't-sess', 't-ended']);
     calls.length = 0;
   });
 
@@ -65,12 +113,21 @@ describe('terminal routes on the direct wire FR-RHZ-185', () => {
     });
     const known = (id: string, reply: FastifyReply) =>
       live.has(id) ? undefined : reply.code(404).type('text/plain').send('404 page not found\n');
+    // Rhizome's real stream shape (internal/terminal/http.go serveStream):
+    // snapshot·output carry JSON {data: base64}, exit carries {exitCode}.
     mock.get('/v1/terminals/:id/stream', (req, reply) => {
       const id = (req.params as { id: string }).id;
       if (known(id, reply)) return reply;
       reply.hijack();
       reply.raw.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (id === 't-ended') {
+        // an already-exited terminal with no output: empty snapshot, then exit
+        reply.raw.write(`event: snapshot\ndata: ${JSON.stringify({ data: '' })}\n\n`);
+        reply.raw.end(`event: exit\ndata: ${JSON.stringify({ exitCode: 0 })}\n\n`);
+        return;
+      }
       reply.raw.write(`event: snapshot\ndata: ${JSON.stringify({ data: b64(SNAPSHOT) })}\n\n`);
+      reply.raw.write(`event: future\ndata: ${JSON.stringify({ data: 'ignored' })}\n\n`);
       // split one event across writes: the relay must reassemble it
       const out = `event: output\ndata: ${JSON.stringify({ data: b64(OUTPUT) })}\n\n`;
       reply.raw.write(out.slice(0, 9));
@@ -99,10 +156,8 @@ describe('terminal routes on the direct wire FR-RHZ-185', () => {
 
   const call = (method: string, path: string, body?: unknown) =>
     fetch(`${server.url}${path}`, { method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) });
-  const events = async (res: Response) => {
-    const decoder = new SseDecoder();
-    return decoder.push(await res.text()).map((e) => ({ event: e.event, data: JSON.parse(e.data) as Record<string, unknown> }));
-  };
+  // The raw wire frames, as the BFF's SSE decoder sees them.
+  const frames = async (res: Response) => new SseDecoder().push(await res.text()).map((e) => ({ event: e.event, data: e.data }));
 
   it('FR-RHZ-185 FR-RHZ-186 GET /terminals lists attachable session targets (session id, name, mission node), leaves attachable:false out, and the open terminals', async () => {
     const res = await call('GET', '/terminals');
@@ -139,20 +194,34 @@ describe('terminal routes on the direct wire FR-RHZ-185', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('FR-RHZ-185 stream relays snapshot·data·exit{code} with the base64 bytes unchanged, then input to the ended terminal is 409', async () => {
+  it('FR-RHZ-185 FR-RHZ-191 stream relays Rhizome snapshot·output·exit{exitCode} as the wire text (base64 data lines, exit {code}), bytes unchanged, then input to the ended terminal is 409', async () => {
     const res = await call('GET', '/terminals/t-live/stream');
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
-    const got = await events(res);
+    const raw = await res.text();
+    // WIRE.md §terminals verbatim: data: is the base64 itself, not JSON; unknown events dropped.
+    expect(raw).toBe(`event: snapshot\ndata: ${b64(SNAPSHOT)}\n\nevent: data\ndata: ${b64(OUTPUT)}\n\nevent: exit\ndata: {"code":130}\n\n`);
+    const got = new SseDecoder().push(raw).map(bffEventOf);
     expect(got).toEqual([
-      { event: 'snapshot', data: { data: b64(SNAPSHOT) } },
-      { event: 'data', data: { data: b64(OUTPUT) } },
-      { event: 'exit', data: { code: 130 } },
+      { type: 'snapshot', bytesBase64: b64(SNAPSHOT) },
+      { type: 'data', bytesBase64: b64(OUTPUT) },
+      { type: 'exit', code: 130 },
     ]);
-    expect(Buffer.from(got[0]!.data.data as string, 'base64').equals(SNAPSHOT)).toBe(true);
-    expect(Buffer.from(got[1]!.data.data as string, 'base64').equals(OUTPUT)).toBe(true);
+    expect(Buffer.from(b64(SNAPSHOT), 'base64').equals(SNAPSHOT)).toBe(true);
     const after = await call('POST', '/terminals/t-live/input', { data: b64(INPUT) });
     expect(after.status).toBe(409);
+  });
+
+  it('FR-RHZ-191 an exited terminal with no output: empty snapshot data line, then exit — both pass the BFF parser', async () => {
+    const got = await frames(await call('GET', '/terminals/t-ended/stream'));
+    expect(got).toEqual([
+      { event: 'snapshot', data: '' },
+      { event: 'exit', data: '{"code":0}' },
+    ]);
+    expect(got.map(bffEventOf)).toEqual([
+      { type: 'snapshot', bytesBase64: '' },
+      { type: 'exit', code: 0 },
+    ]);
   });
 
   it('FR-RHZ-185 input and resize relay as is → 204', async () => {
