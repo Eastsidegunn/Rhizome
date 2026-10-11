@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type intentRequest struct {
@@ -106,6 +107,12 @@ type taskDTO struct {
 	Active       *bool     `json:"active,omitempty"`
 	OriginNodeID string    `json:"originNodeId,omitempty"`
 	Steps        *stepsDTO `json:"steps,omitempty"`
+	// RHZ-136 (FR-RHZ-180, additive, omitempty): mission timing and the
+	// earlier of dueAt and the anchor schedule's nextAt.
+	DueAt          string `json:"dueAt,omitempty"`
+	Anchor         string `json:"anchor,omitempty"`
+	WorkKind       string `json:"workKind,omitempty"`
+	EffectiveDueAt string `json:"effectiveDueAt,omitempty"`
 }
 
 // stepsDTO (RHZ-133, FR-RHZ-173) is emitted only when Total >= 1.
@@ -257,7 +264,9 @@ type dto struct {
 	// They precede the long-pinned final capability fields.
 	Requests            []requestDTO                    `json:"requests,omitempty"`
 	RequestCapabilities map[string]requestCapabilityDTO `json:"requestCapabilities,omitempty"`
-	Trust               *trustDTO                       `json:"trust,omitempty"`
+	// RHZ-136 (FR-RHZ-180): omitted when the journal has no schedule.
+	Schedules []scheduleDTO `json:"schedules,omitempty"`
+	Trust     *trustDTO     `json:"trust,omitempty"`
 	// RHZ-070 (FR-RHZ-099, additive): always present ({} when empty), keyed
 	// by task id / internal gate id. These MUST stay the last two fields so
 	// the pre-RHZ-070 prefix of the body is provably unchanged (A1 pins it).
@@ -319,6 +328,10 @@ func requestIntentHasUnknownField(raw json.RawMessage, kind string) bool {
 		allowed = map[string]bool{"kind": true, "actor": true, "requestId": true, "memo": true, "correlationId": true}
 	case "request.unable", "request.cancel":
 		allowed = map[string]bool{"kind": true, "actor": true, "requestId": true, "reason": true, "correlationId": true}
+	case "schedule.create": // RHZ-136 (FR-RHZ-180)
+		allowed = map[string]bool{"kind": true, "actor": true, "name": true, "goalId": true, "rule": true, "tz": true, "correlationId": true}
+	case "schedule.cancel":
+		allowed = map[string]bool{"kind": true, "actor": true, "scheduleId": true, "reason": true, "correlationId": true}
 	default:
 		return false
 	}
@@ -352,7 +365,7 @@ func toDTO(p Projection) dto {
 	}
 	for _, t := range p.Tasks {
 		active := t.Active
-		d.Tasks = append(d.Tasks, taskDTO{t.ID, t.MissionID, t.Name, t.State, t.CurrentAction, t.Progress, t.HasProgress, t.BlockedReason, t.Attention, p.handles.of("m", t.ID), t.Assignee, t.ChangedAtRevision, t.LastActivityTs, &active, t.OriginNodeID, toStepsDTO(t.Steps)})
+		d.Tasks = append(d.Tasks, taskDTO{t.ID, t.MissionID, t.Name, t.State, t.CurrentAction, t.Progress, t.HasProgress, t.BlockedReason, t.Attention, p.handles.of("m", t.ID), t.Assignee, t.ChangedAtRevision, t.LastActivityTs, &active, t.OriginNodeID, toStepsDTO(t.Steps), "", "", "", ""}) // timing: timingDTO
 	}
 	for _, g := range p.Gates {
 		var verification *verificationDTO
@@ -390,6 +403,11 @@ func toDTO(p Projection) dto {
 	for _, x := range p.Edges {
 		d.Edges = append(d.Edges, edgeDTO{x.ID, map[string]string{"type": x.From.Type, "id": x.From.ID}, map[string]string{"type": x.To.Type, "id": x.To.ID}, string(x.Kind), x.Supersedes, x.Actor, x.Correlation})
 	}
+	now := p.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	timingDTO(&d, p, now)
 	return d
 }
 
@@ -526,6 +544,9 @@ func gateHandleTag(source string) string {
 type HTTPServer struct {
 	Store events.Port
 	Trust *trust.Verifier
+	// Clock reads the time for schedule nextAt / mission effectiveDueAt
+	// (RHZ-136, FR-RHZ-180). nil = time.Now; tests inject a fixed clock.
+	Clock func() time.Time
 	// EnforceJANUS requires signed, Guard-verified inputs for both JANUS allow
 	// and deny decisions. It is composition-root policy, never intent input.
 	EnforceJANUS bool
@@ -595,6 +616,13 @@ func (h *HTTPServer) Broadcast(p Projection) {
 		}
 	}
 }
+func (h *HTTPServer) now() time.Time {
+	if h.Clock != nil {
+		return h.Clock()
+	}
+	return time.Now()
+}
+
 func (h *HTTPServer) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/trust/signing" && r.Method == http.MethodGet {
@@ -657,6 +685,7 @@ func (h *HTTPServer) Handler() http.Handler {
 				http.Error(w, e.Error(), 500)
 				return
 			}
+			p.now = h.now()
 			w.Header().Set("Content-Type", "application/json")
 			// Independent narrowings: ?assignee= touches tasks[] only,
 			// deliverable* touches deliverables[] only.
@@ -676,6 +705,7 @@ func (h *HTTPServer) Handler() http.Handler {
 			h.mu.Unlock()
 			defer func() { h.mu.Lock(); delete(h.subs, ch); h.mu.Unlock() }()
 			write := func(kind string, x Projection) {
+				x.now = h.now()
 				b, _ := json.Marshal(envelope{x.Revision, toDTO(x)})
 				w.Write([]byte("event: " + kind + "\ndata: " + string(b) + "\n\n"))
 				if f, ok := w.(http.Flusher); ok {

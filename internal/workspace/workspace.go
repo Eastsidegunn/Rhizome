@@ -25,6 +25,7 @@ import (
 	"rhizome/internal/question"
 	"rhizome/internal/relation"
 	requestagg "rhizome/internal/request"
+	"rhizome/internal/schedule"
 	"rhizome/internal/secretref"
 	"rhizome/internal/source"
 	"rhizome/internal/surface"
@@ -62,6 +63,9 @@ type Task struct {
 	Active       bool
 	OriginNodeID string
 	Steps        Steps
+	// Timing is the RHZ-136 (FR-RHZ-180) dueAt/anchor/workKind of
+	// mission.created; zero for missions created without them.
+	Timing mission.Timing
 }
 type Gate struct {
 	ID, State, HumanDecision, JanusDecision, MissionID, Name string
@@ -136,6 +140,11 @@ type Projection struct {
 	Requests     []Request
 	// Nil when no request aggregate exists, preserving pre-RHZ-118 bytes.
 	RequestCapabilities map[string]RequestCapabilities
+	// Schedules (RHZ-136, FR-RHZ-180) is nil when no schedule exists.
+	Schedules []Schedule
+	// now is the clock reading for nextAt/effectiveDueAt in toDTO; the
+	// HTTP server sets it from its injectable clock (zero = time.Now()).
+	now time.Time
 	// Capabilities/GateCapabilities (RHZ-070, FR-RHZ-099) are always non-nil
 	// (empty → {} on the wire), keyed by task id / gate id.
 	Capabilities     map[string]TaskCapabilities
@@ -178,6 +187,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 	p.handles = buildHandleIndex(all)
 	goals, mids, gids, qids, dids, eids, reqs, rids := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	act := activityIndex{}
+	sids := map[string]bool{}
 	for _, e := range all {
 		if e.Sequence > p.Revision {
 			p.Revision = e.Sequence
@@ -206,6 +216,8 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			reqs[e.AggregateID] = true
 		case "request":
 			rids[e.AggregateID] = true
+		case "schedule":
+			sids[e.AggregateID] = true
 		}
 	}
 	ids := func(m map[string]bool) []string {
@@ -223,9 +235,13 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		}
 		p.Missions = append(p.Missions, Mission{ID: g.ID, Name: g.Description, State: string(g.State), Success: g.Success, Activity: act.of(aggKey{"goal", id})})
 	}
+	if p.Schedules, err = replaySchedules(s, ids(sids)); err != nil {
+		return p, err
+	}
 	missionStates := map[string]domain.MissionState{}
 	for _, id := range ids(mids) {
-		m, x := projector.ReplayMission(s.List("mission", id))
+		mlog := s.List("mission", id)
+		m, x := projector.ReplayMission(mlog)
 		if x != nil {
 			return p, x
 		}
@@ -251,6 +267,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 		t := Task{ID: m.ID, MissionID: m.GoalID, Name: m.Description, State: mapState(m.State), BlockedReason: blocked, Attention: m.State == domain.MissionWaitingHuman, CurrentAction: sv.CurrentAction, Progress: sv.Progress, HasProgress: sv.HasProgress, Assignee: m.Assignee}
 		t.Activity = act.of(aggKey{"mission", id}, aggKey{"surface", "surface-" + id})
 		t.Active = m.State == domain.MissionRunning
+		t.Timing = missionTimingOf(mlog)
 		missionStates[m.ID] = m.State
 		p.Tasks = append(p.Tasks, t)
 		p.Capabilities[m.ID] = taskCapabilities(m.State)
@@ -738,6 +755,15 @@ type Intent struct {
 	// Re (RHZ-134, FR-RHZ-175) links a note.create of kind question/answer
 	// to the question gate or note it is about; stored as the tag re:<id>.
 	Re string `json:"re,omitempty"`
+	// RHZ-136 (FR-RHZ-180): schedule.create {name, goalId?, rule, tz} /
+	// schedule.cancel {scheduleId}; Rule is decoded strictly by the schedule
+	// kernel. DueAt/Anchor/WorkKind are optional mission.create fields.
+	Rule       json.RawMessage `json:"rule,omitempty"`
+	TZ         string          `json:"tz,omitempty"`
+	ScheduleID string          `json:"scheduleId,omitempty"`
+	DueAt      string          `json:"dueAt,omitempty"`
+	Anchor     string          `json:"anchor,omitempty"`
+	WorkKind   string          `json:"workKind,omitempty"`
 	// requestUnknownField is set only by the HTTP raw-key check. Keeping it
 	// out of JSON lets the request service apply Q11 after Q1-Q10.
 	requestUnknownField bool
@@ -1241,6 +1267,12 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		}
 		gid := "goal-" + in.Name
 		mid := "mission-" + in.Name
+		// RHZ-136 (FR-RHZ-180): optional timing fields, validated before
+		// the first append; absent fields leave the old path byte-identical.
+		timing, reason := missionTiming(s, in)
+		if reason != "" {
+			return RelayResult{Reason: reason}, nil
+		}
 		if in.GoalID != "" {
 			// RHZ-071 (FR-RHZ-100): goalId given — no goal.created; the
 			// mission is assigned under an existing, non-terminal goal.
@@ -1253,7 +1285,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 			case domain.GoalAchieved, domain.GoalFailed, domain.GoalCancelled:
 				return RelayResult{Reason: "goal is terminal"}, nil
 			}
-			if _, e := m.Create(mid, in.GoalID, in.Name, in.Prompt); e != nil {
+			if _, e := m.CreateTimed(mid, in.GoalID, in.Name, in.Prompt, timing); e != nil {
 				return RelayResult{Reason: e.Error()}, nil
 			}
 			return RelayResult{Accepted: true}, nil
@@ -1261,7 +1293,39 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		if _, e := m.CreateGoal(gid, in.Name, in.Prompt, ""); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
-		if _, e := m.Create(mid, gid, in.Name, in.Prompt); e != nil {
+		if _, e := m.CreateTimed(mid, gid, in.Name, in.Prompt, timing); e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
+	case "schedule.create":
+		// RHZ-136 (FR-RHZ-180): strict — an unknown key, a bad rule, an
+		// unknown tz or goal rejects with zero writes.
+		if in.requestUnknownField {
+			return RelayResult{Reason: "unknown field"}, nil
+		}
+		rule, e := schedule.DecodeRule(in.Rule)
+		if e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		if in.GoalID != "" {
+			g, e := projector.ReplayGoal(s.List("goal", in.GoalID))
+			if e != nil {
+				return RelayResult{Reason: "goal not found"}, nil
+			}
+			switch g.State {
+			case domain.GoalAchieved, domain.GoalFailed, domain.GoalCancelled:
+				return RelayResult{Reason: "goal is terminal"}, nil
+			}
+		}
+		if _, e := (schedule.Service{Store: s}).Create(in.Name, in.GoalID, rule, in.TZ); e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
+	case "schedule.cancel":
+		if in.requestUnknownField {
+			return RelayResult{Reason: "unknown field"}, nil
+		}
+		if _, e := (schedule.Service{Store: s}).Cancel(in.ScheduleID, in.Reason); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil
