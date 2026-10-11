@@ -293,7 +293,7 @@ func rhz044GateJSON(t *testing.T, linked bool, name string) map[string]json.RawM
 	if len(p.Gates) != 1 || p.Gates[0].ID != a.ID {
 		t.Fatalf("unexpected gate projection: %+v", p.Gates)
 	}
-	b, err := json.Marshal(toDTO(p))
+	b, err := json.Marshal(toDTO(p, dtoTestNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestEmptyProjectionCollections(t *testing.T) {
 	if err != nil || p.Revision != 0 {
 		t.Fatalf("empty snapshot: %+v error=%v", p, err)
 	}
-	b, err := json.Marshal(toDTO(p))
+	b, err := json.Marshal(toDTO(p, dtoTestNow))
 	if err != nil {
 		t.Fatal(err)
 	}

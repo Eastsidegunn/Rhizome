@@ -347,7 +347,9 @@ func requestIntentHasUnknownField(raw json.RawMessage, kind string) bool {
 	return false
 }
 
-func toDTO(p Projection) dto {
+// toDTO renders p with nextAt/effectiveDueAt read at now. It never reads the
+// wall clock: the HTTP server's now() is the only fallback (RHZ-138).
+func toDTO(p Projection, now time.Time) dto {
 	d := dto{Missions: []missionDTO{}, Tasks: []taskDTO{}, Gates: []gateDTO{}, Deliverables: []deliverableDTO{}, Edges: []edgeDTO{}, Attention: []attentionDTO{}, Capabilities: map[string]taskCapabilityDTO{}, GateCapabilities: map[string]gateCapabilityDTO{}}
 	if p.Trust != nil {
 		d.Trust = &trustDTO{JournalID: p.Trust.JournalID, GenesisKeyID: p.Trust.GenesisKeyID}
@@ -402,10 +404,6 @@ func toDTO(p Projection) dto {
 	}
 	for _, x := range p.Edges {
 		d.Edges = append(d.Edges, edgeDTO{x.ID, map[string]string{"type": x.From.Type, "id": x.From.ID}, map[string]string{"type": x.To.Type, "id": x.To.ID}, string(x.Kind), x.Supersedes, x.Actor, x.Correlation})
-	}
-	now := p.now
-	if now.IsZero() {
-		now = time.Now()
 	}
 	timingDTO(&d, p, now)
 	return d
@@ -711,11 +709,10 @@ func (h *HTTPServer) Handler() http.Handler {
 				http.Error(w, e.Error(), 500)
 				return
 			}
-			p.now = h.now()
 			w.Header().Set("Content-Type", "application/json")
 			// Independent narrowings: ?assignee= touches tasks[] only,
 			// deliverable* touches deliverables[] only.
-			json.NewEncoder(w).Encode(envelope{p.Revision, filterDeliverables(filterAssignee(toDTO(p), q.Get("assignee")), p, dq)})
+			json.NewEncoder(w).Encode(envelope{p.Revision, filterDeliverables(filterAssignee(toDTO(p, h.now()), q.Get("assignee")), p, dq)})
 			return
 		}
 		if r.URL.Path == "/v1/calendar.ics" && r.Method == http.MethodGet {
@@ -735,8 +732,7 @@ func (h *HTTPServer) Handler() http.Handler {
 			h.mu.Unlock()
 			defer func() { h.mu.Lock(); delete(h.subs, ch); h.mu.Unlock() }()
 			write := func(kind string, x Projection) {
-				x.now = h.now()
-				b, _ := json.Marshal(envelope{x.Revision, toDTO(x)})
+				b, _ := json.Marshal(envelope{x.Revision, toDTO(x, h.now())})
 				w.Write([]byte("event: " + kind + "\ndata: " + string(b) + "\n\n"))
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()

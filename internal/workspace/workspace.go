@@ -142,9 +142,6 @@ type Projection struct {
 	RequestCapabilities map[string]RequestCapabilities
 	// Schedules (RHZ-136, FR-RHZ-180) is nil when no schedule exists.
 	Schedules []Schedule
-	// now is the clock reading for nextAt/effectiveDueAt in toDTO; the
-	// HTTP server sets it from its injectable clock (zero = time.Now()).
-	now time.Time
 	// Capabilities/GateCapabilities (RHZ-070, FR-RHZ-099) are always non-nil
 	// (empty → {} on the wire), keyed by task id / gate id.
 	Capabilities     map[string]TaskCapabilities

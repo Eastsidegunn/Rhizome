@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"rhizome/internal/events"
@@ -27,8 +28,12 @@ var workKinds = map[string]bool{"processing": true, "understanding": true, "outp
 func missionTiming(s events.Port, in Intent) (mission.Timing, string) {
 	t := mission.Timing{DueAt: in.DueAt, Anchor: in.Anchor, WorkKind: in.WorkKind}
 	if t.DueAt != "" {
-		if _, err := time.Parse(time.RFC3339, t.DueAt); err != nil {
-			return t, fmt.Sprintf("invalid dueAt %q: want RFC3339 with offset", t.DueAt)
+		// Whole seconds only (RHZ-138, FR-RHZ-182): time.Parse accepts a
+		// fraction, which the stored string would keep but every rendering
+		// drops; refuse it (either decimal mark) rather than carry two
+		// readings of one instant. "Z" is a valid offset.
+		if _, err := time.Parse(time.RFC3339, t.DueAt); err != nil || strings.ContainsAny(t.DueAt, ".,") {
+			return t, fmt.Sprintf("invalid dueAt %q: want RFC3339 with offset, whole seconds", t.DueAt)
 		}
 	}
 	if t.Anchor != "" {

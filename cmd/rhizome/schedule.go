@@ -24,6 +24,7 @@ const scheduleUsage = `usage:
   rhizome schedule list [-addr A]
 
 -addr defaults to RHIZOME_BOARD when set, else ` + scheduleDefaultAddr + ` (serve's default).
+A name is the schedule's id: a cancelled schedule's name cannot be reused.
 `
 
 var scheduleWeekdays = map[string]int{"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}

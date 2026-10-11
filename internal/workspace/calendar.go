@@ -15,7 +15,8 @@ import (
 // VEVENTs; non-terminal missions with an effectiveDueAt become 15-minute
 // VEVENTs with two display alarms. Every byte is derived from the journal:
 // DTSTAMP is the envelope time of the entity's latest own event (its last
-// change), schedule DTSTART is the first occurrence after the schedule was
+// change) — or, when its events carry no time, the journal clock at its
+// creation revision (journalClock) — schedule DTSTART is the first occurrence after the schedule was
 // created, and nothing reads the wall clock except effectiveDueAt's anchor
 // nextAt, which comes from the server's injectable Clock like
 // /v1/workspace. Same journal and clock → same bytes.
@@ -46,6 +47,7 @@ func calendarEvents(s events.Port, p Projection, now time.Time, goalID string) (
 	if _, ok := goalName[goalID]; goalID != "" && !ok {
 		return nil, errCalendarGoal
 	}
+	stampAt := journalClock(s.All())
 	var out []calEvent
 	next := map[string]time.Time{}
 	for _, sc := range p.Schedules {
@@ -59,13 +61,14 @@ func calendarEvents(s events.Port, p Projection, now time.Time, goalID string) (
 		if len(log) == 0 {
 			continue
 		}
-		first, ok := sc.sched.NextAt(orEpoch(log[0].CreatedAt))
+		created := orEpoch(orAt(log[0].CreatedAt, stampAt(log[0].Sequence)))
+		first, ok := sc.sched.NextAt(created)
 		if !ok {
 			continue
 		}
 		out = append(out, calEvent{
 			UID: sc.ID + "@rhizome.local", Summary: sc.Name, Description: describeEvent("", goalName[sc.GoalID], sc.GoalID),
-			Stamp: log[len(log)-1].CreatedAt, Start: first, Duration: "PT1H",
+			Stamp: orAt(log[len(log)-1].CreatedAt, created), Start: first, Duration: "PT1H",
 			RRule: "FREQ=WEEKLY;BYDAY=" + icsDays[sc.Rule.Weekday],
 		})
 	}
@@ -80,6 +83,8 @@ func calendarEvents(s events.Port, p Projection, now time.Time, goalID string) (
 		var stamp time.Time
 		if t.LastActivityTs > 0 {
 			stamp = time.UnixMilli(t.LastActivityTs)
+		} else if mlog := s.List("mission", t.ID); len(mlog) > 0 {
+			stamp = stampAt(mlog[0].Sequence)
 		}
 		out = append(out, calEvent{
 			UID: t.ID + "@rhizome.local", Summary: t.Name, Description: describeEvent(t.Timing.WorkKind, goalName[t.MissionID], t.MissionID),
@@ -88,6 +93,39 @@ func calendarEvents(s events.Port, p Projection, now time.Time, goalID string) (
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil
+}
+
+// journalClock answers, for a creation revision seq, the latest envelope
+// time recorded at or before seq — the journal's own clock as of that
+// revision (RHZ-138, FR-RHZ-182). It stands in for an entity whose events
+// carry no time (legacy journals), so DTSTAMP stays a deterministic function
+// of the journal; zero when nothing that early is timed (→ epoch).
+func journalClock(all []events.Event) func(seq uint64) time.Time {
+	seqs := make([]uint64, 0, len(all))
+	upTo := make([]time.Time, 0, len(all))
+	var latest time.Time
+	for _, e := range all {
+		if !e.CreatedAt.IsZero() && e.CreatedAt.After(latest) {
+			latest = e.CreatedAt
+		}
+		seqs = append(seqs, e.Sequence)
+		upTo = append(upTo, latest)
+	}
+	return func(seq uint64) time.Time {
+		i := sort.Search(len(seqs), func(i int) bool { return seqs[i] > seq })
+		if i == 0 {
+			return time.Time{}
+		}
+		return upTo[i-1]
+	}
+}
+
+// orAt is t, or fallback when t is unknown (zero).
+func orAt(t, fallback time.Time) time.Time {
+	if t.IsZero() {
+		return fallback
+	}
+	return t
 }
 
 // orEpoch maps an unknown (zero) envelope time to the Unix epoch so legacy

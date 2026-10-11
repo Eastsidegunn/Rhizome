@@ -186,7 +186,12 @@ func (s Service) Create(name, goalID string, r Rule, tz string) (Schedule, error
 	if err := validCreated(p, p.ID); err != nil {
 		return Schedule{}, err
 	}
-	if len(s.Store.List("schedule", p.ID)) > 0 {
+	if log := s.Store.List("schedule", p.ID); len(log) > 0 {
+		// The id is the name and the stream is append-only, so a cancelled
+		// schedule's name stays taken (RHZ-138, FR-RHZ-182).
+		if old, err := Replay(log); err == nil && old.State != Active {
+			return Schedule{}, fmt.Errorf("schedule name %q belongs to a cancelled schedule; names cannot be reused", name)
+		}
 		return Schedule{}, errors.New("schedule already exists")
 	}
 	b, _ := json.Marshal(p)

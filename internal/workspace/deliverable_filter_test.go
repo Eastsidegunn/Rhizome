@@ -323,7 +323,7 @@ func TestWorkspaceDeliverableFilterAdditiveFRRHZ120(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	golden, err := json.Marshal(envelope{p.Revision, toDTO(p)})
+	golden, err := json.Marshal(envelope{p.Revision, toDTO(p, dtoTestNow)})
 	if err != nil {
 		t.Fatal(err)
 	}

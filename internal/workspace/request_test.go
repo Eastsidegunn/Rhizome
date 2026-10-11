@@ -208,7 +208,7 @@ func TestRequestIntentExactKeysAndReplayDeterminismFRRHZ155(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p1.Requests[0].ID != p2.Requests[0].ID || toDTO(p1).Requests[0].Handle != toDTO(p2).Requests[0].Handle {
+	if p1.Requests[0].ID != p2.Requests[0].ID || toDTO(p1, dtoTestNow).Requests[0].Handle != toDTO(p2, dtoTestNow).Requests[0].Handle {
 		t.Fatal("id/handle changed on replay")
 	}
 }
@@ -223,7 +223,7 @@ func TestRequestCloseIntentRelayFRRHZ156(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := p.Requests[0]
-	handle := toDTO(p).Requests[0].Handle
+	handle := toDTO(p, dtoTestNow).Requests[0].Handle
 	before := len(s.All())
 	if res, _ := RelayIntent(s, Intent{Kind: "request.unable", RequestID: handle}, "closer", noAuthority()); res.Accepted || res.Reason != "reason required" || len(s.All()) != before {
 		t.Fatalf("unable=%#v writes=%d", res, len(s.All())-before)

@@ -1152,7 +1152,7 @@ commands:
   secret    talk to the local secret plane (list, request, ...)
   schedule  add or list weekly schedules on a board (schedule add|list)
   calendar  export a board's calendar feed as .ics (calendar export)
-  help     print this message (also -h, --help)
+  help      print this message (also -h, --help)
 `
 
 func run(args []string, out, errOut io.Writer) int {
