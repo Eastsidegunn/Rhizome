@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"rhizome/internal/session"
 )
@@ -46,6 +47,9 @@ type targetDTO struct {
 	Shell *struct {
 		Cwd string `json:"cwd"`
 	} `json:"shell,omitempty"`
+	Execution *struct {
+		ExecutionID string `json:"executionId"`
+	} `json:"execution,omitempty"`
 }
 
 type openDTO struct {
@@ -75,7 +79,10 @@ type listDTO struct {
 	// SessionTargets is false when no launcher claudePath is configured.
 	SessionTargets bool               `json:"sessionTargets"`
 	Sessions       []sessionTargetDTO `json:"sessions"`
-	Terminals      []Info             `json:"terminals"`
+	// Logs are launcher runs openable read only (RHZ-150); empty without a
+	// launcher logDir.
+	Logs      []LogTarget `json:"logs"`
+	Terminals []Info      `json:"terminals"`
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -154,7 +161,10 @@ func (h *Host) Handler(enabled bool) http.Handler {
 				http.Error(w, "data must be base64", http.StatusBadRequest)
 				return
 			}
-			if err := t.Input(b); err != nil {
+			if err := t.Input(b); errors.Is(err, ErrReadOnly) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			} else if err != nil {
 				http.Error(w, "terminal input failed", http.StatusConflict)
 				return
 			}
@@ -172,7 +182,10 @@ func (h *Host) Handler(enabled bool) http.Handler {
 				http.Error(w, "cols and rows must be 1..1000", http.StatusBadRequest)
 				return
 			}
-			if err := t.Resize(in.Cols, in.Rows); err != nil {
+			if err := t.Resize(in.Cols, in.Rows); errors.Is(err, ErrReadOnly) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			} else if err != nil {
 				http.Error(w, "terminal resize failed", http.StatusConflict)
 				return
 			}
@@ -187,6 +200,10 @@ func (h *Host) serveList(w http.ResponseWriter) {
 	out := listDTO{SessionTargets: h.ClaudePath != "", Sessions: []sessionTargetDTO{}, Terminals: h.List()}
 	ss, err := OpenSessions(h.Store)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if out.Logs, err = h.LogTargets(time.Now()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -226,13 +243,20 @@ func (h *Host) serveOpen(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.Target.Execution != nil {
+		t.Execution = in.Target.Execution.ExecutionID
+		if t.Execution == "" {
+			http.Error(w, "target.execution.executionId required", http.StatusBadRequest)
+			return
+		}
+	}
 	term, err := h.Open(t, in.Cols, in.Rows)
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusCreated, map[string]string{"terminalId": term.ID})
-	case errors.Is(err, ErrSessionNotOpen):
+	case errors.Is(err, ErrSessionNotOpen), errors.Is(err, ErrExecutionAbsent):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, ErrSessionsDisabled), errors.Is(err, ErrClosed), errors.Is(err, ErrNotAttachable):
+	case errors.Is(err, ErrSessionsDisabled), errors.Is(err, ErrClosed), errors.Is(err, ErrNotAttachable), errors.Is(err, ErrLogsDisabled):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)

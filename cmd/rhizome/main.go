@@ -945,6 +945,10 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		claudePath = slCfg.ClaudePath
 	}
 	terms := terminal.New(j, claudePath)
+	if slCfg != nil {
+		// RHZ-150 (FR-RHZ-194): launcher runs' logs, viewable read only.
+		terms.LogDir = slCfg.LogDir
+	}
 	terms.OnError = func(msg string) { fmt.Fprintln(errOut, msg) }
 	// RHZ-142 (FR-RHZ-186): `claude agents --json` observation fills the
 	// registry; -session-observe-interval 0 turns it off.

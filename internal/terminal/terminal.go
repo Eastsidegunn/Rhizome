@@ -4,6 +4,8 @@
 // pipe — Rhizome never interprets, filters or injects terminal bytes, and
 // never writes them to the journal or a log: the journal sees only
 // terminal.opened and terminal.closed on the terminal/<terminalId> stream.
+// The one exception is a log terminal (RHZ-150, logtail.go): no process, a
+// launcher run's stream-json log rendered and masked for people, read only.
 package terminal
 
 import (
@@ -32,6 +34,14 @@ const (
 
 	KindSession = "session"
 	KindShell   = "shell"
+	// KindLog is a read-only view of a launcher run's log (RHZ-150).
+	KindLog = "log"
+
+	// RecentLogs lists a finished launcher run while its log changed this
+	// recently.
+	RecentLogs = time.Hour
+	// logPoll is how often a log terminal looks for new lines.
+	logPoll = 250 * time.Millisecond
 
 	// RingSize bounds the recent-output snapshot a new stream receives.
 	RingSize = 256 << 10
@@ -62,16 +72,26 @@ var (
 // short id is refused like the list marks it (RHZ-143).
 var ErrNotAttachable = errors.New("session not attachable")
 
-// Target is what a terminal runs: exactly one of Session or Shell.
+// RHZ-150: a log terminal refuses input and resize; the text is the reason the
+// cockpit shows.
+var (
+	ErrReadOnly        = errors.New("읽기 전용: 런처 실행 로그 보기라 입력·크기 변경을 받지 않습니다")
+	ErrLogsDisabled    = errors.New("log targets unavailable: no launcher logDir")
+	ErrExecutionAbsent = errors.New("launcher execution not found")
+)
+
+// Target is what a terminal runs: exactly one of Session, Shell or Execution.
 type Target struct {
-	Session string // registry session id → claude attach
-	Shell   string // absolute working directory → $SHELL -l
+	Session   string // registry session id → claude attach
+	Shell     string // absolute working directory → $SHELL -l
+	Execution string // launcher execution id → its log, read only (RHZ-150)
 }
 
 type openedPayload struct {
-	TerminalID string `json:"terminalId"`
-	Kind       string `json:"kind"`
-	SessionID  string `json:"sessionId,omitempty"`
+	TerminalID  string `json:"terminalId"`
+	Kind        string `json:"kind"`
+	SessionID   string `json:"sessionId,omitempty"`
+	ExecutionID string `json:"executionId,omitempty"`
 }
 
 type closedPayload struct {
@@ -93,6 +113,8 @@ type Host struct {
 	// Interactive is the last observed claude interactive sessions (RHZ-143,
 	// session.Observer.Interactive), listed not attachable; nil = none.
 	Interactive func() []session.Agent
+	// LogDir is the launcher ledger's logDir; "" disables log targets.
+	LogDir string
 	// OnError reports journal failures with fixed text (never terminal bytes).
 	OnError func(string)
 	// argv overrides the command line of a target (tests only).
@@ -109,16 +131,24 @@ func New(store events.Port, claudePath string) *Host {
 
 // Terminal is one pseudo-terminal and its child process group.
 type Terminal struct {
-	ID        string
-	Kind      string
-	SessionID string
-	Cwd       string
-	OpenedAt  time.Time
+	ID          string
+	Kind        string
+	SessionID   string
+	ExecutionID string
+	Cwd         string
+	OpenedAt    time.Time
 
 	host    *Host
-	cmd     *exec.Cmd
+	cmd     *exec.Cmd // nil for a log terminal
 	master  *os.File
 	writeMu sync.Mutex
+	// a log terminal's tail ends when stop closes
+	stop     chan struct{}
+	stopOnce sync.Once
+	// watched closes on a log terminal's first stream, so a finished run's
+	// log is shown before the exit
+	watched   chan struct{}
+	watchOnce sync.Once
 
 	mu       sync.Mutex
 	cols     uint16
@@ -137,6 +167,7 @@ type Info struct {
 	TerminalID  string `json:"terminalId"`
 	Kind        string `json:"kind"`
 	SessionID   string `json:"sessionId,omitempty"`
+	ExecutionID string `json:"executionId,omitempty"`
 	Cwd         string `json:"cwd"`
 	Cols        uint16 `json:"cols"`
 	Rows        uint16 `json:"rows"`
@@ -177,7 +208,7 @@ func (h *Host) List() []Info {
 	out := make([]Info, 0, len(ts))
 	for _, t := range ts {
 		t.mu.Lock()
-		out = append(out, Info{TerminalID: t.ID, Kind: t.Kind, SessionID: t.SessionID, Cwd: t.Cwd, Cols: t.cols, Rows: t.rows, Subscribers: len(t.subs), OpenedAt: t.OpenedAt.UnixMilli()})
+		out = append(out, Info{TerminalID: t.ID, Kind: t.Kind, SessionID: t.SessionID, ExecutionID: t.ExecutionID, Cwd: t.Cwd, Cols: t.cols, Rows: t.rows, Subscribers: len(t.subs), OpenedAt: t.OpenedAt.UnixMilli()})
 		t.mu.Unlock()
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TerminalID < out[j].TerminalID })
@@ -280,6 +311,12 @@ func validSize(cols, rows int) bool { return cols >= 1 && cols <= 1000 && rows >
 func (h *Host) Open(t Target, cols, rows int) (*Terminal, error) {
 	if !validSize(cols, rows) {
 		return nil, errors.New("cols and rows must be 1..1000")
+	}
+	if t.Execution != "" {
+		if t.Session != "" || t.Shell != "" {
+			return nil, errors.New("target needs exactly one of session, shell or execution")
+		}
+		return h.openLog(t.Execution, cols, rows)
 	}
 	kind, sid, argv, dir, err := h.resolve(t)
 	if err != nil {
@@ -406,6 +443,11 @@ func (t *Terminal) wait(readerDone chan struct{}) {
 			code = 128 + int(ws.Signal())
 		}
 	}
+	t.finish(code)
+}
+
+// finish records terminal.closed, unlists the terminal and ends its streams.
+func (t *Terminal) finish(code int) {
 	h := t.host
 	b, _ := json.Marshal(closedPayload{TerminalID: t.ID, ExitCode: code})
 	if err := h.Store.Append(1, events.Event{AggregateType: AggregateType, AggregateID: t.ID, Revision: 2, Type: ClosedType, Payload: b}); err != nil && h.OnError != nil {
@@ -464,6 +506,9 @@ func (t *Terminal) Subscribe() (snapshot []byte, ch chan []byte, exited bool, co
 	}
 	ch = make(chan []byte, subBuffer)
 	t.subs[ch] = true
+	if t.watched != nil {
+		t.watchOnce.Do(func() { close(t.watched) })
+	}
 	if t.idle != nil {
 		t.idle.Stop()
 	}
@@ -493,6 +538,9 @@ func (t *Terminal) Done() <-chan struct{} { return t.done }
 
 // Input writes bytes to the pseudo-terminal unchanged.
 func (t *Terminal) Input(p []byte) error {
+	if t.cmd == nil {
+		return ErrReadOnly
+	}
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
 	// a child that stops reading must not wedge every later writer
@@ -505,6 +553,9 @@ func (t *Terminal) Input(p []byte) error {
 func (t *Terminal) Resize(cols, rows int) error {
 	if !validSize(cols, rows) {
 		return errors.New("cols and rows must be 1..1000")
+	}
+	if t.cmd == nil {
+		return ErrReadOnly
 	}
 	if err := setSize(t.master, uint16(cols), uint16(rows)); err != nil {
 		return err
@@ -519,6 +570,11 @@ func (t *Terminal) Resize(cols, rows int) error {
 // SIGKILL as a last resort) and waits for the exit. For a session target only
 // the attach client ends; the Claude session keeps running in its own daemon.
 func (t *Terminal) Close() {
+	if t.cmd == nil {
+		t.stopOnce.Do(func() { close(t.stop) })
+		<-t.done
+		return
+	}
 	pid := t.cmd.Process.Pid
 	for _, step := range []struct {
 		sig   syscall.Signal
