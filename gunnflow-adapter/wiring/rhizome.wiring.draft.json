@@ -208,6 +208,19 @@
           "id": "state",
           "part": "label",
           "source": "state"
+        },
+        {
+          "id": "ask",
+          "part": "text",
+          "action": "gate.ask"
+        },
+        {
+          "id": "send-ask",
+          "part": "send",
+          "action": "gate.ask",
+          "requires": [
+            "ask"
+          ]
         }
       ]
     },
@@ -250,6 +263,42 @@
   "actions": {
     "note.answer": {
       "label": "답하기"
+    },
+    "gate.ask": {
+      "label": "되묻기"
+    },
+    "task.instruct": {
+      "label": "지시 보내기"
+    },
+    "task.pause": {
+      "label": "멈추기"
+    },
+    "task.resume": {
+      "label": "다시 시작"
+    },
+    "task.cancel": {
+      "label": "취소"
+    },
+    "task.forceReplan": {
+      "label": "다시 계획"
+    },
+    "gate.approve": {
+      "label": "승인"
+    },
+    "gate.reject": {
+      "label": "거부"
+    },
+    "gate.requestChanges": {
+      "label": "수정 요청"
+    },
+    "request.complete": {
+      "label": "완료 알림"
+    },
+    "request.unable": {
+      "label": "못 함 알림"
+    },
+    "mission.create": {
+      "label": "새 미션"
     }
   },
   "detail": {

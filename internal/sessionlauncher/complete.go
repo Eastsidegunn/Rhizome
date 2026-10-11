@@ -28,6 +28,7 @@ import (
 	"rhizome/internal/execution"
 	"rhizome/internal/mission"
 	"rhizome/internal/projector"
+	"rhizome/internal/session"
 )
 
 // Denial is one permission denial the harness reported (tool input is not
@@ -273,6 +274,14 @@ func (l *Launcher) finish(ch *child, stopped string) {
 		}
 	}
 	l.fault("mission", ch.missionID, l.toWaiting(ch.missionID, target))
+	if l.RecordSessions {
+		reason := "exited"
+		if stopped != "" {
+			reason = stopped
+		}
+		_, err := (session.Service{Store: l.Store}).Close(ch.sessionID, reason)
+		l.fault("session", ch.execID, err)
+	}
 	if l.Report != nil {
 		l.Report(o)
 	}

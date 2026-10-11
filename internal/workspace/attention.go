@@ -15,6 +15,9 @@ const (
 	attentionGatePending    = "gate_pending"
 	attentionRequestWaiting = "request_waiting"
 	attentionNoteBlocked    = "note_blocked"
+	// attentionSessionStale (RHZ-139, FR-RHZ-183): an open session of a
+	// terminal mission — a human cleanup card.
+	attentionSessionStale = "session_stale"
 	// noteCauseMaxRunes caps the note_blocked cause line.
 	noteCauseMaxRunes = 200
 )
@@ -79,6 +82,12 @@ func applyHumanAttentionNotes(s events.Port, notes noteIndex, p *Projection) err
 	for _, n := range blocked {
 		needs[n.ID] = true
 		p.Attention = append(p.Attention, AttentionItem{Kind: attentionNoteBlocked, RefID: n.ID, Cause: noteCause(n.Content), MissionID: n.MissionID})
+	}
+	for _, x := range p.Sessions {
+		if x.Stale {
+			needs[x.SessionID] = true
+			p.Attention = append(p.Attention, AttentionItem{Kind: attentionSessionStale, RefID: x.SessionID, Cause: x.Name, MissionID: x.MissionID})
+		}
 	}
 	p.Counts.NeedsYou = len(needs)
 	return nil

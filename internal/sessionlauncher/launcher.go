@@ -24,6 +24,7 @@ import (
 	"rhizome/internal/events"
 	"rhizome/internal/execution"
 	"rhizome/internal/policy"
+	"rhizome/internal/session"
 )
 
 const (
@@ -104,6 +105,10 @@ type Launcher struct {
 	// BoardURL is the board base URL named in the session preamble (serve
 	// passes its -addr). "" = DefaultBoardURL.
 	BoardURL string
+	// RecordSessions (RHZ-139, FR-RHZ-183) records every accepted session as
+	// session.opened (mode background, linked by executionId) and its end as
+	// session.closed on the session registry. false = not recorded.
+	RecordSessions bool
 
 	startMu sync.Mutex // serializes Prepare/Start/Shutdown: one spawn per key
 	closed  bool       // set by Shutdown under startMu: no new spawns
@@ -420,6 +425,10 @@ func (l *Launcher) launchLocked(sp spec, r execution.Ref, exists bool, sid strin
 		ch.signal(syscall.SIGKILL)
 		_ = ch.cmd.Wait()
 		return id, nil, "", err
+	}
+	if l.RecordSessions {
+		_, err := (session.Service{Store: l.Store}).Open(session.Opened{SessionID: sid, Name: sp.mission, MissionID: sp.mission, Mode: session.Background, Cwd: sp.workdir, ExecutionID: id})
+		l.fault("session", id, err)
 	}
 	return id, ch, "", nil
 }

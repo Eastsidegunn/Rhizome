@@ -266,7 +266,9 @@ type dto struct {
 	RequestCapabilities map[string]requestCapabilityDTO `json:"requestCapabilities,omitempty"`
 	// RHZ-136 (FR-RHZ-180): omitted when the journal has no schedule.
 	Schedules []scheduleDTO `json:"schedules,omitempty"`
-	Trust     *trustDTO     `json:"trust,omitempty"`
+	// RHZ-139 (FR-RHZ-183): omitted when the journal has no session.
+	Sessions []sessionDTO `json:"sessions,omitempty"`
+	Trust    *trustDTO    `json:"trust,omitempty"`
 	// RHZ-070 (FR-RHZ-099, additive): always present ({} when empty), keyed
 	// by task id / internal gate id. These MUST stay the last two fields so
 	// the pre-RHZ-070 prefix of the body is provably unchanged (A1 pins it).
@@ -332,6 +334,8 @@ func requestIntentHasUnknownField(raw json.RawMessage, kind string) bool {
 		allowed = map[string]bool{"kind": true, "actor": true, "name": true, "goalId": true, "rule": true, "tz": true, "correlationId": true}
 	case "schedule.cancel":
 		allowed = map[string]bool{"kind": true, "actor": true, "scheduleId": true, "reason": true, "correlationId": true}
+	case "session.close": // RHZ-139 (FR-RHZ-183)
+		allowed = map[string]bool{"kind": true, "actor": true, "sessionId": true, "reason": true, "correlationId": true}
 	default:
 		return false
 	}
@@ -406,6 +410,7 @@ func toDTO(p Projection, now time.Time) dto {
 		d.Edges = append(d.Edges, edgeDTO{x.ID, map[string]string{"type": x.From.Type, "id": x.From.ID}, map[string]string{"type": x.To.Type, "id": x.To.ID}, string(x.Kind), x.Supersedes, x.Actor, x.Correlation})
 	}
 	timingDTO(&d, p, now)
+	sessionsDTO(&d, p)
 	return d
 }
 

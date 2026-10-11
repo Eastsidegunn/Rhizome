@@ -31,6 +31,7 @@ import (
 	"rhizome/internal/secretwire"
 	"rhizome/internal/sessionlauncher"
 	"rhizome/internal/source"
+	"rhizome/internal/terminal"
 	"rhizome/internal/trust"
 	"rhizome/internal/workspace"
 )
@@ -536,6 +537,7 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 		return
 	}
 	sl.Store = store
+	sl.RecordSessions = true // RHZ-139 (FR-RHZ-183)
 	if sl.OnError == nil {
 		sl.OnError = func(scope, id string, err error) {
 			fmt.Fprintf(errOut, "session launcher %s %s: %v\n", scope, id, err)
@@ -906,6 +908,15 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			return 2
 		}
 	}
+	// RHZ-140 (FR-RHZ-184): the terminal bridge, active only on a loopback
+	// bind (otherwise 501). Session targets need the launcher's claudePath.
+	claudePath := ""
+	if slCfg != nil {
+		claudePath = slCfg.ClaudePath
+	}
+	terms := terminal.New(j, claudePath)
+	terms.OnError = func(msg string) { fmt.Fprintln(errOut, msg) }
+	handler = withTerminals(handler, terms.Handler(terminal.LoopbackAddr(*addr)))
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
 	}
@@ -948,6 +959,9 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	cancel()
 	<-shutdownDone
 	wg.Wait()
+	// Terminals end with serve (their terminal.closed lands before the
+	// deferred journal close); a Claude session behind an attach keeps running.
+	terms.Shutdown()
 	if sl != nil {
 		// RHZ-124 S1: stop live sessions and drain their completions (stop
 		// request, outcome, mission step, usage note) before the deferred
@@ -1152,6 +1166,7 @@ commands:
   secret    talk to the local secret plane (list, request, ...)
   schedule  add or list weekly schedules on a board (schedule add|list)
   calendar  export a board's calendar feed as .ics (calendar export)
+  session   list, close or write to registered sessions (session list|close|send)
   help      print this message (also -h, --help)
 `
 
@@ -1188,6 +1203,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return scheduleCmd(args[1:], out, errOut)
 	case "calendar":
 		return calendarCmd(args[1:], out, errOut)
+	case "session":
+		return sessionCmd(args[1:], out, errOut)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n\n%s", args[0], rhizomeUsage)
 		return 2

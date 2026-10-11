@@ -100,6 +100,7 @@ Main HTTP routes:
 | `POST /v1/blob`, `GET /v1/blob/{id}` | Store and read content-addressed blobs. |
 | `GET /v1/codeindex` | Read the derived code index. |
 | `GET /v1/secrets` | Project the secret registry as `{revision, body:{secrets}}`: per ref its name, kind, origin, scope tags, state, version, pending request, last outcome, lifecycle times and latest observation. No field holds a secret value. |
+| `/v1/terminals…` | Terminal bridge (loopback binds only); see [Terminal bridge](#terminal-bridge). |
 
 Direct intent kinds are implemented in
 [internal/workspace/workspace.go](internal/workspace/workspace.go):
@@ -479,6 +480,31 @@ wake; these are data and display only.
   the journal at or before the entity's creation revision, and
   `19700101T000000Z` only when no event that early carries a time. An untimed
   schedule's `DTSTART` counts from that same creation-revision time.
+
+### Terminal bridge
+
+`serve` can run a registry session (`claude attach <sessionId>`, with the
+launcher ledger's `claudePath`) or a bare login shell (`$SHELL -l`, else
+`/bin/zsh`) on a pseudo-terminal and pipe its bytes over HTTP. It is a dumb
+pipe: bytes pass unchanged, nothing is interpreted or injected. The routes are
+active only when `-addr` binds a loopback IP (`127.0.0.1`, `::1`); any other
+bind answers `501`, and a non-loopback peer gets `403`.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /v1/terminals` | `{sessionTargets, sessions[], terminals[]}`: open registry sessions (`sessionId, name, missionId, mode, cwd`) and live terminals (`terminalId, kind, sessionId, cwd, cols, rows, subscribers, openedAt`). `sessionTargets` is false without a launcher `claudePath`. |
+| `POST /v1/terminals` | `{target:{session:{sessionId}} \| {shell:{cwd}}, cols, rows}` → `201 {terminalId}`. `cwd` must be an absolute existing directory; `cols`/`rows` are 1..1000. Unknown or closed session `404`, no `claudePath` `409`. |
+| `GET /v1/terminals/{id}/stream` | SSE: `snapshot {data}` (the last 256 KiB of output, base64), then `output {data}` chunks, then `exit {exitCode}` (`128+n` for signal `n`). Several streams may share a terminal; one that falls behind is cut off without `exit` and reconnects for a fresh snapshot. |
+| `POST /v1/terminals/{id}/input` | `{data}` (base64) written to the terminal as is → `204`. Any client may type. |
+| `POST /v1/terminals/{id}/resize` | `{cols, rows}` → `204`. |
+| `DELETE /v1/terminals/{id}` | SIGHUP to the process group, SIGTERM after 2 s, SIGKILL 3 s later as a last resort → `{terminalId, exited, exitCode}`. |
+
+A terminal with no stream for 30 minutes is closed the same way. Closing a
+session terminal ends only the attach client; the Claude session keeps
+running. The journal records only `terminal.opened {terminalId, kind,
+sessionId?}` and `terminal.closed {terminalId, exitCode}` on
+`terminal/<terminalId>`; terminal input and output are never written to the
+journal or a log. Terminals end when `serve` exits.
 
 ## Build and test
 

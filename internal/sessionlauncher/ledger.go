@@ -44,6 +44,11 @@ type Config struct {
 	LogDir         string            `json:"logDir"`
 	MaxConcurrent  int               `json:"maxConcurrent"`
 	Ceiling        Ceiling           `json:"ceiling"`
+	// TerminalDriver (RHZ-139, FR-RHZ-183, optional) is the absolute path of
+	// the external terminal driver for interactive sessions (contract:
+	// internal/session/README.md). omitempty keeps the digest of a ledger
+	// without it unchanged.
+	TerminalDriver string `json:"terminalDriver,omitempty"`
 
 	digest string
 }
@@ -152,6 +157,12 @@ func (c *Config) validate() error {
 	}
 	if writableByOthers(fi) {
 		return fmt.Errorf("claudePath target is group- or world-writable")
+	}
+	if c.TerminalDriver != "" {
+		fi, err := os.Stat(c.TerminalDriver)
+		if !filepath.IsAbs(c.TerminalDriver) || err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+			return fmt.Errorf("terminalDriver must be an absolute path to an executable file")
+		}
 	}
 	if len(c.Workdirs) == 0 {
 		return fmt.Errorf("workdirs required")
