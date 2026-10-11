@@ -108,8 +108,8 @@ describe('terminal routes on the direct wire FR-RHZ-185', () => {
     const res = await call('GET', '/terminals');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([
-      { terminalId: 's-1', label: 'build session', kind: 'attachable', state: 'open', nodeId: 'm-build' },
-      { terminalId: 's-2', label: 's-2', kind: 'attachable', state: 'open' },
+      { terminalId: 's-1', label: 'build session', kind: 'attachable', state: 'running', nodeId: 'm-build' },
+      { terminalId: 's-2', label: 's-2', kind: 'attachable', state: 'running' },
       { terminalId: 't-sess', label: 'build session', kind: 'attachable', state: 'running', nodeId: 'm-build' },
       { terminalId: 't-shell', label: '/Users/me', kind: 'shell', state: 'running' },
     ]);
@@ -231,5 +231,14 @@ describe('wiring draft labels every emitted action FR-RHZ-185', () => {
   it('FR-RHZ-185 every emitted capability action has a non-empty label in the draft actions', () => {
     const missing = emitted.filter((a) => !(Object.hasOwn(draft.actions ?? {}, a) && draft.actions![a]!.label.trim()));
     expect(missing).toEqual([]);
+  });
+});
+
+// FR-RHZ-185: the Gunnflow direct wire accepts only 'running' or 'exited' as a terminal state.
+describe('wire terminal states FR-RHZ-185', () => {
+  it('lists only running or exited states', async () => {
+    const states = new Set(['running', 'exited']);
+    const text = (await import('node:fs')).readFileSync(new URL('../src/terminals.ts', import.meta.url), 'utf8');
+    for (const m of text.matchAll(/state: '([a-z]+)'/g)) expect(states.has(m[1] ?? '')).toBe(true);
   });
 });

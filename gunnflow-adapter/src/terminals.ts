@@ -53,7 +53,7 @@ export function terminalList(body: RhizomeTerminalList): WireTerminal[] {
   const byId = new Map(sessions.map((s) => [s.sessionId, s]));
   const node = (missionId?: string) => (missionId ? { nodeId: missionId } : {});
   const targets: WireTerminal[] = body.sessionTargets
-    ? sessions.filter((s) => s.attachable !== false).map((s): WireTerminal => ({ terminalId: s.sessionId, label: s.name || s.sessionId, kind: 'attachable', state: 'open', ...node(s.missionId) }))
+    ? sessions.filter((s) => s.attachable !== false).map((s): WireTerminal => ({ terminalId: s.sessionId, label: s.name || s.sessionId, kind: 'attachable', state: 'running', ...node(s.missionId) }))
     : [];
   const open: WireTerminal[] = (body.terminals ?? []).map((t): WireTerminal => {
     const s = t.sessionId ? byId.get(t.sessionId) : undefined;
