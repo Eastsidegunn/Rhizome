@@ -568,6 +568,9 @@ type HTTPServer struct {
 	// ExecGateDecided receives recorded launcher-gate decisions
 	// (FR-RHZ-124-S2, RelayHooks.GateDecided). nil = not wired.
 	ExecGateDecided func(GateDecision)
+	// LaunchOptions serves GET /v1/launcher/options (RHZ-148, FR-RHZ-192).
+	// nil = route disabled (404). Injected by the composition root.
+	LaunchOptions *LaunchOptions
 	// Secrets is the single secret writer (FR-RHZ-135), shared by the
 	// composition root with the secret channel. nil = not wired: secret
 	// request intents are refused with X15 and GET /v1/secrets is 404.
@@ -726,6 +729,10 @@ func (h *HTTPServer) Handler() http.Handler {
 		}
 		if r.URL.Path == "/v1/ops/brief" && r.Method == http.MethodGet {
 			h.serveOpsBrief(w, r)
+			return
+		}
+		if r.URL.Path == "/v1/launcher/options" && r.Method == http.MethodGet {
+			h.serveLaunchOptions(w, r)
 			return
 		}
 		if r.URL.Path == "/v1/workspace/stream" && r.Method == http.MethodGet {

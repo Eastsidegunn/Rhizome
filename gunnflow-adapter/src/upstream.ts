@@ -23,7 +23,15 @@ import type {
 } from '@gunnflow/upstream-port';
 import { lookupCapability, validateIntent, type Intent, type NodeProjection } from '@gunnflow/contract';
 import { adaptWorkspaceBody } from './workspaceWire.js';
-import { projectRhizomeNodes, wireFieldsOf, type RhizomeIntegrationReport, type WireFields } from './nodes.js';
+import {
+  launchOptionsOf,
+  projectRhizomeNodes,
+  startChoices,
+  wireFieldsOf,
+  type LaunchOptions,
+  type RhizomeIntegrationReport,
+  type WireFields,
+} from './nodes.js';
 import type { RhizomeExecBody, RhizomeExecSession } from './execution.js';
 import { prepareSigner, SIGNER_REFUSAL, type SigningOptions } from './signing.js';
 
@@ -226,6 +234,33 @@ export function gateAskIntent(
   };
 }
 
+/* ---- RHZ-148 (FR-RHZ-192): starting a mission from the cockpit ---- */
+
+export const MISSION_START_ACTION = 'mission.start';
+export const START_OPTIONS_UNAVAILABLE = 'launch options unavailable in adapter';
+export const START_OPTION_UNKNOWN = 'start option not offered';
+
+/**
+ * The Rhizome intent a cockpit mission.start becomes: mission.start of the
+ * addressed task with the chosen option's sessionMode and workdir (looked up
+ * in the adapter's own options, never parsed from the label); no option =
+ * the first, i.e. the ledger defaults. The model is not sent: Rhizome's
+ * mission.start has no model field and runs the ledger's model, the only one
+ * serve offers. Rhizome's refusals (state, policy, workdir) come back verbatim.
+ */
+export function missionStartIntent(
+  launchOptions: LaunchOptions | undefined,
+  nodeId: unknown,
+  decision: unknown,
+): { ok: true; fields: Record<string, unknown> } | { ok: false; reason: string } {
+  if (!launchOptions || typeof nodeId !== 'string') return { ok: false, reason: START_OPTIONS_UNAVAILABLE };
+  const choices = startChoices(launchOptions);
+  const option = (decision as { option?: unknown } | null | undefined)?.option;
+  const choice = option === undefined ? choices.values().next().value : typeof option === 'string' ? choices.get(option) : undefined;
+  if (!choice) return { ok: false, reason: START_OPTION_UNKNOWN };
+  return { ok: true, fields: { kind: 'mission.start', missionId: nodeId, sessionMode: choice.sessionMode, workdir: choice.workdir } };
+}
+
 /** The upstream's own refusal text from an error response, verbatim when present. */
 async function upstreamReason(res: Response): Promise<string | undefined> {
   const text = (await res.text().catch(() => '')).trim();
@@ -284,7 +319,9 @@ export async function createRhizomeUpstream(
   const wireFields = options.wireFields ?? wireFieldsOf();
 
   let lastWire = await fetchRawSnapshot(baseUrl);
-  const init = adaptWithReport(lastWire, mediaTypeOf, { wireFields });
+  // RHZ-148 (FR-RHZ-192): read at start and again on every stream reconnect (a serve restart can change the ledger).
+  let launchOptions = await fetchLaunchOptions(baseUrl);
+  const init = adaptWithReport(lastWire, mediaTypeOf, { wireFields, launchOptions });
   let current: UpstreamProjectionEnvelope = init.envelope;
   let report: RhizomeIntegrationReport = init.report;
 
@@ -296,7 +333,7 @@ export async function createRhizomeUpstream(
 
   const applyEnvelope = (wire: UpstreamProjectionEnvelope) => {
     lastWire = wire;
-    const adapted = adaptWithReport(wire, mediaTypeOf, { wireFields });
+    const adapted = adaptWithReport(wire, mediaTypeOf, { wireFields, launchOptions });
     current = adapted.envelope;
     report = adapted.report;
     for (const l of listeners) l(current);
@@ -341,9 +378,14 @@ export async function createRhizomeUpstream(
   // disconnect we re-enter via a fresh stream, whose first frame is a full
   // snapshot — that is the resync.
   void (async () => {
+    let reconnect = false;
     while (!closed) {
       try {
         abort = new AbortController();
+        // The stream's first frame is a snapshot, so the refreshed options project with it.
+        // A failed refetch keeps the options already held.
+        if (reconnect) launchOptions = (await fetchLaunchOptions(baseUrl)) ?? launchOptions;
+        reconnect = true;
         await consumeStream(
           `${baseUrl}/v1/workspace/stream`,
           applyEnvelope,
@@ -548,6 +590,12 @@ export async function createRhizomeUpstream(
         if (!ask.ok) return { accepted: false, reason: ask.reason };
         return postIntent({ ...ask.fields, actor });
       }
+      if ((intent as { action?: unknown } | null)?.action === MISSION_START_ACTION) {
+        const i = intent as { nodeId?: unknown; decision?: unknown };
+        const start = missionStartIntent(launchOptions, i.nodeId, i.decision);
+        if (!start.ok) return { accepted: false, reason: start.reason };
+        return postIntent({ ...start.fields, actor });
+      }
       const { kind, rest } = toRhizomeAddress((intent ?? {}) as Record<string, unknown>);
       // Only known intent fields travel (the idempotency key is not one yet); kind and actor are set last.
       const fields = toRhizomeFields(kind, Object.fromEntries(Object.entries(rest).filter(([k]) => INTENT_FIELDS.has(k))));
@@ -636,7 +684,7 @@ export function adaptEnvelope(wire: UpstreamProjectionEnvelope): UpstreamProject
 export function adaptWithReport(
   wire: UpstreamProjectionEnvelope,
   mediaTypeOf?: (blobId: string) => string | undefined,
-  options: { wireFields?: WireFields } = {},
+  options: { wireFields?: WireFields; launchOptions?: LaunchOptions } = {},
 ): {
   envelope: UpstreamProjectionEnvelope;
   report: RhizomeIntegrationReport;
@@ -646,6 +694,7 @@ export function adaptWithReport(
   const { nodes, report } = projectRhizomeNodes(wire.body, body, mediaTypeOf, {
     wireFields: options.wireFields,
     revision: wire.revision,
+    launchOptions: options.launchOptions,
   });
   return { envelope: { revision: wire.revision, body: { ...body, nodes } }, report };
 }
@@ -674,6 +723,26 @@ export function contractRefusal(intent: unknown, nodes: readonly NodeProjection[
   const node = typeof i?.nodeId === 'string' ? nodes.find((n) => n.id === i.nodeId) : undefined;
   const check = validateIntent(intent, lookupCapability(node, action));
   return check.ok ? undefined : check.reason;
+}
+
+const LAUNCH_OPTIONS_TIMEOUT_MS = 2000;
+
+/**
+ * RHZ-148 (FR-RHZ-192): serve's launch options; undefined when serve has none
+ * (404), fails, times out, or answers malformed. Bounded so a half-up serve
+ * never stalls the stream reconnect.
+ */
+async function fetchLaunchOptions(baseUrl: string): Promise<LaunchOptions | undefined> {
+  try {
+    const res = await fetch(`${baseUrl}/v1/launcher/options`, { signal: AbortSignal.timeout(LAUNCH_OPTIONS_TIMEOUT_MS) });
+    if (!res.ok) {
+      await res.arrayBuffer().catch(() => undefined);
+      return undefined;
+    }
+    return launchOptionsOf(await res.json());
+  } catch {
+    return undefined;
+  }
 }
 
 async function fetchRawSnapshot(baseUrl: string): Promise<UpstreamProjectionEnvelope> {

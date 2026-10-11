@@ -11,8 +11,9 @@ export {
 } from './workspaceWire.js';
 export type { GateVerification } from './workspaceWire.js';
 export { APPROVAL_UNVERIFIED, projectRhizomeNodes, shortNameOf, summaryOf, wireFieldsOf, WORKSPACE_NODE_ID } from './nodes.js';
-export type { ProjectOptions, WireFields } from './nodes.js';
-export { adaptEnvelope, adaptWithReport, contractRefusal, nodesOf } from './upstream.js';
+export type { LaunchOptions, ProjectOptions, StartChoice, WireFields } from './nodes.js';
+export { launchOptionsOf, MISSION_START, startChoices } from './nodes.js';
+export { adaptEnvelope, adaptWithReport, contractRefusal, missionStartIntent, nodesOf } from './upstream.js';
 export type { RhizomeIntegrationReport } from './nodes.js';
 export { SseDecoder } from './upstream.js';
 export { detailOf, detailItems } from './details.js';

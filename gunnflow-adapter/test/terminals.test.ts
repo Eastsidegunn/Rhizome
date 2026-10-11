@@ -275,7 +275,11 @@ describe('wiring draft labels every emitted action FR-RHZ-185', () => {
   // request, blocked note, and the workspace root.
   const body = {
     missions: [{ id: 'goal', name: 'goal', attention: false, state: 'active' }],
-    tasks: [{ id: 'task', missionId: 'goal', name: 'task', state: 'running', hasProgress: false, attention: false }],
+    tasks: [
+      { id: 'task', missionId: 'goal', name: 'task', state: 'running', hasProgress: false, attention: false },
+      // FR-RHZ-192: a startable task with launch options carries mission.start.
+      { id: 'task-p', missionId: 'goal', name: 'paused task', state: 'paused', hasProgress: false, attention: false },
+    ],
     gates: [{ id: 'q-1', state: 'pending', superseded: false, name: 'ship?', missionId: 'task', source: 'internal', requestDigest: 'rhz-question-v1:x' }],
     deliverables: [],
     edges: [],
@@ -286,12 +290,13 @@ describe('wiring draft labels every emitted action FR-RHZ-185', () => {
     requests: [{ id: 'r-1', name: 'hand task', state: 'waiting', missionId: 'task', createdAt: '2026-10-10T01:02:03Z' }],
     requestCapabilities: { 'r-1': { complete: 'enabled', unable: 'enabled' } },
   };
-  const emitted = [...new Set(nodesOf(adaptWithReport({ revision: 1, body }).envelope).flatMap((n) => n.capabilities.map((c) => c.action)))].sort();
+  const launchOptions = { sessionModes: ['oneshot', 'interactive'], defaultSessionMode: 'oneshot', workdirs: ['rhizome'], defaultWorkdir: 'rhizome', models: ['m'], defaultModel: 'm' };
+  const emitted = [...new Set(nodesOf(adaptWithReport({ revision: 1, body }, undefined, { launchOptions }).envelope).flatMap((n) => n.capabilities.map((c) => c.action)))].sort();
 
-  it('FR-RHZ-185 the fixture reaches the whole action vocabulary (the check below is not vacuous)', () => {
+  it('FR-RHZ-185 FR-RHZ-192 the fixture reaches the whole action vocabulary (the check below is not vacuous)', () => {
     expect(emitted).toEqual([
       'gate.approve', 'gate.ask', 'gate.reject', 'gate.requestChanges',
-      'mission.create', 'note.answer',
+      'mission.create', 'mission.start', 'note.answer',
       'request.complete', 'request.unable',
       'task.cancel', 'task.forceReplan', 'task.instruct', 'task.pause', 'task.resume',
     ]);

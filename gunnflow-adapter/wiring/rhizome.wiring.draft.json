@@ -195,6 +195,17 @@
           "part": "send",
           "action": "task.resume",
           "requires": []
+        },
+        {
+          "id": "start-choice",
+          "part": "selector",
+          "action": "mission.start"
+        },
+        {
+          "id": "start",
+          "part": "send",
+          "action": "mission.start",
+          "requires": []
         }
       ]
     },
@@ -275,6 +286,9 @@
     },
     "task.resume": {
       "label": "다시 시작"
+    },
+    "mission.start": {
+      "label": "시작"
     },
     "task.cancel": {
       "label": "취소"

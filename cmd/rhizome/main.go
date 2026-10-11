@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -561,7 +562,23 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 	}
 	sl.OnSlotFree = func() { launcherRescan(store, sl) }
 	h.ExecStart = launcherStarter{sl}
+	h.LaunchOptions = launchOptions(sl.Cfg)
 	launcherRescan(store, sl)
+}
+
+// launchOptions is the cockpit's mission.start choice set from the ledger
+// (RHZ-148, FR-RHZ-192): workdir keys sorted, never their directories.
+func launchOptions(c *sessionlauncher.Config) *workspace.LaunchOptions {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(c.Workdirs))
+	for n := range c.Workdirs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return &workspace.LaunchOptions{SessionModes: []string{"oneshot", sessionlauncher.ModeInteractive}, DefaultSessionMode: "oneshot",
+		Workdirs: names, DefaultWorkdir: c.DefaultWorkdir, Models: []string{c.Model}, DefaultModel: c.Model}
 }
 
 // assembleServeWith is assembleServe with an optional session launcher and
