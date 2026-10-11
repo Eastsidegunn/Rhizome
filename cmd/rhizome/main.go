@@ -1151,6 +1151,7 @@ commands:
   code      structure graph of a repository commit, unstable (code graph ...)
   secret    talk to the local secret plane (list, request, ...)
   schedule  add or list weekly schedules on a board (schedule add|list)
+  calendar  export a board's calendar feed as .ics (calendar export)
   help     print this message (also -h, --help)
 `
 
@@ -1185,6 +1186,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return secretCmd(args[1:], out, errOut)
 	case "schedule":
 		return scheduleCmd(args[1:], out, errOut)
+	case "calendar":
+		return calendarCmd(args[1:], out, errOut)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n\n%s", args[0], rhizomeUsage)
 		return 2

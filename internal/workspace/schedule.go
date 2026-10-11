@@ -100,15 +100,21 @@ func timingDTO(d *dto, p Projection, now time.Time) {
 		}
 		x := &d.Tasks[i]
 		x.DueAt, x.Anchor, x.WorkKind = t.Timing.DueAt, t.Timing.Anchor, t.Timing.WorkKind
-		var eff time.Time
-		if due, err := time.Parse(time.RFC3339, t.Timing.DueAt); err == nil {
-			eff = due
-		}
-		if at, ok := next[t.Timing.Anchor]; ok && (eff.IsZero() || at.Before(eff)) {
-			eff = at
-		}
-		if !eff.IsZero() {
+		if eff := effectiveDue(t, next); !eff.IsZero() {
 			x.EffectiveDueAt = eff.Format(time.RFC3339)
 		}
 	}
+}
+
+// effectiveDue is the earlier of a task's dueAt and its anchor schedule's
+// next occurrence (next, keyed by schedule id); zero when neither exists.
+func effectiveDue(t Task, next map[string]time.Time) time.Time {
+	var eff time.Time
+	if due, err := time.Parse(time.RFC3339, t.Timing.DueAt); err == nil {
+		eff = due
+	}
+	if at, ok := next[t.Timing.Anchor]; ok && (eff.IsZero() || at.Before(eff)) {
+		eff = at
+	}
+	return eff
 }

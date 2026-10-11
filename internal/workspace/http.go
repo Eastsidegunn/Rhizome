@@ -623,6 +623,32 @@ func (h *HTTPServer) now() time.Time {
 	return time.Now()
 }
 
+// serveCalendar answers GET /v1/calendar.ics (RHZ-137, FR-RHZ-181). The
+// only query is an optional single ?goal=<goalId>; anything else is 400 and
+// an unknown goal is 404. GET never writes.
+func (h *HTTPServer) serveCalendar(w http.ResponseWriter, r *http.Request) {
+	goal := ""
+	for k, v := range r.URL.Query() {
+		if k != "goal" || len(v) != 1 || strings.TrimSpace(v[0]) == "" {
+			http.Error(w, "invalid calendar query", http.StatusBadRequest)
+			return
+		}
+		goal = v[0]
+	}
+	p, e := Snapshot(h.Store, h.Trust)
+	if e != nil {
+		http.Error(w, e.Error(), 500)
+		return
+	}
+	evs, e := calendarEvents(h.Store, p, h.now(), goal)
+	if errors.Is(e, errCalendarGoal) {
+		http.Error(w, e.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	w.Write(renderICS(evs))
+}
+
 func (h *HTTPServer) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/trust/signing" && r.Method == http.MethodGet {
@@ -690,6 +716,10 @@ func (h *HTTPServer) Handler() http.Handler {
 			// Independent narrowings: ?assignee= touches tasks[] only,
 			// deliverable* touches deliverables[] only.
 			json.NewEncoder(w).Encode(envelope{p.Revision, filterDeliverables(filterAssignee(toDTO(p), q.Get("assignee")), p, dq)})
+			return
+		}
+		if r.URL.Path == "/v1/calendar.ics" && r.Method == http.MethodGet {
+			h.serveCalendar(w, r)
 			return
 		}
 		if r.URL.Path == "/v1/workspace/stream" && r.Method == http.MethodGet {
