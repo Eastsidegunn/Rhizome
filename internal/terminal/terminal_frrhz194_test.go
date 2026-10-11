@@ -111,7 +111,7 @@ func TestMaskFRRHZ194(t *testing.T) {
 		}
 	}
 	// readable things stay: a long path, a git hash, prose
-	keep := "/Users/me/Gunnsplayground/Rhizome/internal/terminal/terminal_frrhz184_test.go 7a49333c0ffee1234567890abcdef0123456789a max tokens used"
+	keep := filepath.Join("workspace", "internal", "terminal", "terminal_frrhz184_test.go") + " 7a49333c0ffee1234567890abcdef0123456789a max tokens used"
 	if Mask(keep) != keep {
 		t.Fatalf("over-masked: %q", Mask(keep))
 	}

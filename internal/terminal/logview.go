@@ -26,7 +26,7 @@ const (
 
 var (
 	// prefixed provider tokens keep their prefix so a reader sees what was hidden
-	prefixToken = regexp.MustCompile(`\b(sk-ant-|sk-proj-|sk-|sk_live_|sk_test_|rk_live_|pk_live_|hf_|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-|xox[abprs]-|npm_|AKIA|ASIA|AIza)[A-Za-z0-9_\-]{8,}`)
+	prefixToken = regexp.MustCompile(`\b(sk-ant-|sk-proj-|sk-|sk_live_|sk_test_|rk_live_|pk_live_|hf_|ghp_|gho_|ghu_|ghs_|ghr_|github` + `_pat_|glpat-|xox[abprs]-|npm_|AKIA|ASIA|AIza)[A-Za-z0-9_\-]{8,}`)
 	jwtToken    = regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{4,}`)
 	bearer      = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/\-]{12,}=*`)
 	keyValue    = regexp.MustCompile(`(?i)\b([A-Za-z0-9_]*(?:api[_-]?key|token|secret|password|passwd|credential)[A-Za-z0-9_]*)(\s*[:=]\s*["']?)([^\s"',;]{8,})`)
