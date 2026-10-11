@@ -53,9 +53,19 @@ type Config struct {
 	// the launcher started; 0 = DefaultMaxInteractive. omitempty keeps the
 	// digest of a ledger without it unchanged.
 	MaxInteractive int `json:"maxInteractive,omitempty"`
+	// AutoCompleteOnDone (RHZ-149, FR-RHZ-193, optional, default false):
+	// after a succeeded run of a mission carrying a done note, serve records
+	// mission.complete as system:lifecycle. StaleDays (optional, 0 = 7) is
+	// the stale-card window. omitempty keeps the digest of a ledger without
+	// them unchanged.
+	AutoCompleteOnDone bool `json:"autoCompleteOnDone,omitempty"`
+	StaleDays          int  `json:"staleDays,omitempty"`
 
 	digest string
 }
+
+// MaxStaleDays caps staleDays.
+const MaxStaleDays = 3650
 
 // DefaultMaxInteractive is maxInteractive when the ledger omits it.
 const DefaultMaxInteractive = 2
@@ -215,6 +225,9 @@ func (c *Config) validate() error {
 	}
 	if c.MaxInteractive < 0 {
 		return fmt.Errorf("maxInteractive must be >= 1 (omit for %d)", DefaultMaxInteractive)
+	}
+	if c.StaleDays < 0 || c.StaleDays > MaxStaleDays {
+		return fmt.Errorf("staleDays must be 1..%d (omit for the default)", MaxStaleDays)
 	}
 	if _, err := usdCents("ceiling.usd", c.Ceiling.USD); err != nil {
 		return err

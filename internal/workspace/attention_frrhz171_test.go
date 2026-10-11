@@ -211,7 +211,9 @@ func TestNeedsYouExclusionsFRRHZ171(t *testing.T) {
 	if _, err := mem.Supersede(orig, memory.Memory{ID: "note-new", Kind: memory.Done, Content: "resolved", SourceType: "test", SourceID: "o", Confidence: 1, MissionID: "m"}); err != nil {
 		t.Fatal(err)
 	}
-	if ny, items := wire132(t, s); ny != 0 || len(items) != 0 {
+	// RHZ-149 (FR-RHZ-193): the replacement is a done note on open mission m,
+	// so m carries exactly one mission_done_review card — nothing else counts.
+	if ny, items := wire132(t, s); ny != 1 || len(items) != 1 || items[0].Kind != attentionMissionDoneReview || items[0].RefID != "m" {
 		t.Fatalf("exclusions: needsYou=%d items=%+v", ny, items)
 	}
 }

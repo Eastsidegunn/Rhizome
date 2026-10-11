@@ -56,6 +56,10 @@
     "cancelled": {
       "glyph": "⏸",
       "tone": "#e8a33d"
+    },
+    "archived": {
+      "glyph": "▪",
+      "tone": "#5b6672"
     }
   },
   "relations": {
@@ -110,6 +114,20 @@
       },
       "mechanism": "interrupt",
       "group": "차단"
+    },
+    {
+      "match": {
+        "cause": "mission_done_review"
+      },
+      "mechanism": "interrupt",
+      "group": "완료 확인"
+    },
+    {
+      "match": {
+        "cause": "stale"
+      },
+      "mechanism": "interrupt",
+      "group": "오래 멈춤"
     },
     {
       "match": {
@@ -319,5 +337,19 @@
     "collapsed": [
       "note"
     ]
-  }
+  },
+  "lenses": [
+    {
+      "id": "deliverables",
+      "label": "Deliverables",
+      "match": {
+        "kinds": [
+          "deliverable"
+        ],
+        "states": [
+          "unstated"
+        ]
+      }
+    }
+  ]
 }

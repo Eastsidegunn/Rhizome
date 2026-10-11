@@ -549,6 +549,13 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 		if err := launcherUsageNote(store, o); err != nil {
 			sl.OnError("note", o.ExecutionID, err)
 		}
+		// RHZ-149 (FR-RHZ-193): opt-in auto-complete — done note + succeeded
+		// run with no denial gate open.
+		if sl.Cfg != nil && sl.Cfg.AutoCompleteOnDone && o.State == execution.Succeeded && o.GateID == "" {
+			if _, err := workspace.AutoCompleteMission(store, o.MissionID); err != nil {
+				sl.OnError("lifecycle", o.MissionID, err)
+			}
+		}
 		if p, e := workspace.Snapshot(store, h.Trust); e == nil {
 			h.Broadcast(p)
 		}
@@ -563,6 +570,9 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 	sl.OnSlotFree = func() { launcherRescan(store, sl) }
 	h.ExecStart = launcherStarter{sl}
 	h.LaunchOptions = launchOptions(sl.Cfg)
+	if sl.Cfg != nil {
+		h.StaleDays = sl.Cfg.StaleDays
+	}
 	launcherRescan(store, sl)
 }
 

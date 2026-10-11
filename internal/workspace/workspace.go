@@ -162,6 +162,8 @@ type Projection struct {
 	// scan as Revision. deliverable.Deliverable belongs to another package,
 	// so the fact rides beside it rather than on it.
 	deliverableActivity map[string]Activity
+	// lifecycle (RHZ-149, FR-RHZ-193) feeds withLifecycle's stale entries.
+	lifecycle lifecycleFacts
 }
 
 func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
