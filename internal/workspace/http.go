@@ -300,6 +300,9 @@ type deliverableDTO struct {
 	// own event. Absent when unknown.
 	ChangedAtRevision uint64 `json:"changedAtRevision,omitempty"`
 	LastActivityTs    int64  `json:"lastActivityTs,omitempty"`
+	// Archived (RHZ-149, FR-RHZ-193, additive, omitempty): the owning
+	// mission is terminal. A live mission's deliverable keeps its bytes.
+	Archived bool `json:"archived,omitempty"`
 }
 type edgeDTO struct {
 	ID          string            `json:"id"`
@@ -402,9 +405,10 @@ func toDTO(p Projection, now time.Time) dto {
 		})
 	}
 	d.Counts.Running, d.Counts.NeedsYou, d.Counts.Blocked = p.Counts.Running, p.Counts.NeedsYou, p.Counts.Blocked
+	archived := archivedMissions(p)
 	for _, x := range p.Deliverables {
 		a := p.deliverableActivity[x.ID]
-		d.Deliverables = append(d.Deliverables, deliverableDTO{x.ID, x.Kind, x.MissionID, x.SourceRef, x.Summary, p.handles.of("d", x.ID), x.GoalID, a.ChangedAtRevision, a.LastActivityTs})
+		d.Deliverables = append(d.Deliverables, deliverableDTO{x.ID, x.Kind, x.MissionID, x.SourceRef, x.Summary, p.handles.of("d", x.ID), x.GoalID, a.ChangedAtRevision, a.LastActivityTs, x.MissionID != "" && archived[x.MissionID]})
 	}
 	for _, x := range p.Edges {
 		d.Edges = append(d.Edges, edgeDTO{x.ID, map[string]string{"type": x.From.Type, "id": x.From.ID}, map[string]string{"type": x.To.Type, "id": x.To.ID}, string(x.Kind), x.Supersedes, x.Actor, x.Correlation})
@@ -565,9 +569,19 @@ type HTTPServer struct {
 	// nil = not wired: mission.start is rejected with "execution start
 	// unavailable" and zero writes. Injected by the composition root.
 	ExecStart ExecStarter
+	// AfterAccept runs after every accepted intent (RHZ-145, FR-RHZ-189:
+	// kicks the procedure executor on a completion or gate answer). nil =
+	// nothing.
+	AfterAccept func()
 	// ExecGateDecided receives recorded launcher-gate decisions
 	// (FR-RHZ-124-S2, RelayHooks.GateDecided). nil = not wired.
 	ExecGateDecided func(GateDecision)
+	// LaunchOptions serves GET /v1/launcher/options (RHZ-148, FR-RHZ-192).
+	// nil = route disabled (404). Injected by the composition root.
+	LaunchOptions *LaunchOptions
+	// StaleDays is the stale-card window in days (RHZ-149, FR-RHZ-193;
+	// ledger staleDays). 0 = DefaultStaleDays.
+	StaleDays int
 	// Secrets is the single secret writer (FR-RHZ-135), shared by the
 	// composition root with the secret channel. nil = not wired: secret
 	// request intents are refused with X15 and GET /v1/secrets is 404.
@@ -619,6 +633,13 @@ func (h *HTTPServer) Broadcast(p Projection) {
 		}
 	}
 }
+
+// dto renders p at now with the RHZ-149 stale entries (FR-RHZ-193).
+func (h *HTTPServer) dto(p Projection) dto {
+	now := h.now()
+	return toDTO(withLifecycle(p, now, h.StaleDays), now)
+}
+
 func (h *HTTPServer) now() time.Time {
 	if h.Clock != nil {
 		return h.Clock()
@@ -717,7 +738,7 @@ func (h *HTTPServer) Handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			// Independent narrowings: ?assignee= touches tasks[] only,
 			// deliverable* touches deliverables[] only.
-			json.NewEncoder(w).Encode(envelope{p.Revision, filterDeliverables(filterAssignee(toDTO(p, h.now()), q.Get("assignee")), p, dq)})
+			json.NewEncoder(w).Encode(envelope{p.Revision, filterDeliverables(filterAssignee(h.dto(p), q.Get("assignee")), p, dq)})
 			return
 		}
 		if r.URL.Path == "/v1/calendar.ics" && r.Method == http.MethodGet {
@@ -726,6 +747,10 @@ func (h *HTTPServer) Handler() http.Handler {
 		}
 		if r.URL.Path == "/v1/ops/brief" && r.Method == http.MethodGet {
 			h.serveOpsBrief(w, r)
+			return
+		}
+		if r.URL.Path == "/v1/launcher/options" && r.Method == http.MethodGet {
+			h.serveLaunchOptions(w, r)
 			return
 		}
 		if r.URL.Path == "/v1/workspace/stream" && r.Method == http.MethodGet {
@@ -741,7 +766,7 @@ func (h *HTTPServer) Handler() http.Handler {
 			h.mu.Unlock()
 			defer func() { h.mu.Lock(); delete(h.subs, ch); h.mu.Unlock() }()
 			write := func(kind string, x Projection) {
-				b, _ := json.Marshal(envelope{x.Revision, toDTO(x, h.now())})
+				b, _ := json.Marshal(envelope{x.Revision, h.dto(x)})
 				w.Write([]byte("event: " + kind + "\ndata: " + string(b) + "\n\n"))
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
@@ -862,6 +887,10 @@ func (h *HTTPServer) Handler() http.Handler {
 			h.answerIntent(w, res, e)
 			return
 		}
+		if runID, ok := strings.CutPrefix(r.URL.Path, "/v1/procedure/runs/"); ok && r.Method == http.MethodGet {
+			h.serveProcedureRun(w, runID)
+			return
+		}
 		if r.URL.Path == "/v1/secrets" && r.Method == http.MethodGet {
 			h.serveSecrets(w, r)
 			return
@@ -889,6 +918,9 @@ func (h *HTTPServer) answerIntent(w http.ResponseWriter, res RelayResult, e erro
 		// a GET /v1/knowledge requery signal, not a knowledge payload.
 		if p, x := Snapshot(h.Store, h.Trust); x == nil {
 			h.Broadcast(p)
+		}
+		if h.AfterAccept != nil {
+			h.AfterAccept()
 		}
 	}
 }

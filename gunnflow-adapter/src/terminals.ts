@@ -12,6 +12,8 @@
  *   POST   /terminals/{id}/resize   {cols, rows} → 204
  *   DELETE /terminals/{id}          → 204
  *
+ * RHZ-150: target {attach:'log:<executionId>'} opens a launcher run's log read
+ * only; its input/resize 409 passes through with Rhizome's read-only reason.
  * Unknown id 404; a terminal this relay saw end (exit relayed or DELETE) is
  * 409 — Rhizome forgets an ended terminal, so the relay remembers it. Rhizome's
  * 501 (non-loopback bind) passes through. The contract package carries no
@@ -39,29 +41,47 @@ interface RhizomeTerminalList {
   // RHZ-142: attachable/kind/status; attachable false = a session claude
   // attach cannot reach (another terminal, a -p run). Absent = older Rhizome.
   sessions?: Array<{ sessionId: string; name?: string; missionId?: string; attachable?: boolean; kind?: string; status?: string }>;
-  terminals?: Array<{ terminalId: string; kind: string; sessionId?: string; cwd?: string }>;
+  // RHZ-150: launcher -p runs openable as a read-only log view.
+  logs?: Array<{ executionId: string; sessionId?: string; missionId?: string; name?: string; running?: boolean }>;
+  terminals?: Array<{ terminalId: string; kind: string; sessionId?: string; executionId?: string; cwd?: string }>;
 }
+
+/** RHZ-150: a log target's wire id; opening it is Rhizome's execution target. */
+export const LOG_PREFIX = 'log:';
+const READ_ONLY = '보기 전용';
 
 /**
  * GET /terminals body from Rhizome's list. Session targets are listed only
  * when Rhizome can attach (sessionTargets); a mission's node id is the
  * Rhizome mission id itself (the adapter projects missions under their id).
  * Sessions Rhizome marks attachable: false are left out (RHZ-142).
+ * RHZ-150: a launcher run's log is an 'attachable' target `log:<executionId>`
+ * labelled 보기 전용 (the wire has no read-only kind); a finished run stays
+ * 'running' so the cockpit can still open it, its label says it ended.
  */
 export function terminalList(body: RhizomeTerminalList): WireTerminal[] {
   const sessions = body.sessions ?? [];
+  const logs = body.logs ?? [];
   const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+  const logById = new Map(logs.map((l) => [l.executionId, l]));
   const node = (missionId?: string) => (missionId ? { nodeId: missionId } : {});
+  const logLabel = (l: { executionId: string; name?: string; running?: boolean }) =>
+    `${l.name || l.executionId} · ${l.running === false ? `끝남 · ${READ_ONLY}` : READ_ONLY}`;
   const targets: WireTerminal[] = body.sessionTargets
     ? sessions.filter((s) => s.attachable !== false).map((s): WireTerminal => ({ terminalId: s.sessionId, label: s.name || s.sessionId, kind: 'attachable', state: 'running', ...node(s.missionId) }))
     : [];
+  const logTargets: WireTerminal[] = logs.map((l): WireTerminal => ({ terminalId: LOG_PREFIX + l.executionId, label: logLabel(l), kind: 'attachable', state: 'running', ...node(l.missionId) }));
   const open: WireTerminal[] = (body.terminals ?? []).map((t): WireTerminal => {
+    if (t.kind === 'log') {
+      const l = t.executionId ? logById.get(t.executionId) : undefined;
+      return { terminalId: t.terminalId, label: logLabel(l ?? { executionId: t.executionId || t.terminalId }), kind: 'attachable', state: 'running', ...node(l?.missionId) };
+    }
     const s = t.sessionId ? byId.get(t.sessionId) : undefined;
     return t.kind === 'shell'
       ? { terminalId: t.terminalId, label: t.cwd || t.terminalId, kind: 'shell', state: 'running' }
       : { terminalId: t.terminalId, label: s?.name || t.sessionId || t.terminalId, kind: 'attachable', state: 'running', ...node(s?.missionId) };
   });
-  return [...targets, ...open];
+  return [...targets, ...logTargets, ...open];
 }
 
 /** Rhizome's open body for a wire target, or the reason it is malformed. */
@@ -74,6 +94,11 @@ export function openBody(input: unknown): { body: unknown } | { reason: string }
   if (typeof cols !== 'number' || typeof rows !== 'number') return { reason: 'cols and rows required' };
   if (t.attach !== undefined) {
     if (typeof t.attach !== 'string' || !t.attach) return { reason: 'target.attach must be a session id' };
+    if (t.attach.startsWith(LOG_PREFIX)) {
+      const executionId = t.attach.slice(LOG_PREFIX.length);
+      if (!executionId) return { reason: 'target.attach log: needs an execution id' };
+      return { body: { target: { execution: { executionId } }, cols, rows } };
+    }
     return { body: { target: { session: { sessionId: t.attach } }, cols, rows } };
   }
   const cwd = t.shell?.cwd;

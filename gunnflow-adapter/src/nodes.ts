@@ -59,6 +59,62 @@ export const NOTE_ANSWER = 'note.answer';
 export const GATE_ASK = 'gate.ask';
 /** Gate projection states in which gate.ask is offered. */
 const GATE_ASK_STATES = new Set<string>(['waiting', 'changes_requested']);
+/**
+ * RHZ-148 (FR-RHZ-192): starting a mission's execution from the cockpit. The
+ * adapter translates it to Rhizome mission.start (upstream.ts). Declared only
+ * on tasks in the wire states Rhizome starts from: queued (planned / ready)
+ * and paused. waiting (waiting_for_*) and blocked are refused by Rhizome, and
+ * a running mission is already live. Only while serve publishes its options.
+ */
+export const MISSION_START = 'mission.start';
+const MISSION_STARTABLE_STATES = new Set<string>(['queued', 'paused']);
+
+/** Rhizome's GET /v1/launcher/options: the ledger's mission.start choices (workdir keys, never paths). */
+export interface LaunchOptions {
+  sessionModes: string[];
+  defaultSessionMode: string;
+  workdirs: string[];
+  defaultWorkdir: string;
+  models: string[];
+  defaultModel: string;
+}
+
+/** One selectable start: what the option label stands for. */
+export interface StartChoice {
+  sessionMode: string;
+  workdir: string;
+  model: string;
+}
+
+/**
+ * The contract offers one selector per action (decision.options, a single
+ * option per intent), so the three choices are one list: every
+ * sessionMode × workdir × model, labelled `<mode> · <workdir> · <model>`,
+ * the ledger defaults first. The label is looked up, never parsed.
+ */
+export function startChoices(lo: LaunchOptions): Map<string, StartChoice> {
+  const first = <T>(xs: T[], d: T) => (xs.includes(d) ? [d, ...xs.filter((x) => x !== d)] : xs);
+  const out = new Map<string, StartChoice>();
+  for (const sessionMode of first(lo.sessionModes, lo.defaultSessionMode)) {
+    for (const workdir of first(lo.workdirs, lo.defaultWorkdir)) {
+      for (const model of first(lo.models, lo.defaultModel)) {
+        out.set(`${sessionMode} · ${workdir} · ${model}`, { sessionMode, workdir, model });
+      }
+    }
+  }
+  return out;
+}
+
+/** A valid options body, or undefined (the action is then not declared). */
+export function launchOptionsOf(body: unknown): LaunchOptions | undefined {
+  const b = body as Record<string, unknown> | null;
+  const strs = (v: unknown): v is string[] => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string' && x !== '');
+  if (typeof b !== 'object' || b === null) return undefined;
+  if (!strs(b.sessionModes) || !strs(b.workdirs) || !strs(b.models)) return undefined;
+  for (const k of ['defaultSessionMode', 'defaultWorkdir', 'defaultModel'] as const) if (typeof b[k] !== 'string') return undefined;
+  return b as unknown as LaunchOptions;
+}
+
 /** State value of a projected blocked note (the only notes on the cockpit). */
 export const NOTE_BLOCKED_STATE = 'blocked';
 
@@ -136,6 +192,8 @@ export interface ProjectOptions {
   wireFields?: WireFields;
   /** Envelope revision bounding changedAtRevision; defaults to the projection's revision. */
   revision?: number;
+  /** RHZ-148 (FR-RHZ-192): serve's launch options; absent = mission.start not declared. */
+  launchOptions?: LaunchOptions;
 }
 
 /** shortName / summary bounds (code points). */
@@ -299,13 +357,21 @@ export function projectRhizomeNodes(
     attention: attentionOf(m.id, m.attention),
     artifacts: [],
   }));
+  const startOptions = options.launchOptions ? [...startChoices(options.launchOptions).keys()] : [];
+  const missionStart = (state: string): Capability[] =>
+    startOptions.length > 0 && MISSION_STARTABLE_STATES.has(state)
+      ? [{ action: MISSION_START, level: 'enabled', decision: { options: startOptions } }]
+      : [];
   const tasks: NodeProjection[] = p.tasks.map((t) => ({
     id: t.id,
     kind: 'task',
     label: t.name,
     state: { value: t.state },
     relations: [...membership(t.missionId), ...edgesFrom(t.id)],
-    capabilities: levels(p.capabilities[t.id], TASK_ACTIONS, (k) => TEXT_REQUIRED.has(k) ? true : undefined),
+    capabilities: [
+      ...levels(p.capabilities[t.id], TASK_ACTIONS, (k) => TEXT_REQUIRED.has(k) ? true : undefined),
+      ...missionStart(t.state),
+    ],
     attention: attentionOf(t.id, t.attention),
     artifacts: [],
   }));

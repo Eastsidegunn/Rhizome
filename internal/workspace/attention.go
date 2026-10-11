@@ -89,6 +89,8 @@ func applyHumanAttentionNotes(s events.Port, notes noteIndex, p *Projection) err
 			p.Attention = append(p.Attention, AttentionItem{Kind: attentionSessionStale, RefID: x.SessionID, Cause: x.Name, MissionID: x.MissionID})
 		}
 	}
+	// RHZ-149 (FR-RHZ-193): done-review cards and the stale-card facts.
+	applyLifecycleNotes(notes, needs, p)
 	p.Counts.NeedsYou = len(needs)
 	return nil
 }

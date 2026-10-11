@@ -92,8 +92,12 @@ interface DeliverableProjection extends Liveness {
   goalId?: string;
   title: string;
   deliverableType: string;
-  /** v1 has no lifecycle state; left absent, never invented. */
-  state?: 'draft' | 'completed';
+  /**
+   * v1 has no lifecycle state; left absent, never invented — except RHZ-149
+   * (FR-RHZ-193): Rhizome's `archived: true` (owning mission terminal) is
+   * carried as state `archived`, so a lens can leave archived ones out.
+   */
+  state?: 'draft' | 'completed' | 'archived';
   /**
    * Rhizome's source reference, carried through so nodes.ts can derive an
    * artifact (id+digest) when it is a content-addressed blob (`sha256:<hex>`).
@@ -248,6 +252,8 @@ interface WireDeliverable extends Liveness {
   goalId?: string;
   sourceRef: string;
   summary: string;
+  /** RHZ-149 (FR-RHZ-193): present (true) only when the owning mission is terminal. */
+  archived?: boolean;
 }
 interface WireEdge {
   id: string;
@@ -474,7 +480,8 @@ export function adaptWorkspaceBody(raw: unknown): WorkspaceProjection {
       title: w.summary || w.sourceRef || w.id,
       deliverableType: w.kind,
       sourceRef: w.sourceRef,
-      // No lifecycle state in v1 → omitted, never invented.
+      // No lifecycle state in v1 → omitted, never invented; archived is Rhizome's fact (RHZ-149).
+      ...(w.archived === true ? { state: 'archived' as const } : {}),
       ...livenessOf(w),
     } satisfies DeliverableProjection;
   });

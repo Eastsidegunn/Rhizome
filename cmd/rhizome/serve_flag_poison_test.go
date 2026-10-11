@@ -42,7 +42,8 @@ const serveHelpGoldenFRRHZ144 = `Usage of serve:
   -janus-world-config string
     	
   -journal string
-    	
+` + "    \t\n" + `  -procedure-interval duration
+    	 (default 15s)
   -secret-plane-id string
     	
   -secret-plane-interval string
@@ -60,7 +61,8 @@ const serveHelpGoldenFRRHZ144 = `Usage of serve:
 // RHZ-124 S1 (FR-RHZ-124-S1) adds exactly one entry:
 // -session-launcher-config. RHZ-107 S4 (FR-RHZ-137) adds exactly three:
 // -secret-plane-id, -secret-plane-interval, -secret-plane-socket. RHZ-142
-// (FR-RHZ-186) adds exactly one: -session-observe-interval.
+// (FR-RHZ-186) adds exactly one: -session-observe-interval. RHZ-145
+// (FR-RHZ-189) adds exactly one: -procedure-interval.
 func TestServeHelpLiteralGoldenFRRHZ144(t *testing.T) {
 	for _, arg := range []string{"-h", "-help"} {
 		var errOut bytes.Buffer

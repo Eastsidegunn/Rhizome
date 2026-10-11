@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -548,6 +549,13 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 		if err := launcherUsageNote(store, o); err != nil {
 			sl.OnError("note", o.ExecutionID, err)
 		}
+		// RHZ-149 (FR-RHZ-193): opt-in auto-complete — done note + succeeded
+		// run with no denial gate open.
+		if sl.Cfg != nil && sl.Cfg.AutoCompleteOnDone && o.State == execution.Succeeded && o.GateID == "" {
+			if _, err := workspace.AutoCompleteMission(store, o.MissionID); err != nil {
+				sl.OnError("lifecycle", o.MissionID, err)
+			}
+		}
 		if p, e := workspace.Snapshot(store, h.Trust); e == nil {
 			h.Broadcast(p)
 		}
@@ -561,7 +569,26 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 	}
 	sl.OnSlotFree = func() { launcherRescan(store, sl) }
 	h.ExecStart = launcherStarter{sl}
+	h.LaunchOptions = launchOptions(sl.Cfg)
+	if sl.Cfg != nil {
+		h.StaleDays = sl.Cfg.StaleDays
+	}
 	launcherRescan(store, sl)
+}
+
+// launchOptions is the cockpit's mission.start choice set from the ledger
+// (RHZ-148, FR-RHZ-192): workdir keys sorted, never their directories.
+func launchOptions(c *sessionlauncher.Config) *workspace.LaunchOptions {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(c.Workdirs))
+	for n := range c.Workdirs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return &workspace.LaunchOptions{SessionModes: []string{"oneshot", sessionlauncher.ModeInteractive}, DefaultSessionMode: "oneshot",
+		Workdirs: names, DefaultWorkdir: c.DefaultWorkdir, Models: []string{c.Model}, DefaultModel: c.Model}
 }
 
 // assembleServeWith is assembleServe with an optional session launcher and
@@ -741,6 +768,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jExec := f.String("janus-exec-config", "", "")
 	slPath := f.String("session-launcher-config", "", "")
 	sessObserve := f.Duration("session-observe-interval", 15*time.Second, "")
+	procInterval := f.Duration("procedure-interval", workspace.DefaultProcedureInterval, "")
 	trustAnchor := f.String("trust-anchor", "", "")
 	trustEnforce := f.String("trust-enforce-janus", "", "")
 	scSocket := f.String("secret-plane-socket", "", "")
@@ -917,6 +945,10 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 		claudePath = slCfg.ClaudePath
 	}
 	terms := terminal.New(j, claudePath)
+	if slCfg != nil {
+		// RHZ-150 (FR-RHZ-194): launcher runs' logs, viewable read only.
+		terms.LogDir = slCfg.LogDir
+	}
 	terms.OnError = func(msg string) { fmt.Fprintln(errOut, msg) }
 	// RHZ-142 (FR-RHZ-186): `claude agents --json` observation fills the
 	// registry; -session-observe-interval 0 turns it off.
@@ -957,6 +989,35 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if observer != nil {
 		wg.Add(1)
 		go func() { defer wg.Done(); observer.Run(ctx, *sessObserve) }()
+	}
+	// RHZ-145 (FR-RHZ-189): the procedure executor, only with a start
+	// backend; -procedure-interval 0 turns it off.
+	if h.ExecStart != nil && *procInterval > 0 {
+		pe := &workspace.ProcedureExecutor{Store: j,
+			Hooks: func() workspace.RelayHooks {
+				return workspace.RelayHooks{Start: h.ExecStart, EnforceJANUS: h.EnforceJANUS}
+			},
+			OnWrite: func() {
+				if p, e := workspace.Snapshot(j, h.Trust); e == nil {
+					h.Broadcast(p)
+				}
+			},
+			OnError: func(msg string) { fmt.Fprintln(errOut, msg) }}
+		if slCfg != nil {
+			pe.Models = []string{slCfg.Model}
+		}
+		h.AfterAccept = pe.Kick
+		if sl != nil {
+			rescan := sl.OnSlotFree
+			sl.OnSlotFree = func() {
+				if rescan != nil {
+					rescan()
+				}
+				pe.Kick()
+			}
+		}
+		wg.Add(1)
+		go func() { defer wg.Done(); pe.Run(ctx, *procInterval) }()
 	}
 	if sl != nil {
 		// RHZ-143 (FR-RHZ-187): the time ceiling of claude --bg sessions
@@ -1198,6 +1259,7 @@ commands:
   code      structure graph of a repository commit, unstable (code graph ...)
   secret    talk to the local secret plane (list, request, ...)
   schedule  add or list weekly schedules on a board (schedule add|list)
+  procedure define, run or inspect executed procedures (define|run|status)
   calendar  export a board's calendar feed as .ics (calendar export)
   ops       print a board's deterministic ops boot summary (ops brief)
   session   list, close or write to registered sessions (session list|close|send)
@@ -1235,6 +1297,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return secretCmd(args[1:], out, errOut)
 	case "schedule":
 		return scheduleCmd(args[1:], out, errOut)
+	case "procedure":
+		return procedureCmd(args[1:], out, errOut)
 	case "calendar":
 		return calendarCmd(args[1:], out, errOut)
 	case "ops":

@@ -9,7 +9,7 @@ import Fastify, { type FastifyReply } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { WiringConfig } from '@gunnflow/contract/wiring';
 import { startRhizomeDirectServer } from '../src/serveDirect.js';
-import { wireFrame } from '../src/terminals.js';
+import { openBody, terminalList, wireFrame } from '../src/terminals.js';
 import { adaptWithReport, nodesOf, SseDecoder } from '../src/upstream.js';
 
 const SNAPSHOT = Buffer.from([0x1b, 0x5b, 0x33, 0x31, 0x6d, 0x00, 0x07, 0x0d, 0x0a, ...Buffer.from('한글 ✓ '), 0xff, 0xfe, 0x1b, 0x5b, 0x30, 0x6d]);
@@ -61,6 +61,33 @@ describe('Rhizome stream events as wire frames FR-RHZ-191', () => {
       expect(got, input.event).toEqual(want);
       if (got) expect(bffEventOf(got), `${input.event} passes the BFF`).not.toBeNull();
     }
+  });
+});
+
+describe('launcher run logs as read-only wire terminals FR-RHZ-194', () => {
+  const body = {
+    sessionTargets: true,
+    sessions: [{ sessionId: 'uuid-live', name: 'm1', missionId: 'm1', attachable: false }],
+    logs: [
+      { executionId: 'exec-live', sessionId: 'uuid-live', missionId: 'm1', name: 'RHZ-150 — 돌고 있는 dev 세션 보기', running: true },
+      { executionId: 'exec-old', sessionId: 'uuid-old', name: 'RHZ-149', running: false },
+    ],
+    terminals: [{ terminalId: 'term-1', kind: 'log', sessionId: 'uuid-live', executionId: 'exec-live', cwd: '/w' }],
+  };
+
+  it('FR-RHZ-194 logs list as attachable log:<executionId> labelled 보기 전용 with the mission node; a finished run stays openable', () => {
+    expect(terminalList(body)).toEqual([
+      { terminalId: 'log:exec-live', label: 'RHZ-150 — 돌고 있는 dev 세션 보기 · 보기 전용', kind: 'attachable', state: 'running', nodeId: 'm1' },
+      { terminalId: 'log:exec-old', label: 'RHZ-149 · 끝남 · 보기 전용', kind: 'attachable', state: 'running' },
+      { terminalId: 'term-1', label: 'RHZ-150 — 돌고 있는 dev 세션 보기 · 보기 전용', kind: 'attachable', state: 'running', nodeId: 'm1' },
+    ]);
+    expect(terminalList({ sessionTargets: false })).toEqual([]);
+  });
+
+  it('FR-RHZ-194 opening log:<executionId> is Rhizome\'s execution target; an empty one is refused', () => {
+    expect(openBody({ target: { attach: 'log:exec-live' }, cols: 80, rows: 24 })).toEqual({ body: { target: { execution: { executionId: 'exec-live' } }, cols: 80, rows: 24 } });
+    expect(openBody({ target: { attach: 'log:' }, cols: 80, rows: 24 })).toHaveProperty('reason');
+    expect(openBody({ target: { attach: 'uuid-bg' }, cols: 80, rows: 24 })).toEqual({ body: { target: { session: { sessionId: 'uuid-bg' } }, cols: 80, rows: 24 } });
   });
 });
 
@@ -275,7 +302,11 @@ describe('wiring draft labels every emitted action FR-RHZ-185', () => {
   // request, blocked note, and the workspace root.
   const body = {
     missions: [{ id: 'goal', name: 'goal', attention: false, state: 'active' }],
-    tasks: [{ id: 'task', missionId: 'goal', name: 'task', state: 'running', hasProgress: false, attention: false }],
+    tasks: [
+      { id: 'task', missionId: 'goal', name: 'task', state: 'running', hasProgress: false, attention: false },
+      // FR-RHZ-192: a startable task with launch options carries mission.start.
+      { id: 'task-p', missionId: 'goal', name: 'paused task', state: 'paused', hasProgress: false, attention: false },
+    ],
     gates: [{ id: 'q-1', state: 'pending', superseded: false, name: 'ship?', missionId: 'task', source: 'internal', requestDigest: 'rhz-question-v1:x' }],
     deliverables: [],
     edges: [],
@@ -286,12 +317,13 @@ describe('wiring draft labels every emitted action FR-RHZ-185', () => {
     requests: [{ id: 'r-1', name: 'hand task', state: 'waiting', missionId: 'task', createdAt: '2026-10-10T01:02:03Z' }],
     requestCapabilities: { 'r-1': { complete: 'enabled', unable: 'enabled' } },
   };
-  const emitted = [...new Set(nodesOf(adaptWithReport({ revision: 1, body }).envelope).flatMap((n) => n.capabilities.map((c) => c.action)))].sort();
+  const launchOptions = { sessionModes: ['oneshot', 'interactive'], defaultSessionMode: 'oneshot', workdirs: ['rhizome'], defaultWorkdir: 'rhizome', models: ['m'], defaultModel: 'm' };
+  const emitted = [...new Set(nodesOf(adaptWithReport({ revision: 1, body }, undefined, { launchOptions }).envelope).flatMap((n) => n.capabilities.map((c) => c.action)))].sort();
 
-  it('FR-RHZ-185 the fixture reaches the whole action vocabulary (the check below is not vacuous)', () => {
+  it('FR-RHZ-185 FR-RHZ-192 the fixture reaches the whole action vocabulary (the check below is not vacuous)', () => {
     expect(emitted).toEqual([
       'gate.approve', 'gate.ask', 'gate.reject', 'gate.requestChanges',
-      'mission.create', 'note.answer',
+      'mission.create', 'mission.start', 'note.answer',
       'request.complete', 'request.unable',
       'task.cancel', 'task.forceReplan', 'task.instruct', 'task.pause', 'task.resume',
     ]);
