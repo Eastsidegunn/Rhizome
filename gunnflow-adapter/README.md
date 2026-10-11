@@ -28,7 +28,8 @@ and any approved or rejected gate with `decidedAt` shows it as a `결정 시각`
 detail item; `decidedAt` is never added to the closed node shape.
 
 Since FR-RHZ-171, `/v1/workspace` `attention[].kind` also includes
-`gate_pending` (pending internal gate), `request_waiting` (waiting request) and
+`gate_pending` (pending internal gate whose mission is not terminal, since
+FR-RHZ-177), `request_waiting` (waiting request) and
 `note_blocked` (a `blocked`-kind or `blocked`/`h-request`-tagged note on an
 open mission), and attention entries may carry an optional `missionId`.
 `counts.needsYou` counts these plus waiting missions, once per id. The adapter
