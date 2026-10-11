@@ -461,6 +461,32 @@ Rhizome and the adapter only describe the work; they never execute the listed
 commands. Do not put secret values in those commands. Write commands so the
 terminal prompts for each secret value at execution time.
 
+### Ops brief
+
+`GET /v1/ops/brief` (`rhizome ops brief [-json] [-addr A]`) is a one-call
+boot summary for a new ops session. It is built by rules from the journal and
+the workspace projection, with no LLM. The same journal and the same server
+clock give the same bytes. Times are absolute KST. The only query is
+`?format=md|json` (default `md`). Sections come in this fixed order, each with
+a line cap. Items over the cap are counted as `…외 N건`.
+
+1. H 대기 (10): attention items grouped by kind, oldest first within a kind.
+2. 실행 중·막힘 (8): running, waiting, blocked and paused missions, each with
+   its open executions and open sessions.
+3. 최근 끝난 실행 (5): the latest ended executions with state, mission, cost
+   (from the launcher's usage note) and end time.
+4. 다음 (6): queued missions in creation order.
+5. 일정·마감 7일 (6): schedule occurrences and `effectiveDueAt` up to 7 days
+   ahead. Overdue deadlines are included and marked `마감 지남`.
+6. 최근 결정 48시간 (5): notes tagged `H-decision`, newest first, first line only.
+7. 열린 실타래 (6): notes tagged `commitment` or `open-thread` with no `done`
+   note tagged `re:<note id>` or sharing one of their `re:` tags, plus question
+   notes with no answer.
+8. 최근 배포 (1): the latest `release` note.
+
+Lines are cut at 110 characters. Items carry handles (`m-…`, `q-…`, `r-…`),
+`note-<8 hex>`, or session and execution ids.
+
 ### Schedules and calendar feed
 
 `rhizome schedule add|list` records weekly schedules (`schedule.create`;

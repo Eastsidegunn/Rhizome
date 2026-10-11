@@ -1199,6 +1199,7 @@ commands:
   secret    talk to the local secret plane (list, request, ...)
   schedule  add or list weekly schedules on a board (schedule add|list)
   calendar  export a board's calendar feed as .ics (calendar export)
+  ops       print a board's deterministic ops boot summary (ops brief)
   session   list, close or write to registered sessions (session list|close|send)
   help      print this message (also -h, --help)
 `
@@ -1236,6 +1237,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return scheduleCmd(args[1:], out, errOut)
 	case "calendar":
 		return calendarCmd(args[1:], out, errOut)
+	case "ops":
+		return opsCmd(args[1:], out, errOut)
 	case "session":
 		return sessionCmd(args[1:], out, errOut)
 	default:

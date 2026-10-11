@@ -724,6 +724,10 @@ func (h *HTTPServer) Handler() http.Handler {
 			h.serveCalendar(w, r)
 			return
 		}
+		if r.URL.Path == "/v1/ops/brief" && r.Method == http.MethodGet {
+			h.serveOpsBrief(w, r)
+			return
+		}
 		if r.URL.Path == "/v1/workspace/stream" && r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/event-stream")
 			p, e := Snapshot(h.Store, h.Trust)
