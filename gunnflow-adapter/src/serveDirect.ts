@@ -14,9 +14,10 @@
  * goal/mission about notes from /v1/context (RHZ-086), failure-isolated.
  * The optional execution surface, GET /execution/:taskId (+ /stream), answers
  * from Rhizome /v1/execution/{missionId} via the upstream's per-task feed
- * (RHZ-094, FR-RHZ-121; projection in ./execution.ts). Terminal has no wire
- * route in the contract: /terminal/* is "not on the direct wire" (404) and the
- * port's terminalSnapshot stays its 501-worded unsupported.
+ * (RHZ-094, FR-RHZ-121; projection in ./execution.ts). The terminal routes
+ * (/terminals…, Gunnflow GF-T2) relay Rhizome /v1/terminals byte for byte
+ * (RHZ-141, FR-RHZ-185; ./terminals.ts); the port's terminalSnapshot stays its
+ * 501-worded unsupported.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -33,6 +34,7 @@ import { blockedNoteEntry, detailItems, fetchContextNotes, noteDetail, noteQuery
 import { executionForWire } from './execution.js';
 import { createRhizomeUpstream, nodesOf } from './upstream.js';
 import type { SigningOptions } from './signing.js';
+import { createTerminalRelay } from './terminals.js';
 
 /** The direct wire's fixed paths and header (WIRE.md). */
 const WIRE = DIRECT_WIRE;
@@ -84,6 +86,7 @@ export async function startRhizomeDirectServer(options: {
     const e = upstream.snapshot();
     return { revision: e.revision, nodes: nodesOf(e) };
   };
+  const terminals = createTerminalRelay(options.rhizomeUrl);
 
   const server = createServer((req, res) => {
     void (async () => {
@@ -207,6 +210,7 @@ export async function startRhizomeDirectServer(options: {
         res.end(bytes);
         return;
       }
+      if (await terminals(req, res, path)) return;
       json(res, 404, { reason: 'not on the direct wire' });
     })().catch((err: unknown) => json(res, 500, { reason: String(err) }));
   });

@@ -276,6 +276,27 @@
     "task.resume": {
       "label": "다시 시작"
     },
+    "task.cancel": {
+      "label": "취소"
+    },
+    "task.forceReplan": {
+      "label": "다시 계획"
+    },
+    "gate.approve": {
+      "label": "승인"
+    },
+    "gate.reject": {
+      "label": "거절"
+    },
+    "gate.requestChanges": {
+      "label": "수정 요청"
+    },
+    "request.complete": {
+      "label": "했음"
+    },
+    "request.unable": {
+      "label": "못 함"
+    },
     "mission.create": {
       "label": "새 미션"
     }
