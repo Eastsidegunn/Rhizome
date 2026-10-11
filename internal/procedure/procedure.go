@@ -19,12 +19,21 @@ import (
 // recommendation for the gate question assembly.Run asks on a NeedsGate step.
 // Additive: it is omitted from the payload when empty, so procedure.created
 // events written before RHZ-083 replay (and re-encode) byte-identically.
+//
+// Instruction, Workdir, SessionMode and Model (RHZ-145, FR-RHZ-189) are the
+// step's launch inputs for the procedure executor: "" = the run parameter of
+// the same name, else the launcher default (Instruction falls back to
+// Action). Additive and omitted when empty, like Recommendation.
 type Step struct {
 	ID             string
 	Action         string
 	After          []string
 	NeedsGate      bool
 	Recommendation string
+	Instruction    string
+	Workdir        string
+	SessionMode    string
+	Model          string
 }
 
 type Procedure struct {
@@ -47,6 +56,11 @@ type stepPayload struct {
 	After          []string `json:"after"`
 	NeedsGate      bool     `json:"needs_gate"`
 	Recommendation string   `json:"recommendation,omitempty"` // RHZ-083 (FR-RHZ-114), additive
+	// RHZ-145 (FR-RHZ-189), additive.
+	Instruction string `json:"instruction,omitempty"`
+	Workdir     string `json:"workdir,omitempty"`
+	SessionMode string `json:"session_mode,omitempty"`
+	Model       string `json:"model,omitempty"`
 }
 
 type payload struct {
@@ -65,7 +79,9 @@ func cloneStrings(in []string) []string { return append([]string(nil), in...) }
 func cloneSteps(in []Step) []Step {
 	out := make([]Step, 0, len(in))
 	for _, s := range in {
-		out = append(out, Step{ID: s.ID, Action: s.Action, After: cloneStrings(s.After), NeedsGate: s.NeedsGate, Recommendation: s.Recommendation})
+		c := s
+		c.After = cloneStrings(s.After)
+		out = append(out, c)
 	}
 	return out
 }
@@ -73,7 +89,7 @@ func cloneSteps(in []Step) []Step {
 func stepsToPayload(in []Step) []stepPayload {
 	out := make([]stepPayload, 0, len(in))
 	for _, s := range in {
-		out = append(out, stepPayload{ID: s.ID, Action: s.Action, After: cloneStrings(s.After), NeedsGate: s.NeedsGate, Recommendation: s.Recommendation})
+		out = append(out, stepPayload{ID: s.ID, Action: s.Action, After: cloneStrings(s.After), NeedsGate: s.NeedsGate, Recommendation: s.Recommendation, Instruction: s.Instruction, Workdir: s.Workdir, SessionMode: s.SessionMode, Model: s.Model})
 	}
 	return out
 }
@@ -81,7 +97,7 @@ func stepsToPayload(in []Step) []stepPayload {
 func stepsFromPayload(in []stepPayload) []Step {
 	out := make([]Step, 0, len(in))
 	for _, s := range in {
-		out = append(out, Step{ID: s.ID, Action: s.Action, After: cloneStrings(s.After), NeedsGate: s.NeedsGate, Recommendation: s.Recommendation})
+		out = append(out, Step{ID: s.ID, Action: s.Action, After: cloneStrings(s.After), NeedsGate: s.NeedsGate, Recommendation: s.Recommendation, Instruction: s.Instruction, Workdir: s.Workdir, SessionMode: s.SessionMode, Model: s.Model})
 	}
 	return out
 }

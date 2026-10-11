@@ -674,6 +674,11 @@ type Intent struct {
 	PolicyRef    string `json:"policyRef"`
 	// Params carries procedure.run instantiation inputs (RHZ-063, FR-RHZ-092).
 	Params map[string]string `json:"params"`
+	// Execute (RHZ-145, FR-RHZ-189) hands a new procedure.run to the
+	// procedure executor: the run mission moves to running, which is the
+	// executor's only "drive this run" signal. false = structure only, as
+	// before (runs created earlier are never driven).
+	Execute bool `json:"execute"`
 	// Assignee is the mission.assign target (RHZ-080, FR-RHZ-111); the
 	// optional note reuses Reason.
 	Assignee string `json:"assignee"`
@@ -986,6 +991,12 @@ type IntentStep struct {
 	// Recommendation (RHZ-083, FR-RHZ-114) rides into the gate question
 	// assembly.Run asks for a needsGate step; optional, additive.
 	Recommendation string `json:"recommendation"`
+	// RHZ-145 (FR-RHZ-189): the step's launch inputs for the procedure
+	// executor; optional, additive.
+	Instruction string `json:"instruction"`
+	Workdir     string `json:"workdir"`
+	SessionMode string `json:"sessionMode"`
+	Model       string `json:"model"`
 }
 
 // containsReachable reports whether target is reachable from start along
@@ -1628,7 +1639,7 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		}
 		steps := make([]procedure.Step, 0, len(in.Steps))
 		for _, st := range in.Steps {
-			steps = append(steps, procedure.Step{ID: st.ID, Action: st.Action, After: append([]string(nil), st.After...), NeedsGate: st.NeedsGate, Recommendation: st.Recommendation})
+			steps = append(steps, procedure.Step{ID: st.ID, Action: st.Action, After: append([]string(nil), st.After...), NeedsGate: st.NeedsGate, Recommendation: st.Recommendation, Instruction: st.Instruction, Workdir: st.Workdir, SessionMode: st.SessionMode, Model: st.Model})
 		}
 		next := procedure.Procedure{ID: in.ID, SourceKnowledgeID: in.SourceKnowledgeID, Trigger: in.Trigger, Preconditions: append([]string(nil), in.Preconditions...), Steps: steps, SuccessConditions: append([]string(nil), in.SuccessConditions...), FailureModes: append([]string(nil), in.FailureModes...), RecoverySteps: append([]string(nil), in.RecoverySteps...)}
 		if existing := s.List("procedure", in.ID); len(existing) > 0 {
@@ -1655,8 +1666,20 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 		if in.ID == "" || in.Name == "" || in.GoalID == "" {
 			return RelayResult{Reason: "id (procedure), name (run id) and goalId required"}, nil
 		}
-		if _, e := assembly.Run(s, assembly.RunSpec{ProcedureID: in.ID, GoalID: in.GoalID, RunID: in.Name, Params: in.Params, Actor: actor, Authority: auth, Correlation: in.CorrelationID}); e != nil {
+		res, e := assembly.Run(s, assembly.RunSpec{ProcedureID: in.ID, GoalID: in.GoalID, RunID: in.Name, Params: in.Params, Actor: actor, Authority: auth, Correlation: in.CorrelationID})
+		if e != nil {
 			return RelayResult{Reason: e.Error()}, nil
+		}
+		if in.Execute {
+			// RHZ-145 (FR-RHZ-189): planned → ready → running on the run
+			// mission is the executor's signal; no new event type.
+			ms, er := projector.ReplayMission(s.List("mission", res.MissionID))
+			if er != nil {
+				return RelayResult{Reason: er.Error()}, nil
+			}
+			if reason := resumeToRunning(s, m, res.MissionID, ms); reason != "" {
+				return RelayResult{Reason: reason}, nil
+			}
 		}
 		return RelayResult{Accepted: true}, nil
 	case "mission.cancel":

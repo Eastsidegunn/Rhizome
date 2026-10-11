@@ -569,6 +569,10 @@ type HTTPServer struct {
 	// nil = not wired: mission.start is rejected with "execution start
 	// unavailable" and zero writes. Injected by the composition root.
 	ExecStart ExecStarter
+	// AfterAccept runs after every accepted intent (RHZ-145, FR-RHZ-189:
+	// kicks the procedure executor on a completion or gate answer). nil =
+	// nothing.
+	AfterAccept func()
 	// ExecGateDecided receives recorded launcher-gate decisions
 	// (FR-RHZ-124-S2, RelayHooks.GateDecided). nil = not wired.
 	ExecGateDecided func(GateDecision)
@@ -883,6 +887,10 @@ func (h *HTTPServer) Handler() http.Handler {
 			h.answerIntent(w, res, e)
 			return
 		}
+		if runID, ok := strings.CutPrefix(r.URL.Path, "/v1/procedure/runs/"); ok && r.Method == http.MethodGet {
+			h.serveProcedureRun(w, runID)
+			return
+		}
 		if r.URL.Path == "/v1/secrets" && r.Method == http.MethodGet {
 			h.serveSecrets(w, r)
 			return
@@ -910,6 +918,9 @@ func (h *HTTPServer) answerIntent(w http.ResponseWriter, res RelayResult, e erro
 		// a GET /v1/knowledge requery signal, not a knowledge payload.
 		if p, x := Snapshot(h.Store, h.Trust); x == nil {
 			h.Broadcast(p)
+		}
+		if h.AfterAccept != nil {
+			h.AfterAccept()
 		}
 	}
 }
