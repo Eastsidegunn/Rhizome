@@ -406,7 +406,7 @@ wait`)
 		time.Sleep(10 * time.Millisecond)
 	}
 	args, _ := os.ReadFile(filepath.Join(f.dir, "args"))
-	if !strings.Contains(string(args), "curl -s '"+url+"/v1/context?task=mission-1'") {
+	if !strings.Contains(string(args), "(보드 "+url+")") || !strings.Contains(string(args), "rhizome agent context") {
 		t.Fatalf("preamble does not name serve's address: %q", args)
 	}
 	cancel()

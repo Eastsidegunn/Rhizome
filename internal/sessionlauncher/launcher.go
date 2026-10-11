@@ -13,7 +13,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -467,12 +466,15 @@ func newUUID() (string, error) {
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
 }
 
-// preamble is the fixed instruction prefix of every launched session.
+// preamble is the fixed instruction prefix of every launched session. The
+// session reports through `rhizome agent` (RHZ-125b, FR-RHZ-176): SessionEnv
+// sets RHIZOME_BOARD, RHIZOME_MISSION and RHIZOME_SESSION, so no verb needs
+// flags; board is named only so a human reading the log sees where it goes.
 func preamble(board, missionID string) string {
-	return "너는 Rhizome 미션 " + missionID + " 의 실행 세션이다. 다음을 지켜라.\n" +
-		"1. 일을 시작하기 전에 보드 맥락을 먼저 읽어라: curl -s '" + board + "/v1/context?task=" + url.QueryEscape(missionID) + "'\n" +
-		"2. 이 미션의 범위 안에서만 일하라.\n" +
-		"3. 끝나면 보드에 완료 note를 남겨라 (POST " + board + "/v1/intent, kind note.create, missionId " + missionID + ").\n" +
+	return "너는 Rhizome 미션 " + missionID + " 의 실행 세션이다(보드 " + board + "). 다음을 지켜라.\n" +
+		"1. 일을 시작하기 전에 보드 맥락을 먼저 읽어라: rhizome agent context\n" +
+		"2. 이 미션의 범위 안에서만 일하라. 의미 있는 단계마다 rhizome agent progress --action \"지금 하는 일\", 막히면 rhizome agent blocked \"이유 한 줄\", 사람의 결정이 필요하면 rhizome agent ask.\n" +
+		"3. 끝나면 rhizome agent done \"결과 한 줄\" --body-file <요약 파일>. 사용량은 런처가 기록하니 usage는 보내지 마라.\n" +
 		"4. git push 금지. 서비스 재시작 금지."
 }
 
@@ -558,6 +560,21 @@ func BuildEnv(environ, allow []string) []string {
 	return append(out, "TERM=dumb")
 }
 
+// SessionEnv is what a launched session needs to record itself with
+// `rhizome agent <verb>` and no flags (RHZ-125b): the board URL ("" =
+// DefaultBoardURL), the mission id and the session's actor, which names
+// the session uuid of the execution's acceptance.
+func SessionEnv(board, missionID, sessionID string) []string {
+	if board == "" {
+		board = DefaultBoardURL
+	}
+	return []string{
+		"RHIZOME_BOARD=" + strings.TrimSuffix(board, "/"),
+		"RHIZOME_MISSION=" + missionID,
+		"RHIZOME_SESSION=session:" + sessionID,
+	}
+}
+
 func (l *Launcher) spawn(sp spec, sid string) (*child, error) {
 	c := l.Cfg
 	marker := l.markerPath(sp.execID)
@@ -597,7 +614,7 @@ func (l *Launcher) spawn(sp spec, sid string) (*child, error) {
 	}
 	cmd := exec.Command(c.ClaudePath, args...)
 	cmd.Dir = sp.workdir
-	cmd.Env = BuildEnv(environ(), EnvAllowlist)
+	cmd.Env = append(BuildEnv(environ(), EnvAllowlist), SessionEnv(l.BoardURL, sp.mission, sid)...)
 	cmd.Stdin = nil // os/exec connects /dev/null
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

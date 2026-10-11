@@ -349,7 +349,8 @@ func TestStartEventOrderAndArgvFRRHZ124S1(t *testing.T) {
 	if strings.Join(args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("argv\n got %q\nwant %q", args, wantArgs)
 	}
-	if !strings.Contains(args[1], "curl -s 'http://127.0.0.1:9911/v1/context?task=m1'") || !strings.Contains(args[1], "POST http://127.0.0.1:9911/v1/intent") || strings.Contains(args[1], "8790") || !strings.HasSuffix(args[1], "\n\nbuild it") || !strings.Contains(args[1], "git push") {
+	// RHZ-125b (FR-RHZ-176): the session reports through `rhizome agent`, the board is named for the log.
+	if !strings.Contains(args[1], "rhizome agent context") || !strings.Contains(args[1], "rhizome agent done") || !strings.Contains(args[1], "(보드 http://127.0.0.1:9911)") || strings.Contains(args[1], "8790") || !strings.HasSuffix(args[1], "\n\nbuild it") || !strings.Contains(args[1], "git push") {
 		t.Fatalf("prompt %q", args[1])
 	}
 	// Provenance: usd cents / ms / depth 1 / tool capabilities / ledger digest.
@@ -457,9 +458,11 @@ func TestEnvAllowlistFRRHZ124S1(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "TEST-NON-CREDENTIAL")
 	t.Setenv("RHZ_UNLISTED_VAR", "1")
 	t.Setenv("LANG", "C")
+	t.Setenv("RHIZOME_SESSION", "parent")
 	f := newFake(t, blockBody)
 	s := launchStore(t)
 	l := newLauncher(s, f.config(t, nil), &outcomes{})
+	l.BoardURL = "http://127.0.0.1:9911/"
 	if _, reason, err := l.Start(StartRequest{MissionID: "m1", Instruction: "x"}); err != nil || reason != "" {
 		t.Fatal(reason, err)
 	}
@@ -470,7 +473,9 @@ func TestEnvAllowlistFRRHZ124S1(t *testing.T) {
 		t.Fatal(err)
 	}
 	// sh itself exports PWD/SHLVL/_/OLDPWD; nothing else may appear.
-	allowed := map[string]bool{"TERM": true, "PWD": true, "SHLVL": true, "_": true, "OLDPWD": true}
+	// RHZ-125b: the board, mission and session actor are injected, never inherited.
+	allowed := map[string]bool{"TERM": true, "PWD": true, "SHLVL": true, "_": true, "OLDPWD": true,
+		"RHIZOME_BOARD": true, "RHIZOME_MISSION": true, "RHIZOME_SESSION": true}
 	for _, n := range EnvAllowlist {
 		allowed[n] = true
 	}
@@ -484,6 +489,10 @@ func TestEnvAllowlistFRRHZ124S1(t *testing.T) {
 	}
 	if names["TERM"] != "dumb" || names["LANG"] != "C" || names["PATH"] == "" {
 		t.Fatalf("%v", names)
+	}
+	if names["RHIZOME_BOARD"] != "http://127.0.0.1:9911" || names["RHIZOME_MISSION"] != "m1" ||
+		!regexp.MustCompile(`^session:[0-9a-f-]{36}$`).MatchString(names["RHIZOME_SESSION"]) {
+		t.Fatalf("session env %v", names)
 	}
 	// Secret-shaped names are dropped even when allowlisted.
 	env := BuildEnv([]string{"ANTHROPIC_BASE_URL=x", "CLAUDE_CODE_OAUTH_TOKEN=x", "DB_PASSWORD=x", "X_SECRET=x", "API_KEY=x", "GH_TOKEN=x", "HOME=/h", "PATH=/bin", "HOME=/dup", "TERM=xterm"},
@@ -800,3 +809,23 @@ func TestCompletionSkipsNonRunningMissionFRRHZ124S1(t *testing.T) {
 }
 
 func killPid(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) }
+
+// TestSessionEnvAndPreambleFRRHZ176: a launched session records itself with
+// `rhizome agent` from the injected env, and is told not to report usage
+// (the launcher records it); no raw HTTP instruction remains.
+func TestSessionEnvAndPreambleFRRHZ176(t *testing.T) {
+	env := SessionEnv("", "m1", "u-1")
+	want := []string{"RHIZOME_BOARD=" + DefaultBoardURL, "RHIZOME_MISSION=m1", "RHIZOME_SESSION=session:u-1"}
+	if strings.Join(env, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("SessionEnv = %v", env)
+	}
+	p := Prompt("http://127.0.0.1:9911/", "m1", "build it")
+	for _, s := range []string{"rhizome agent context", "rhizome agent progress", "rhizome agent blocked", "rhizome agent ask", "rhizome agent done", "usage는 보내지 마라", "http://127.0.0.1:9911)", "build it"} {
+		if !strings.Contains(p, s) {
+			t.Fatalf("prompt lacks %q:\n%s", s, p)
+		}
+	}
+	if strings.Contains(p, "curl") || strings.Contains(p, "/v1/intent") {
+		t.Fatalf("prompt still instructs raw HTTP:\n%s", p)
+	}
+}
