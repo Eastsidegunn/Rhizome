@@ -1148,6 +1148,7 @@ commands:
   gate      verify a gate decision against the journal (gate verify ...)
   index     build the code index of a repository's main branch
   graph     build the code + journal graph cache
+  code      structure graph of a repository commit, unstable (code graph ...)
   secret    talk to the local secret plane (list, request, ...)
   help      print this message (also -h, --help)
 `
@@ -1173,6 +1174,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return indexCmd(args[1:], out, errOut)
 	case "graph":
 		return graphCmd(args[1:], out, errOut)
+	case "code":
+		return codeCmd(args[1:], out, errOut)
 	case "gate":
 		return gate(args[1:], out, errOut)
 	case "agent":
