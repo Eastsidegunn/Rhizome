@@ -31,6 +31,7 @@ import (
 	"rhizome/internal/secretwire"
 	"rhizome/internal/sessionlauncher"
 	"rhizome/internal/source"
+	"rhizome/internal/terminal"
 	"rhizome/internal/trust"
 	"rhizome/internal/workspace"
 )
@@ -907,6 +908,15 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 			return 2
 		}
 	}
+	// RHZ-140 (FR-RHZ-184): the terminal bridge, active only on a loopback
+	// bind (otherwise 501). Session targets need the launcher's claudePath.
+	claudePath := ""
+	if slCfg != nil {
+		claudePath = slCfg.ClaudePath
+	}
+	terms := terminal.New(j, claudePath)
+	terms.OnError = func(msg string) { fmt.Fprintln(errOut, msg) }
+	handler = withTerminals(handler, terms.Handler(terminal.LoopbackAddr(*addr)))
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
 	}
@@ -949,6 +959,9 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	cancel()
 	<-shutdownDone
 	wg.Wait()
+	// Terminals end with serve (their terminal.closed lands before the
+	// deferred journal close); a Claude session behind an attach keeps running.
+	terms.Shutdown()
 	if sl != nil {
 		// RHZ-124 S1: stop live sessions and drain their completions (stop
 		// request, outcome, mission step, usage note) before the deferred
