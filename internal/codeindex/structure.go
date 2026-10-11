@@ -4,8 +4,9 @@ package codeindex
 // slice 1 — Go multi-module and the top-level fallback. "complete" means every
 // line of the kind's finite grammar was recognised; anything else turns the
 // kind unsupported, drops all of its nodes (no partial graphs) and lists
-// reasons. JS and Rust report absent until the next slice. The output is
-// unstable (internal): its shape is SCP material for Phase 1b (B6).
+// reasons. RHZ-102b (FR-RHZ-179) adds JS/TS workspaces (structure_jsts.go) and
+// Rust crates (structure_rust.go). The output is unstable (internal): its
+// shape is SCP material for Phase 1b (B6).
 
 import (
 	"bytes"
@@ -26,7 +27,7 @@ import (
 
 const (
 	StructStability = "unstable-internal"
-	structIndexer   = "codeindex-structure/1a-1"
+	structIndexer   = "codeindex-structure/1a-2"
 	structLayer     = "structure"
 	buildTagPolicy  = "union"
 )
@@ -38,9 +39,10 @@ var structKinds = []struct{ kind, grammar string }{
 
 type StructNode struct {
 	ID   string `json:"id"`   // <kind>:<path>, repo local
-	Kind string `json:"kind"` // go-module | go-package | dir
+	Kind string `json:"kind"` // go-module | go-package | js-package | rust-crate | dir
 	Path string `json:"path"`
-	// Name is the module path (go-module) or import path (go-package).
+	// Name is the module path (go-module), import path (go-package) or
+	// package/crate name (js-package, rust-crate).
 	Name string `json:"name,omitempty"`
 	// Parent is the owning go-module node of a go-package.
 	Parent string `json:"parent,omitempty"`
@@ -49,7 +51,9 @@ type StructNode struct {
 type StructEdge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
-	Kind string `json:"kind"`
+	Kind string `json:"kind"` // imports | dependsOn
+	// DepType is the dependency table of a dependsOn edge.
+	DepType string `json:"depType,omitempty"`
 }
 
 // Reason locates one construct outside the grammar; Line 0 means the whole
@@ -145,7 +149,7 @@ func BuildStructure(ctx context.Context, r *PinnedRepo, commit string) (StructGr
 	}
 	var want []TreeEntry
 	for _, e := range tree {
-		if e.Regular() && goInput(e.Path) {
+		if e.Regular() && (goInput(e.Path) || jsInput(e.Path) || rustInput(e.Path)) {
 			want = append(want, e)
 		}
 	}
@@ -176,16 +180,23 @@ func structureFrom(objectFormat, commit string, tree []TreeEntry, src map[string
 	}
 	g.Nodes = append(g.Nodes, nodes...)
 	g.Edges = append(g.Edges, edges...)
+	jsStatus, nodes, edges := buildJS(src)
+	g.Nodes = append(g.Nodes, nodes...)
+	g.Edges = append(g.Edges, edges...)
+	rustStatus, nodes, edges := buildRust(tree, src)
+	g.Nodes = append(g.Nodes, nodes...)
+	g.Edges = append(g.Edges, edges...)
 	g.Nodes = append(g.Nodes, fallbackNodes(tree)...)
 	for _, k := range structKinds {
 		switch k.kind {
 		case "go":
 			g.Kinds = append(g.Kinds, goStatus)
+		case "js":
+			g.Kinds = append(g.Kinds, jsStatus)
+		case "rust":
+			g.Kinds = append(g.Kinds, rustStatus)
 		case "fallback":
 			g.Kinds = append(g.Kinds, KindStatus{Kind: k.kind, Status: "complete", Grammar: k.grammar, Reasons: []Reason{}})
-		default:
-			// JS and Rust grammars land in slice 1a-2.
-			g.Kinds = append(g.Kinds, KindStatus{Kind: k.kind, Status: "absent", Grammar: k.grammar, Reasons: []Reason{}})
 		}
 	}
 	sort.Slice(g.Nodes, func(i, j int) bool { return g.Nodes[i].ID < g.Nodes[j].ID })
@@ -197,9 +208,78 @@ func structureFrom(objectFormat, commit string, tree []TreeEntry, src map[string
 		if a.To != b.To {
 			return a.To < b.To
 		}
-		return a.Kind < b.Kind
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		return a.DepType < b.DepType
 	})
 	return g, nil
+}
+
+// finish sorts a kind's reasons and settles its status: any reason makes it
+// unsupported and drops its nodes and edges (no partial graphs).
+func finish(st KindStatus, nodes []StructNode, edges []StructEdge) (KindStatus, []StructNode, []StructEdge) {
+	sortReasons(st.Reasons)
+	if len(st.Reasons) != 0 {
+		st.Status = "unsupported"
+		return st, nil, nil
+	}
+	st.Status = "complete"
+	return st, nodes, edges
+}
+
+func sortReasons(rs []Reason) {
+	sort.Slice(rs, func(i, j int) bool {
+		a, b := rs[i], rs[j]
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		return a.Construct < b.Construct
+	})
+}
+
+// wsPattern is one workspace member pattern: a literal directory or a literal
+// directory followed by a final "/*" (glob), as declared at file:line.
+type wsPattern struct {
+	dir  string
+	glob bool
+	file string
+	line int
+}
+
+// parsePattern accepts only a clean relative literal path, optionally ending
+// in "/*"; anything else is reported as the returned construct.
+func parsePattern(s string) (wsPattern, string) {
+	p := wsPattern{dir: s}
+	if strings.HasPrefix(s, "!") {
+		return p, "workspace-negation"
+	}
+	if strings.Contains(s, "**") {
+		return p, "workspace-globstar"
+	}
+	if rest, ok := strings.CutSuffix(s, "/*"); ok {
+		p.dir, p.glob = rest, true
+	}
+	if p.dir == "" || strings.ContainsAny(p.dir, `*?[]{}!\`) {
+		return p, "workspace-glob"
+	}
+	if path.IsAbs(p.dir) || path.Clean(p.dir) != p.dir || p.dir == "." || p.dir == ".." || strings.HasPrefix(p.dir, "../") {
+		return p, "workspace-path"
+	}
+	return p, ""
+}
+
+// match reports whether dir (repo relative) is named by the pattern, with the
+// pattern rooted at base.
+func (p wsPattern) match(base, dir string) bool {
+	d := path.Join(base, p.dir)
+	if p.glob {
+		return path.Dir(dir) == d
+	}
+	return dir == d
 }
 
 // fallbackNodes: one dir node per top-level directory not starting with ".".
@@ -273,7 +353,7 @@ func buildGo(commit string, tree []TreeEntry, src map[string][]byte) (KindStatus
 	var mods []goModule
 	var goFiles []string
 	for _, e := range tree {
-		if _, ok := src[e.Path]; !ok {
+		if _, ok := src[e.Path]; !ok || !goInput(e.Path) {
 			continue
 		}
 		if path.Base(e.Path) == "go.mod" {
@@ -352,16 +432,7 @@ func buildGo(commit string, tree []TreeEntry, src map[string][]byte) (KindStatus
 		}
 	}
 	st.BuildTags = tags
-	sort.Slice(st.Reasons, func(i, j int) bool {
-		a, b := st.Reasons[i], st.Reasons[j]
-		if a.File != b.File {
-			return a.File < b.File
-		}
-		if a.Line != b.Line {
-			return a.Line < b.Line
-		}
-		return a.Construct < b.Construct
-	})
+	sortReasons(st.Reasons)
 	if len(st.Reasons) != 0 {
 		st.Status = "unsupported"
 		return st, nil, nil, nil
