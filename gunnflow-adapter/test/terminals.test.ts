@@ -48,8 +48,10 @@ describe('terminal routes on the direct wire FR-RHZ-185', () => {
     mock.get('/v1/terminals', async () => ({
       sessionTargets: true,
       sessions: [
-        { sessionId: 's-1', name: 'build session', missionId: 'm-build', mode: 'interactive', cwd: '/tmp' },
+        { sessionId: 's-1', name: 'build session', missionId: 'm-build', mode: 'interactive', cwd: '/tmp', attachable: true, kind: 'background', status: 'idle' },
         { sessionId: 's-2', name: '', mode: 'interactive', cwd: '/tmp' },
+        // RHZ-142 (FR-RHZ-186): not attachable (another terminal) → left out
+        { sessionId: 's-3', name: 'elsewhere', mode: 'interactive', cwd: '/tmp', attachable: false, kind: 'interactive', status: 'busy' },
       ],
       terminals: [
         { terminalId: 't-sess', kind: 'session', sessionId: 's-1', cwd: '/tmp', cols: 80, rows: 24, subscribers: 1, openedAt: 1 },
@@ -102,7 +104,7 @@ describe('terminal routes on the direct wire FR-RHZ-185', () => {
     return decoder.push(await res.text()).map((e) => ({ event: e.event, data: JSON.parse(e.data) as Record<string, unknown> }));
   };
 
-  it('FR-RHZ-185 GET /terminals lists session targets as attachable (session id, name, mission node) and the open terminals', async () => {
+  it('FR-RHZ-185 FR-RHZ-186 GET /terminals lists attachable session targets (session id, name, mission node), leaves attachable:false out, and the open terminals', async () => {
     const res = await call('GET', '/terminals');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([

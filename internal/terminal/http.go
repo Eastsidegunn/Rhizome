@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"rhizome/internal/session"
 )
 
 const maxBody = 1 << 20
@@ -53,11 +55,20 @@ type openDTO struct {
 }
 
 type sessionTargetDTO struct {
-	SessionID string `json:"sessionId"`
+	// SessionID is "" for an observed interactive session (RHZ-143: claude
+	// reports it by pid only and it is not in the registry).
+	SessionID string `json:"sessionId,omitempty"`
 	Name      string `json:"name"`
 	MissionID string `json:"missionId,omitempty"`
 	Mode      string `json:"mode"`
 	Cwd       string `json:"cwd"`
+	// RHZ-142: Attachable = a claude background session with a known short
+	// id (an interactive one runs in some other terminal); Kind is the claude
+	// session kind ("" = a launcher -p session); Status the last observed one.
+	Attachable bool   `json:"attachable"`
+	Kind       string `json:"kind,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Pid        int    `json:"pid,omitempty"`
 }
 
 type listDTO struct {
@@ -180,7 +191,16 @@ func (h *Host) serveList(w http.ResponseWriter) {
 		return
 	}
 	for _, s := range ss {
-		out.Sessions = append(out.Sessions, sessionTargetDTO{SessionID: s.SessionID, Name: s.Name, MissionID: s.MissionID, Mode: s.Mode, Cwd: s.Cwd})
+		d := sessionTargetDTO{SessionID: s.SessionID, Name: s.Name, MissionID: s.MissionID, Mode: s.Mode, Cwd: s.Cwd, Attachable: s.AttachID != "", Kind: s.Kind}
+		if h.Status != nil {
+			d.Status = h.Status(s.SessionID)
+		}
+		out.Sessions = append(out.Sessions, d)
+	}
+	if h.Interactive != nil {
+		for _, a := range h.Interactive() {
+			out.Sessions = append(out.Sessions, sessionTargetDTO{Name: a.Name, Mode: session.Interactive, Cwd: a.Cwd, Kind: a.Kind, Status: a.StatusText(), Pid: a.Pid})
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -212,7 +232,7 @@ func (h *Host) serveOpen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]string{"terminalId": term.ID})
 	case errors.Is(err, ErrSessionNotOpen):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, ErrSessionsDisabled), errors.Is(err, ErrClosed):
+	case errors.Is(err, ErrSessionsDisabled), errors.Is(err, ErrClosed), errors.Is(err, ErrNotAttachable):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)

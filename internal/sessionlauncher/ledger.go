@@ -49,8 +49,23 @@ type Config struct {
 	// internal/session/README.md). omitempty keeps the digest of a ledger
 	// without it unchanged.
 	TerminalDriver string `json:"terminalDriver,omitempty"`
+	// MaxInteractive (RHZ-143, optional) caps the open claude --bg sessions
+	// the launcher started; 0 = DefaultMaxInteractive. omitempty keeps the
+	// digest of a ledger without it unchanged.
+	MaxInteractive int `json:"maxInteractive,omitempty"`
 
 	digest string
+}
+
+// DefaultMaxInteractive is maxInteractive when the ledger omits it.
+const DefaultMaxInteractive = 2
+
+// InteractiveCap is the effective maxInteractive.
+func (c Config) InteractiveCap() int {
+	if c.MaxInteractive == 0 {
+		return DefaultMaxInteractive
+	}
+	return c.MaxInteractive
 }
 
 // permissionModes is the accepted --permission-mode vocabulary.
@@ -197,6 +212,9 @@ func (c *Config) validate() error {
 	}
 	if c.MaxConcurrent < 1 {
 		return fmt.Errorf("maxConcurrent must be >= 1")
+	}
+	if c.MaxInteractive < 0 {
+		return fmt.Errorf("maxInteractive must be >= 1 (omit for %d)", DefaultMaxInteractive)
 	}
 	if _, err := usdCents("ceiling.usd", c.Ceiling.USD); err != nil {
 		return err

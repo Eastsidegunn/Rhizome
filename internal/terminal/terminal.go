@@ -57,6 +57,11 @@ var (
 	ErrClosed           = errors.New("terminal bridge closed")
 )
 
+// ErrNotAttachable: claude attach reaches a claude background session by its
+// short id only (RHZ-142); a launcher -p run or a session without a known
+// short id is refused like the list marks it (RHZ-143).
+var ErrNotAttachable = errors.New("session not attachable")
+
 // Target is what a terminal runs: exactly one of Session or Shell.
 type Target struct {
 	Session string // registry session id → claude attach
@@ -82,6 +87,12 @@ type Host struct {
 	// targets (ErrSessionsDisabled, zero writes).
 	ClaudePath  string
 	IdleTimeout time.Duration
+	// Status is the last observed claude status of a session (RHZ-142,
+	// session.Observer.Status); nil = none.
+	Status func(sessionID string) string
+	// Interactive is the last observed claude interactive sessions (RHZ-143,
+	// session.Observer.Interactive), listed not attachable; nil = none.
+	Interactive func() []session.Agent
 	// OnError reports journal failures with fixed text (never terminal bytes).
 	OnError func(string)
 	// argv overrides the command line of a target (tests only).
@@ -219,13 +230,16 @@ func (h *Host) resolve(t Target) (kind, sid string, argv []string, dir string, e
 	if err != nil || s.State != session.Open {
 		return "", "", nil, "", ErrSessionNotOpen
 	}
+	if s.AttachID == "" {
+		return "", "", nil, "", ErrNotAttachable
+	}
 	dir = s.Cwd
 	if !isDir(dir) {
 		if dir, err = os.UserHomeDir(); err != nil {
 			return "", "", nil, "", err
 		}
 	}
-	argv = []string{h.ClaudePath, "attach", s.SessionID}
+	argv = []string{h.ClaudePath, "attach", s.AttachID} // the short id `claude agents` reports
 	if h.argv != nil {
 		if argv, err = h.argv(t, s); err != nil {
 			return "", "", nil, "", err
