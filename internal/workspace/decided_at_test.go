@@ -137,11 +137,11 @@ func TestGateDecidedAtDerivationFRRHZ142(t *testing.T) {
 		}
 	}
 
-	first, err := json.Marshal(toDTO(mustSnapshot105(t, stable)))
+	first, err := json.Marshal(toDTO(mustSnapshot105(t, stable), dtoTestNow))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := json.Marshal(toDTO(mustSnapshot105(t, stable)))
+	second, err := json.Marshal(toDTO(mustSnapshot105(t, stable), dtoTestNow))
 	if err != nil || !bytes.Equal(first, second) {
 		t.Fatalf("decidedAt projection is nondeterministic: %v\n%s\n%s", err, first, second)
 	}

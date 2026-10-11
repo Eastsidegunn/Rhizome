@@ -158,14 +158,14 @@ func TestGateVerificationDerivationTableFRRHZ131(t *testing.T) {
 		t.Fatalf("JANUS claim projection: %+v", g)
 	}
 	// P1 must never serialize verified or assurance.
-	wire, err := json.Marshal(toDTO(mustSnapshot105(t, s)))
+	wire, err := json.Marshal(toDTO(mustSnapshot105(t, s), dtoTestNow))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(wire, []byte(`"status":"verified"`)) || bytes.Contains(wire, []byte(`"assurance"`)) {
 		t.Fatalf("P1 serialized verified/assurance: %s", wire)
 	}
-	again, err := json.Marshal(toDTO(mustSnapshot105(t, s)))
+	again, err := json.Marshal(toDTO(mustSnapshot105(t, s), dtoTestNow))
 	if err != nil || !bytes.Equal(wire, again) {
 		t.Fatalf("verification projection nondeterministic\nfirst=%s\nagain=%s err=%v", wire, again, err)
 	}

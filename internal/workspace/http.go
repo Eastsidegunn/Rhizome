@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type intentRequest struct {
@@ -106,6 +107,12 @@ type taskDTO struct {
 	Active       *bool     `json:"active,omitempty"`
 	OriginNodeID string    `json:"originNodeId,omitempty"`
 	Steps        *stepsDTO `json:"steps,omitempty"`
+	// RHZ-136 (FR-RHZ-180, additive, omitempty): mission timing and the
+	// earlier of dueAt and the anchor schedule's nextAt.
+	DueAt          string `json:"dueAt,omitempty"`
+	Anchor         string `json:"anchor,omitempty"`
+	WorkKind       string `json:"workKind,omitempty"`
+	EffectiveDueAt string `json:"effectiveDueAt,omitempty"`
 }
 
 // stepsDTO (RHZ-133, FR-RHZ-173) is emitted only when Total >= 1.
@@ -257,7 +264,9 @@ type dto struct {
 	// They precede the long-pinned final capability fields.
 	Requests            []requestDTO                    `json:"requests,omitempty"`
 	RequestCapabilities map[string]requestCapabilityDTO `json:"requestCapabilities,omitempty"`
-	Trust               *trustDTO                       `json:"trust,omitempty"`
+	// RHZ-136 (FR-RHZ-180): omitted when the journal has no schedule.
+	Schedules []scheduleDTO `json:"schedules,omitempty"`
+	Trust     *trustDTO     `json:"trust,omitempty"`
 	// RHZ-070 (FR-RHZ-099, additive): always present ({} when empty), keyed
 	// by task id / internal gate id. These MUST stay the last two fields so
 	// the pre-RHZ-070 prefix of the body is provably unchanged (A1 pins it).
@@ -319,6 +328,10 @@ func requestIntentHasUnknownField(raw json.RawMessage, kind string) bool {
 		allowed = map[string]bool{"kind": true, "actor": true, "requestId": true, "memo": true, "correlationId": true}
 	case "request.unable", "request.cancel":
 		allowed = map[string]bool{"kind": true, "actor": true, "requestId": true, "reason": true, "correlationId": true}
+	case "schedule.create": // RHZ-136 (FR-RHZ-180)
+		allowed = map[string]bool{"kind": true, "actor": true, "name": true, "goalId": true, "rule": true, "tz": true, "correlationId": true}
+	case "schedule.cancel":
+		allowed = map[string]bool{"kind": true, "actor": true, "scheduleId": true, "reason": true, "correlationId": true}
 	default:
 		return false
 	}
@@ -334,7 +347,9 @@ func requestIntentHasUnknownField(raw json.RawMessage, kind string) bool {
 	return false
 }
 
-func toDTO(p Projection) dto {
+// toDTO renders p with nextAt/effectiveDueAt read at now. It never reads the
+// wall clock: the HTTP server's now() is the only fallback (RHZ-138).
+func toDTO(p Projection, now time.Time) dto {
 	d := dto{Missions: []missionDTO{}, Tasks: []taskDTO{}, Gates: []gateDTO{}, Deliverables: []deliverableDTO{}, Edges: []edgeDTO{}, Attention: []attentionDTO{}, Capabilities: map[string]taskCapabilityDTO{}, GateCapabilities: map[string]gateCapabilityDTO{}}
 	if p.Trust != nil {
 		d.Trust = &trustDTO{JournalID: p.Trust.JournalID, GenesisKeyID: p.Trust.GenesisKeyID}
@@ -352,7 +367,7 @@ func toDTO(p Projection) dto {
 	}
 	for _, t := range p.Tasks {
 		active := t.Active
-		d.Tasks = append(d.Tasks, taskDTO{t.ID, t.MissionID, t.Name, t.State, t.CurrentAction, t.Progress, t.HasProgress, t.BlockedReason, t.Attention, p.handles.of("m", t.ID), t.Assignee, t.ChangedAtRevision, t.LastActivityTs, &active, t.OriginNodeID, toStepsDTO(t.Steps)})
+		d.Tasks = append(d.Tasks, taskDTO{t.ID, t.MissionID, t.Name, t.State, t.CurrentAction, t.Progress, t.HasProgress, t.BlockedReason, t.Attention, p.handles.of("m", t.ID), t.Assignee, t.ChangedAtRevision, t.LastActivityTs, &active, t.OriginNodeID, toStepsDTO(t.Steps), "", "", "", ""}) // timing: timingDTO
 	}
 	for _, g := range p.Gates {
 		var verification *verificationDTO
@@ -390,6 +405,7 @@ func toDTO(p Projection) dto {
 	for _, x := range p.Edges {
 		d.Edges = append(d.Edges, edgeDTO{x.ID, map[string]string{"type": x.From.Type, "id": x.From.ID}, map[string]string{"type": x.To.Type, "id": x.To.ID}, string(x.Kind), x.Supersedes, x.Actor, x.Correlation})
 	}
+	timingDTO(&d, p, now)
 	return d
 }
 
@@ -526,6 +542,9 @@ func gateHandleTag(source string) string {
 type HTTPServer struct {
 	Store events.Port
 	Trust *trust.Verifier
+	// Clock reads the time for schedule nextAt / mission effectiveDueAt
+	// (RHZ-136, FR-RHZ-180). nil = time.Now; tests inject a fixed clock.
+	Clock func() time.Time
 	// EnforceJANUS requires signed, Guard-verified inputs for both JANUS allow
 	// and deny decisions. It is composition-root policy, never intent input.
 	EnforceJANUS bool
@@ -595,6 +614,39 @@ func (h *HTTPServer) Broadcast(p Projection) {
 		}
 	}
 }
+func (h *HTTPServer) now() time.Time {
+	if h.Clock != nil {
+		return h.Clock()
+	}
+	return time.Now()
+}
+
+// serveCalendar answers GET /v1/calendar.ics (RHZ-137, FR-RHZ-181). The
+// only query is an optional single ?goal=<goalId>; anything else is 400 and
+// an unknown goal is 404. GET never writes.
+func (h *HTTPServer) serveCalendar(w http.ResponseWriter, r *http.Request) {
+	goal := ""
+	for k, v := range r.URL.Query() {
+		if k != "goal" || len(v) != 1 || strings.TrimSpace(v[0]) == "" {
+			http.Error(w, "invalid calendar query", http.StatusBadRequest)
+			return
+		}
+		goal = v[0]
+	}
+	p, e := Snapshot(h.Store, h.Trust)
+	if e != nil {
+		http.Error(w, e.Error(), 500)
+		return
+	}
+	evs, e := calendarEvents(h.Store, p, h.now(), goal)
+	if errors.Is(e, errCalendarGoal) {
+		http.Error(w, e.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+	w.Write(renderICS(evs))
+}
+
 func (h *HTTPServer) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/trust/signing" && r.Method == http.MethodGet {
@@ -660,7 +712,11 @@ func (h *HTTPServer) Handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			// Independent narrowings: ?assignee= touches tasks[] only,
 			// deliverable* touches deliverables[] only.
-			json.NewEncoder(w).Encode(envelope{p.Revision, filterDeliverables(filterAssignee(toDTO(p), q.Get("assignee")), p, dq)})
+			json.NewEncoder(w).Encode(envelope{p.Revision, filterDeliverables(filterAssignee(toDTO(p, h.now()), q.Get("assignee")), p, dq)})
+			return
+		}
+		if r.URL.Path == "/v1/calendar.ics" && r.Method == http.MethodGet {
+			h.serveCalendar(w, r)
 			return
 		}
 		if r.URL.Path == "/v1/workspace/stream" && r.Method == http.MethodGet {
@@ -676,7 +732,7 @@ func (h *HTTPServer) Handler() http.Handler {
 			h.mu.Unlock()
 			defer func() { h.mu.Lock(); delete(h.subs, ch); h.mu.Unlock() }()
 			write := func(kind string, x Projection) {
-				b, _ := json.Marshal(envelope{x.Revision, toDTO(x)})
+				b, _ := json.Marshal(envelope{x.Revision, toDTO(x, h.now())})
 				w.Write([]byte("event: " + kind + "\ndata: " + string(b) + "\n\n"))
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()

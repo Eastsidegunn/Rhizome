@@ -272,7 +272,7 @@ func TestRHZ050QuestionDTOGoldenAndDeterminismFRRHZ081(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := json.Marshal(toDTO(p))
+	b, err := json.Marshal(toDTO(p, dtoTestNow))
 	if err != nil {
 		t.Fatal(err)
 	}

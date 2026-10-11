@@ -167,6 +167,42 @@ func (s Service) Create(id, goalID, description, success string) (domain.Mission
 	return projector.ReplayMission(s.Store.List("mission", id))
 }
 
+// Timing is the optional RHZ-136 (FR-RHZ-180) mission.create fields: DueAt
+// (RFC3339 with offset), Anchor (a schedule id — "before that schedule's
+// next occurrence") and WorkKind (processing|understanding|output). The relay
+// validates them; they ride mission.created additively and replay ignores them.
+type Timing struct {
+	DueAt    string `json:"dueAt,omitempty"`
+	Anchor   string `json:"anchor,omitempty"`
+	WorkKind string `json:"workKind,omitempty"`
+}
+
+// CreateTimed is Create plus Timing. A zero Timing is exactly Create, so the
+// mission.created bytes of a mission without these fields are unchanged.
+func (s Service) CreateTimed(id, goalID, description, success string, t Timing) (domain.Mission, error) {
+	if t == (Timing{}) {
+		return s.Create(id, goalID, description, success)
+	}
+	if s.Store == nil {
+		return domain.Mission{}, fmt.Errorf("nil event store")
+	}
+	if _, err := domain.NewMission(id, goalID, description, success); err != nil {
+		return domain.Mission{}, err
+	}
+	if _, err := projector.ReplayGoal(s.Store.List("goal", goalID)); err != nil {
+		return domain.Mission{}, fmt.Errorf("goal reference: %w", err)
+	}
+	p, _ := json.Marshal(struct {
+		ID, GoalID, Description, Success string
+		Timing
+	}{id, goalID, description, success, t})
+	e := events.Event{AggregateType: "mission", AggregateID: id, Revision: 1, Type: "mission.created", Payload: p}
+	if err := s.Store.Append(0, e); err != nil {
+		return domain.Mission{}, err
+	}
+	return projector.ReplayMission(s.Store.List("mission", id))
+}
+
 // CreateFromProcedure records mission.created with the spawning procedure's
 // identity, pinned revision and input params (RHZ-063, FR-RHZ-092). The
 // fields are additive: missionCreated decode ignores them, so replay is

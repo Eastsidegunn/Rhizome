@@ -460,6 +460,26 @@ Rhizome and the adapter only describe the work; they never execute the listed
 commands. Do not put secret values in those commands. Write commands so the
 terminal prompts for each secret value at execution time.
 
+### Schedules and calendar feed
+
+`rhizome schedule add|list` records weekly schedules (`schedule.create`;
+time zone `Asia/Seoul` only), and `mission.create` takes optional `dueAt`,
+`anchor` (a schedule id) and `workKind`. `GET /v1/calendar.ics`
+(`rhizome calendar export`) serves them as an RFC 5545 feed. Nothing fires a
+wake; these are data and display only.
+
+- `dueAt` is RFC3339 with an offset, in whole seconds: `2026-10-12T09:00:00+09:00`
+  and `2026-10-12T00:00:00Z` are accepted; a fractional second
+  (`…09:00:00.5+09:00`, or with a comma) is rejected.
+- `goalId` of `schedule.create` may be the goal's id or its handle (`g-…`).
+- A schedule's name is its id, and the journal is append-only, so the name of
+  a cancelled schedule cannot be reused; pick a new name.
+- `DTSTAMP` is the time of the entity's latest own event. When that event
+  carries no time (legacy journals), it is the latest event time recorded in
+  the journal at or before the entity's creation revision, and
+  `19700101T000000Z` only when no event that early carries a time. An untimed
+  schedule's `DTSTART` counts from that same creation-revision time.
+
 ## Build and test
 
 ```sh

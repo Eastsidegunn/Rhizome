@@ -843,7 +843,7 @@ func TestGateVerifiedDerivationTableFRRHZ150(t *testing.T) {
 	if err != nil || p.Gates[0].Verification == nil || p.Gates[0].Verification.Status != "verified" || !p.Gates[0].Verification.KeyRevokedNow {
 		t.Fatalf("after revoke: %+v err=%v", p.Gates, err)
 	}
-	encoded, _ := json.Marshal(toDTO(p))
+	encoded, _ := json.Marshal(toDTO(p, dtoTestNow))
 	if !bytes.Contains(encoded, []byte(`"verification":{"status":"verified","assurance":"key","keyId":"`)) || !bytes.Contains(encoded, []byte(`"keyRevokedNow":true`)) || !bytes.Contains(encoded, []byte(`"trust":{"journalId":"`)) {
 		t.Fatalf("verified DTO missing: %s", encoded)
 	}
