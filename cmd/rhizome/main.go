@@ -536,6 +536,7 @@ func wireLauncher(h *workspace.HTTPServer, store events.Port, sl *sessionlaunche
 		return
 	}
 	sl.Store = store
+	sl.RecordSessions = true // RHZ-139 (FR-RHZ-183)
 	if sl.OnError == nil {
 		sl.OnError = func(scope, id string, err error) {
 			fmt.Fprintf(errOut, "session launcher %s %s: %v\n", scope, id, err)
@@ -1152,6 +1153,7 @@ commands:
   secret    talk to the local secret plane (list, request, ...)
   schedule  add or list weekly schedules on a board (schedule add|list)
   calendar  export a board's calendar feed as .ics (calendar export)
+  session   list, close or write to registered sessions (session list|close|send)
   help      print this message (also -h, --help)
 `
 
@@ -1188,6 +1190,8 @@ func run(args []string, out, errOut io.Writer) int {
 		return scheduleCmd(args[1:], out, errOut)
 	case "calendar":
 		return calendarCmd(args[1:], out, errOut)
+	case "session":
+		return sessionCmd(args[1:], out, errOut)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n\n%s", args[0], rhizomeUsage)
 		return 2

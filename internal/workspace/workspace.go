@@ -27,6 +27,7 @@ import (
 	requestagg "rhizome/internal/request"
 	"rhizome/internal/schedule"
 	"rhizome/internal/secretref"
+	"rhizome/internal/session"
 	"rhizome/internal/source"
 	"rhizome/internal/surface"
 	"rhizome/internal/trust"
@@ -142,6 +143,8 @@ type Projection struct {
 	RequestCapabilities map[string]RequestCapabilities
 	// Schedules (RHZ-136, FR-RHZ-180) is nil when no schedule exists.
 	Schedules []Schedule
+	// Sessions (RHZ-139, FR-RHZ-183) is nil when no session exists.
+	Sessions []Session
 	// Capabilities/GateCapabilities (RHZ-070, FR-RHZ-099) are always non-nil
 	// (empty → {} on the wire), keyed by task id / gate id.
 	Capabilities     map[string]TaskCapabilities
@@ -184,7 +187,7 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 	p.handles = buildHandleIndex(all)
 	goals, mids, gids, qids, dids, eids, reqs, rids := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	act := activityIndex{}
-	sids := map[string]bool{}
+	sids, sessIDs := map[string]bool{}, map[string]bool{}
 	for _, e := range all {
 		if e.Sequence > p.Revision {
 			p.Revision = e.Sequence
@@ -215,6 +218,8 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 			rids[e.AggregateID] = true
 		case "schedule":
 			sids[e.AggregateID] = true
+		case session.AggregateType:
+			sessIDs[e.AggregateID] = true
 		}
 	}
 	ids := func(m map[string]bool) []string {
@@ -430,6 +435,9 @@ func Snapshot(s events.Port, verifiers ...*trust.Verifier) (Projection, error) {
 				p.Attention = append(p.Attention, AttentionItem{Kind: "execution_unknown", RefID: r.ID, Cause: string(r.UnknownClass), SourceRef: r.SourceRef, IncidentRef: r.IncidentRef})
 			}
 		}
+	}
+	if p.Sessions, err = replaySessions(s, ids(sessIDs), missionStates); err != nil {
+		return p, err
 	}
 	for _, t := range p.Tasks {
 		if t.State == "running" {
@@ -761,6 +769,8 @@ type Intent struct {
 	DueAt      string          `json:"dueAt,omitempty"`
 	Anchor     string          `json:"anchor,omitempty"`
 	WorkKind   string          `json:"workKind,omitempty"`
+	// SessionID is the session.close target (RHZ-139, FR-RHZ-183).
+	SessionID string `json:"sessionId,omitempty"`
 	// requestUnknownField is set only by the HTTP raw-key check. Keeping it
 	// out of JSON lets the request service apply Q11 after Q1-Q10.
 	requestUnknownField bool
@@ -1323,6 +1333,20 @@ func RelayIntentHooks(s events.Port, in Intent, actor string, auth trust.Authori
 			return RelayResult{Reason: "unknown field"}, nil
 		}
 		if _, e := (schedule.Service{Store: s}).Cancel(in.ScheduleID, in.Reason); e != nil {
+			return RelayResult{Reason: e.Error()}, nil
+		}
+		return RelayResult{Accepted: true}, nil
+	case "session.close":
+		// RHZ-139 (FR-RHZ-183): registry only — the terminal tab itself is
+		// closed by the caller through the driver before this intent.
+		if in.requestUnknownField {
+			return RelayResult{Reason: "unknown field"}, nil
+		}
+		reason := strings.TrimSpace(in.Reason)
+		if reason == "" {
+			reason = "closed by " + actor
+		}
+		if _, e := (session.Service{Store: s}).Close(in.SessionID, reason); e != nil {
 			return RelayResult{Reason: e.Error()}, nil
 		}
 		return RelayResult{Accepted: true}, nil

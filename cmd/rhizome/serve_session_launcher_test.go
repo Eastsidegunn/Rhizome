@@ -171,9 +171,19 @@ func TestServeSessionLauncherRelayFRRHZ124S1(t *testing.T) {
 		t.Fatalf("%v", out)
 	}
 	// Order: execution intent/claim/accepted, then mission ready/running.
+	// RHZ-139 (FR-RHZ-183): the session registry stream is additive and
+	// checked on its own; the execution/mission order is unchanged.
 	var order []string
+	opened := 0
 	for _, e := range s.All()[before:] {
+		if e.AggregateType == "session" {
+			opened++
+			continue
+		}
 		order = append(order, e.AggregateType+":"+e.Type)
+	}
+	if opened != 1 {
+		t.Fatalf("session events %d, want one session.opened", opened)
 	}
 	want := "execution:execution.intent,execution:execution.dispatch_claimed,execution:execution.accepted,mission:mission.transitioned,mission:mission.transitioned"
 	if strings.Join(order, ",") != want {
