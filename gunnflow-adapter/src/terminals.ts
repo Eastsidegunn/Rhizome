@@ -3,8 +3,8 @@
  * relayed to Rhizome's /v1/terminals bridge (RHZ-140). A dumb relay: output
  * and input stay base64 strings end to end, never decoded or re-encoded here.
  *
- *   GET    /terminals               list: open registry sessions (attachable,
- *                                   id = Rhizome session id) + live terminals
+ *   GET    /terminals               list: open attachable registry sessions
+ *                                   (id = Rhizome session id) + live terminals
  *   POST   /terminals               {target:{attach:id}|{shell:{cwd}}, cols, rows}
  *                                   → {terminalId}; Rhizome refusals → 422 {reason}
  *   GET    /terminals/{id}/stream   SSE snapshot·data·exit{code}
@@ -36,7 +36,9 @@ export interface WireTerminal {
 
 interface RhizomeTerminalList {
   sessionTargets?: boolean;
-  sessions?: Array<{ sessionId: string; name?: string; missionId?: string }>;
+  // RHZ-142: attachable/kind/status; attachable false = a session claude
+  // attach cannot reach (another terminal, a -p run). Absent = older Rhizome.
+  sessions?: Array<{ sessionId: string; name?: string; missionId?: string; attachable?: boolean; kind?: string; status?: string }>;
   terminals?: Array<{ terminalId: string; kind: string; sessionId?: string; cwd?: string }>;
 }
 
@@ -44,13 +46,14 @@ interface RhizomeTerminalList {
  * GET /terminals body from Rhizome's list. Session targets are listed only
  * when Rhizome can attach (sessionTargets); a mission's node id is the
  * Rhizome mission id itself (the adapter projects missions under their id).
+ * Sessions Rhizome marks attachable: false are left out (RHZ-142).
  */
 export function terminalList(body: RhizomeTerminalList): WireTerminal[] {
   const sessions = body.sessions ?? [];
   const byId = new Map(sessions.map((s) => [s.sessionId, s]));
   const node = (missionId?: string) => (missionId ? { nodeId: missionId } : {});
   const targets: WireTerminal[] = body.sessionTargets
-    ? sessions.map((s): WireTerminal => ({ terminalId: s.sessionId, label: s.name || s.sessionId, kind: 'attachable', state: 'open', ...node(s.missionId) }))
+    ? sessions.filter((s) => s.attachable !== false).map((s): WireTerminal => ({ terminalId: s.sessionId, label: s.name || s.sessionId, kind: 'attachable', state: 'open', ...node(s.missionId) }))
     : [];
   const open: WireTerminal[] = (body.terminals ?? []).map((t): WireTerminal => {
     const s = t.sessionId ? byId.get(t.sessionId) : undefined;

@@ -386,7 +386,8 @@ wait`)
 	defer cancel()
 	code := make(chan int, 1)
 	go func() {
-		code <- serveCtx(ctx, []string{"-journal", path, "-addr", addr, "-session-launcher-config", f.cfg}, io.Discard, io.Discard)
+		// observation off: its agents --json run would overwrite the fake's argv record
+		code <- serveCtx(ctx, []string{"-journal", path, "-addr", addr, "-session-launcher-config", f.cfg, "-session-observe-interval", "0"}, io.Discard, io.Discard)
 	}()
 	url := "http://" + addr
 	deadline := time.Now().Add(10 * time.Second)

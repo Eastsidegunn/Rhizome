@@ -211,8 +211,8 @@ func (l *Launcher) spec(req StartRequest) (spec, string) {
 	if mode == "" {
 		mode = "oneshot"
 	}
-	if mode != "oneshot" {
-		return spec{}, "sessionMode must be oneshot (session launcher)"
+	if mode != "oneshot" && mode != ModeInteractive {
+		return spec{}, "sessionMode must be oneshot|interactive (session launcher)"
 	}
 	wd := req.Workdir
 	if wd == "" {
@@ -382,6 +382,9 @@ func (l *Launcher) Start(req StartRequest) (string, string, error) {
 		return sp.execID, reason, nil
 	}
 	sid, _ := newUUID() // "" on failure: launchLocked refuses after the claim
+	if sp.mode == ModeInteractive {
+		return l.launchInteractiveLocked(sp, r, ok, sid)
+	}
 	id, ch, reason, err := l.launchLocked(sp, r, ok, sid)
 	if err != nil || reason != "" {
 		return id, reason, err

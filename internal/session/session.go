@@ -39,6 +39,12 @@ type Opened struct {
 	Cwd         string `json:"cwd"`
 	DriverRef   string `json:"driverRef,omitempty"`
 	ExecutionID string `json:"executionId,omitempty"`
+	// Kind is the claude session kind (KindBackground|KindInteractive) of a
+	// session claude itself manages (RHZ-142: observed, or launched with
+	// --bg); "" = a launcher -p session. AttachID is the short id `claude
+	// attach` takes; "" = not attachable.
+	Kind     string `json:"kind,omitempty"`
+	AttachID string `json:"attachId,omitempty"`
 }
 
 type closedPayload struct {
@@ -69,6 +75,9 @@ func validOpened(p Opened, agg string) error {
 	}
 	if !filepath.IsAbs(p.Cwd) {
 		return fmt.Errorf("session cwd %q must be absolute", p.Cwd)
+	}
+	if p.Kind != "" && p.Kind != KindBackground && p.Kind != KindInteractive {
+		return fmt.Errorf("invalid session kind %q: want background|interactive", p.Kind)
 	}
 	return nil
 }

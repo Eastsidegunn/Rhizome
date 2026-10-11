@@ -19,6 +19,38 @@ state, openedAt, driverRef}` (omitted when no session exists). An open session
 whose mission is terminal raises attention kind `session_stale` (human
 cleanup). The intent `session.close {sessionId, reason}` closes a session.
 
+## Observation and interactive launch (RHZ-142, FR-RHZ-186)
+
+`session.opened` may carry `kind` (`background|interactive`, the claude
+session kind of a session claude itself manages) and `attachId` (the short
+id `claude attach` takes). A launcher `-p` session has neither.
+
+serve runs `claudePath agents --json` every `-session-observe-interval`
+(default 15s, `0` = off; needs the launcher ledger) and reconciles through
+`session.opened`/`session.closed` only — an unchanged observation writes
+nothing, a failed run writes nothing:
+
+- an unknown or closed session is opened (`mode interactive`, no mission
+  unless the stream already had one); a claude `background` session gets its
+  `attachId`, an `interactive` one (another terminal) does not;
+- an open session whose `kind`/`attachId` changed is closed
+  (`observed: session changed`) and reopened with the observed values, links
+  kept;
+- an open observed session (`kind` set) missing from the observation is
+  closed (`observed: session ended`); launcher `-p` sessions are never
+  touched.
+
+`mission.start` with `sessionMode: "interactive"` (session launcher) runs
+`claude --bg <prompt> --session-id <uuid> --model … --permission-mode …
+[--allowedTools …]` with the usual session env (TERM=xterm-256color) and
+waits for it to exit, then records the session with the short id found in
+`claude agents --json`. No child is tracked and no outcome journaled: the
+session ends when a human ends it and the observation closes it.
+
+`GET /v1/terminals` lists `sessions[]{…, attachable, kind, status}`
+(`status` = last observed, not journaled); a session target attaches by
+`attachId` when present; a claude `interactive` session is 409.
+
 ## Terminal driver
 
 The core never names a terminal. Interactive tabs are handled by an external

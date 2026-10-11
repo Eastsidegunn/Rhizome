@@ -50,7 +50,8 @@ const serveHelpGoldenFRRHZ144 = `Usage of serve:
   -secret-plane-socket string
     	
   -session-launcher-config string
-    	
+` + "    \t\n" + `  -session-observe-interval duration
+    	 (default 15s)
   -trust-anchor string
 ` + "    \t\n" + `  -trust-enforce-janus string
 ` + "    \t\n"
@@ -58,7 +59,8 @@ const serveHelpGoldenFRRHZ144 = `Usage of serve:
 // FR-RHZ-144: help remains byte-for-byte identical to the pre-change binary.
 // RHZ-124 S1 (FR-RHZ-124-S1) adds exactly one entry:
 // -session-launcher-config. RHZ-107 S4 (FR-RHZ-137) adds exactly three:
-// -secret-plane-id, -secret-plane-interval, -secret-plane-socket.
+// -secret-plane-id, -secret-plane-interval, -secret-plane-socket. RHZ-142
+// (FR-RHZ-186) adds exactly one: -session-observe-interval.
 func TestServeHelpLiteralGoldenFRRHZ144(t *testing.T) {
 	for _, arg := range []string{"-h", "-help"} {
 		var errOut bytes.Buffer

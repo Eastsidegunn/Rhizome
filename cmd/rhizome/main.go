@@ -29,6 +29,7 @@ import (
 	"rhizome/internal/secretchannel"
 	"rhizome/internal/secretref"
 	"rhizome/internal/secretwire"
+	"rhizome/internal/session"
 	"rhizome/internal/sessionlauncher"
 	"rhizome/internal/source"
 	"rhizome/internal/terminal"
@@ -739,6 +740,7 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	jIdle := f.Duration("janus-idle-timeout", defaultJanusIdleTimeout, "")
 	jExec := f.String("janus-exec-config", "", "")
 	slPath := f.String("session-launcher-config", "", "")
+	sessObserve := f.Duration("session-observe-interval", 15*time.Second, "")
 	trustAnchor := f.String("trust-anchor", "", "")
 	trustEnforce := f.String("trust-enforce-janus", "", "")
 	scSocket := f.String("secret-plane-socket", "", "")
@@ -916,6 +918,19 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	}
 	terms := terminal.New(j, claudePath)
 	terms.OnError = func(msg string) { fmt.Fprintln(errOut, msg) }
+	// RHZ-142 (FR-RHZ-186): `claude agents --json` observation fills the
+	// registry; -session-observe-interval 0 turns it off.
+	var observer *session.Observer
+	if claudePath != "" && *sessObserve > 0 {
+		observer = &session.Observer{Store: j, ClaudePath: claudePath,
+			OnWrite: func() {
+				if p, e := workspace.Snapshot(j, h.Trust); e == nil {
+					h.Broadcast(p)
+				}
+			},
+			OnError: func(msg string) { fmt.Fprintln(errOut, msg) }}
+		terms.Status = observer.Status
+	}
 	handler = withTerminals(handler, terms.Handler(terminal.LoopbackAddr(*addr)))
 	if serveHandlerWrap != nil {
 		handler = serveHandlerWrap(handler)
@@ -937,6 +952,10 @@ func serveCtx(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if sc != nil {
 		wg.Add(1)
 		go func() { defer wg.Done(); _ = sc.Run(ctx) }()
+	}
+	if observer != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); observer.Run(ctx, *sessObserve) }()
 	}
 	// Request contexts end with ctx, so long-lived SSE handlers (which exit
 	// only on r.Context()) release their connections instead of stalling
