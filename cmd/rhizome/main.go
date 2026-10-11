@@ -1138,11 +1138,31 @@ func gate(args []string, out, errOut io.Writer) int {
 	return gateVerify(args[1:], out, errOut)
 }
 
+const rhizomeUsage = `usage: rhizome <command> [args] [flags]
+
+commands:
+  serve     run the board (HTTP API, workspace, launcher) over a journal
+  agent     report from an agent session to a board mission (rhizome agent --help)
+  ingest    store a file as a blob and record a memory note for it
+  memories  list memory notes in a journal (--kind, --tag, --source filters)
+  gate      verify a gate decision against the journal (gate verify ...)
+  index     build the code index of a repository's main branch
+  graph     build the code + journal graph cache
+  secret    talk to the local secret plane (list, request, ...)
+  help      print this message (also -h, --help)
+`
+
 func run(args []string, out, errOut io.Writer) int {
+	// FR-RHZ-177: help on stdout with exit 0; no command keeps exit 2 but
+	// prints the same usage on stderr.
 	if len(args) == 0 {
+		fmt.Fprint(errOut, rhizomeUsage)
 		return 2
 	}
 	switch args[0] {
+	case "-h", "--help", "-help", "help":
+		fmt.Fprint(out, rhizomeUsage)
+		return 0
 	case "ingest":
 		return ingest(args[1:], out, errOut)
 	case "serve":
@@ -1160,6 +1180,7 @@ func run(args []string, out, errOut io.Writer) int {
 	case "secret":
 		return secretCmd(args[1:], out, errOut)
 	default:
+		fmt.Fprintf(errOut, "unknown command %q\n\n%s", args[0], rhizomeUsage)
 		return 2
 	}
 }

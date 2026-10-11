@@ -139,6 +139,9 @@ export RHIZOME_MISSION=m-0000abcd            # mission id or handle (or pass it 
 | `note <mission> LINE [--kind K] [--body-file F] [--tag T]` | A note of kind `K` (default `observation`). |
 | `ask <mission> TITLE (--body TEXT \| --body-file F) [--recommendation TEXT]` | `question.ask`: a gate for a human decision. |
 
+`rhizome --help` and `rhizome agent --help` (also `-h`, `help`) print the
+commands or verbs on stdout and exit `0`; with no command the same usage goes
+to stderr with exit `2`.
 Exit codes: `0` accepted, `1` rejected (stderr: `rejected: <board reason>`) or
 HTTP/network error, `2` usage error. Notes written by `blocked`, `done` and
 `note` end with an `actor=… mission=… at=…` trailer, so each report is a

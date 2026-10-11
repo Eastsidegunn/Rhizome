@@ -51,6 +51,7 @@ const agentUsage = `usage: rhizome agent <verb> [<mission>] [args] [flags]
 
 verbs:
   context  <mission> [--no-record]           read the mission bundle; records the start
+                                             (queued/paused → running + current action)
   start    <mission>                         record the start explicitly
   progress <mission> --action TEXT [--pct N] record what is happening now (N = 0-100)
   blocked  <mission> LINE [--body-file F] [--tag T]...
@@ -286,9 +287,16 @@ func (c *agentCLI) content(line, bodyFile string) (string, int) {
 }
 
 func runAgent(args []string, out, errOut io.Writer, deps agentDeps) int {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+	// FR-RHZ-177: asked-for help goes to stdout with exit 0; no verb is
+	// still a usage error (stderr, exit 2).
+	if len(args) == 0 {
 		fmt.Fprint(errOut, agentUsage)
 		return 2
+	}
+	switch args[0] {
+	case "-h", "--help", "-help", "help":
+		fmt.Fprint(out, agentUsage)
+		return 0
 	}
 	verb, rest := args[0], args[1:]
 	switch verb {

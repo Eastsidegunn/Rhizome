@@ -27,7 +27,9 @@ const (
 // Rules (approved test plan D1–D3):
 //   - gate_pending: internal gates (questions) in state pending only. JANUS
 //     gates (approval/approvalrequest) are JANUS's to resolve (RHZ-085) and
-//     changes_requested hands the ball back to the worker.
+//     changes_requested hands the ball back to the worker. A gate bound to a
+//     terminal mission (completed/failed/cancelled) is left out (RHZ-135,
+//     FR-RHZ-177): the gate itself stays pending, only attention drops it.
 //   - request_waiting: requests in state waiting only; done/unable are closed.
 //   - note_blocked: memory notes of kind "blocked" or tagged "blocked" /
 //     "h-request" that are bound to an existing, non-terminal mission. Notes
@@ -46,13 +48,18 @@ func applyHumanAttention(s events.Port, all []events.Event, p *Projection) error
 // replayed (Snapshot shares one noteIndex with the gate threads).
 func applyHumanAttentionNotes(s events.Port, notes noteIndex, p *Projection) error {
 	needs := map[string]bool{}
+	closed := map[string]bool{}
 	for _, t := range p.Tasks {
 		if t.Attention { // Attention ⇔ MissionWaitingHuman (Snapshot)
 			needs[t.ID] = true
 		}
+		switch t.State {
+		case "completed", "failed", "cancelled":
+			closed[t.ID] = true
+		}
 	}
 	for _, g := range p.Gates {
-		if g.Source != "internal" || g.State != "pending" {
+		if g.Source != "internal" || g.State != "pending" || closed[g.MissionID] {
 			continue
 		}
 		needs[g.ID] = true
